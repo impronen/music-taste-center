@@ -1,0 +1,507 @@
+/* Taste Center UI: hash router + views. Data-derived strings are escaped by the html`` tag. */
+(function () {
+  "use strict";
+  const { Fmt } = window.Charts;
+  const view = document.getElementById("view");
+
+  // ---------- templating ----------
+  const ESC = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
+  const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ESC[c]);
+  class Raw { constructor(s) { this.s = s; } toString() { return this.s; } }
+  const raw = (s) => new Raw(s);
+  const part = (v) => (v instanceof Raw ? v.s : Array.isArray(v) ? v.map(part).join("") : v == null || v === false ? "" : esc(v));
+  const html = (strings, ...vals) => raw(strings.reduce((acc, s, i) => acc + s + (i < vals.length ? part(vals[i]) : ""), ""));
+  const mount = (el, tpl) => { el.innerHTML = tpl.s; };
+
+  // ---------- data ----------
+  const cache = new Map();
+  async function api(path, { fresh = false } = {}) {
+    if (!fresh && cache.has(path)) return cache.get(path);
+    const res = await fetch(path);
+    if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
+    const data = await res.json();
+    cache.set(path, data);
+    return data;
+  }
+  const qs = (o) => new URLSearchParams(Object.entries(o).filter(([, v]) => v != null && v !== "")).toString();
+
+  // ---------- shared bits ----------
+  const link = {
+    artist: (id, name) => html`<a href="#/artist/${id}">${name}</a>`,
+    track: (id, name) => html`<a href="#/track/${id}">${name}</a>`,
+    album: (id, name) => html`<a href="#/album/${id}">${name}</a>`,
+  };
+  const clusterColor = (i) => (i < 8 ? `var(--series-${i + 1})` : "var(--series-other)");
+
+  function rankList(items, { nameOf, max, extra } = {}) {
+    if (!items.length) return html`<p class="empty">Nothing here yet.</p>`;
+    const top = max ?? Math.max(...items.map((i) => i.plays));
+    return html`<ol class="rank">${items.map((it, i) => html`
+      <li><span class="pos">${i + 1}</span>
+        <span class="name">${nameOf(it)}</span>
+        <span class="num secondary">${extra ? extra(it) : Fmt.int(it.plays)}</span>
+        <span class="bar"><i style="width:${((it.plays / top) * 100).toFixed(1)}%"></i></span></li>`)}</ol>`;
+  }
+  const artistName = (it) => link.artist(it.id, it.name);
+  const trackName = (it) => html`${link.track(it.id, it.name)}<small>${it.artist}</small>`;
+  const albumName = (it) => html`${link.album(it.id, it.name)}<small>${it.artist}</small>`;
+
+  function card(title, body, sub = "", cls = "") {
+    return html`<section class="card ${cls}"><div class="card-head"><div><h2>${title}</h2>${sub ? html`<p>${sub}</p>` : ""}</div></div>${body}</section>`;
+  }
+
+  // Period presets relative to the newest scrobble, so an old export still makes sense.
+  function periods(ov) {
+    if (!ov || ov.empty) return [{ key: "all", label: "All time" }];
+    const end = new Date(ov.last_ts * 1000);
+    const iso = (d) => d.toISOString().slice(0, 10);
+    const back = (days) => iso(new Date(end - days * 864e5));
+    const out = [
+      { key: "30d", label: "Last 30 days", start: back(29), end: iso(end) },
+      { key: "90d", label: "Last 90 days", start: back(89), end: iso(end) },
+      { key: "365d", label: "Last 12 months", start: back(364), end: iso(end) },
+    ];
+    const y0 = new Date(ov.first_ts * 1000).getUTCFullYear();
+    for (let y = end.getUTCFullYear(); y >= y0; y--) out.push({ key: String(y), label: String(y), start: `${y}-01-01`, end: `${y}-12-31` });
+    out.push({ key: "all", label: "All time" });
+    return out;
+  }
+  function parseRange(key, ov) {
+    const m = /^(\d{4}-\d{2})$/.exec(key || "");
+    if (m) {
+      const [y, mo] = m[1].split("-").map(Number);
+      const last = new Date(Date.UTC(y, mo, 0)).getUTCDate();
+      return { key, label: Fmt.month(m[1]), start: `${m[1]}-01`, end: `${m[1]}-${last}` };
+    }
+    return periods(ov).find((p) => p.key === key) ?? periods(ov).at(-1);
+  }
+
+  // ---------- views ----------
+  async function overviewView() {
+    const ov = await api("/api/overview");
+    if (ov.empty) return emptyState();
+    const p30 = periods(ov)[0];
+    const [timeline, clock, ta, tt, tal, recent] = await Promise.all([
+      api("/api/timeline"), api("/api/clock"),
+      api("/api/top/artist?" + qs({ start: p30.start, end: p30.end, limit: 10 })),
+      api("/api/top/track?" + qs({ start: p30.start, end: p30.end, limit: 10 })),
+      api("/api/top/album?" + qs({ start: p30.start, end: p30.end, limit: 10 })),
+      api("/api/recent?limit=15"),
+    ]);
+    mount(view, html`
+      <div class="page-head"><div><h1>Your listening</h1>
+        <p>${Fmt.date(ov.first_ts)} – ${Fmt.date(ov.last_ts)} · ${Fmt.int(ov.calendar_days)} days of history</p></div></div>
+      <div class="tiles">
+        <div class="tile hero"><div class="label">Scrobbles</div><div class="value">${Fmt.int(ov.plays)}</div>
+          <div class="sub">${Fmt.dec(ov.per_day)} per day on average</div></div>
+        <div class="tile"><div class="label">Artists</div><div class="value">${Fmt.int(ov.artists)}</div>
+          <div class="sub">top 10 = ${Fmt.pct(ov.top10_share)} of plays</div></div>
+        <div class="tile"><div class="label">Tracks</div><div class="value">${Fmt.int(ov.tracks)}</div>
+          <div class="sub">${Fmt.int(ov.albums)} albums</div></div>
+        <div class="tile"><div class="label">Listening days</div><div class="value">${Fmt.int(ov.listening_days)}</div>
+          <div class="sub">${Fmt.pct(ov.listening_days / ov.calendar_days)} of all days</div></div>
+        <div class="tile"><div class="label">Longest streak</div><div class="value">${Fmt.int(ov.longest_streak)} d</div>
+          <div class="sub">ended ${Fmt.day(ov.longest_streak_end)} · current ${Fmt.int(ov.current_streak)} d</div></div>
+      </div>
+      <div class="grid">
+        ${card("Scrobbles per month", html`<div class="chart" id="c-timeline"></div>`, "Hover for the month's top artist · click to open that month in the library")}
+        <div class="grid cols-2">
+          ${card("Novelty", html`<div class="chart" id="c-novelty"></div>`, "Share of plays going to artists you first heard within the previous 12 months")}
+          ${card("Listening clock", html`<div class="chart" id="c-clock"></div>`, "Plays by weekday and local hour")}
+        </div>
+        <div class="grid cols-3">
+          ${card("Top artists", rankList(ta, { nameOf: artistName }), p30.label)}
+          ${card("Top tracks", rankList(tt, { nameOf: trackName }), p30.label)}
+          ${card("Top albums", rankList(tal, { nameOf: albumName }), p30.label)}
+        </div>
+        ${card("Recently played", html`<div class="table-wrap"><table><tbody>${recent.map((r) => html`
+          <tr><td>${link.track(r.track_id, r.track)}</td><td>${link.artist(r.artist_id, r.artist)}</td>
+          <td class="muted">${r.album ?? ""}</td><td class="num muted">${Fmt.date(r.ts)}</td></tr>`)}</tbody></table></div>`)}
+      </div>`);
+    const yearLabel = (d) => (d.month.endsWith("-01") ? d.month.slice(0, 4) : null);
+    Charts.columns(document.getElementById("c-timeline"), timeline, {
+      value: (d) => d.plays, xLabel: yearLabel, label: "Scrobbles per month",
+      tip: (d) => ({
+        title: Fmt.month(d.month),
+        rows: [
+          { value: Fmt.int(d.plays), label: "scrobbles" },
+          ...(d.top ? [{ value: d.top.name, label: `top artist · ${Fmt.int(d.top.plays)}` }] : []),
+          { value: Fmt.int(d.new_artists), label: "new artists" },
+        ],
+      }),
+      onClick: (d) => (location.hash = `#/library?${qs({ kind: "artist", period: d.month })}`),
+    });
+    Charts.line(document.getElementById("c-novelty"), timeline, {
+      value: (d) => d.novelty, yMax: 1, yFormat: (v) => Fmt.pct(v), xLabel: yearLabel, label: "Novelty share",
+      tip: (d) => ({ title: Fmt.month(d.month), rows: [{ value: d.novelty == null ? "–" : Fmt.pct(d.novelty), label: "from recent discoveries" }] }),
+    });
+    Charts.heatmap(document.getElementById("c-clock"), clock);
+  }
+
+  function emptyState() {
+    mount(view, html`<div class="page-head"><div><h1>No scrobbles yet</h1>
+      <p>Export your history with lastfm-to-csv, then import the file.</p></div></div>
+      <p><a class="badge" href="#/import">Go to import →</a></p>`);
+  }
+
+  async function libraryView(params) {
+    const ov = await api("/api/overview");
+    if (ov.empty) return emptyState();
+    const kind = ["artist", "track", "album"].includes(params.get("kind")) ? params.get("kind") : "artist";
+    const period = parseRange(params.get("period") || "all", ov);
+    const q = params.get("q") || "";
+    const sort = params.get("sort") || "plays";
+    const page = Math.max(0, +params.get("page") || 0);
+    const setParams = (o) => {
+      const next = { kind, period: period.key, q, sort, page: 0, ...o };
+      location.hash = "#/library?" + qs({ ...next, page: next.page || null, period: next.period === "all" ? null : next.period, sort: next.sort === "plays" ? null : next.sort });
+    };
+    const presets = periods(ov);
+    const toolbar = html`<div class="toolbar">
+      <div class="seg" id="kind">${["artist", "track", "album"].map((k) => html`<button data-k="${k}" class="${k === kind ? "on" : ""}">${k[0].toUpperCase() + k.slice(1)}s</button>`)}</div>
+      <select id="period" aria-label="Period">${presets.map((p) => html`<option value="${p.key}" ${p.key === period.key ? raw("selected") : ""}>${p.label}</option>`)}
+        ${presets.some((p) => p.key === period.key) ? "" : html`<option value="${period.key}" selected>${period.label}</option>`}</select>
+      ${kind === "artist" && period.key === "all" ? html`<input id="q" type="search" placeholder="Filter artists" value="${q}">` : ""}
+    </div>`;
+
+    let body;
+    if (kind === "artist" && period.key === "all") {
+      const size = 50;
+      const data = await api("/api/artists?" + qs({ q, sort, limit: size, offset: page * size }));
+      const th = (key, label, cls = "") => html`<th class="sortable ${cls} ${sort === key ? "sorted" : ""}" data-sort="${key}">${label}${sort === key ? " ↓" : ""}</th>`;
+      body = html`<div class="card"><div class="table-wrap"><table>
+        <thead><tr><th class="num">#</th>${th("name", "Artist")}${th("plays", "Plays", "num")}${th("tracks", "Tracks", "num")}${th("years", "Years", "num")}${th("oldest", "First heard")}${th("recent", "Last played")}</tr></thead>
+        <tbody>${data.items.map((a, i) => html`<tr><td class="num muted">${page * size + i + 1}</td><td>${link.artist(a.id, a.name)}</td>
+          <td class="num">${Fmt.int(a.plays)}</td><td class="num">${Fmt.int(a.n_tracks)}</td><td class="num">${a.n_years}</td>
+          <td class="muted">${Fmt.date(a.first_ts)}</td><td class="muted">${Fmt.date(a.last_ts)}</td></tr>`)}</tbody></table></div>
+        <div class="pager">${Fmt.int(data.total)} artists · page ${page + 1} / ${Math.max(1, Math.ceil(data.total / size))}
+          <button id="prev" ${page === 0 ? raw("disabled") : ""}>←</button><button id="next" ${(page + 1) * size >= data.total ? raw("disabled") : ""}>→</button></div></div>`;
+      mount(view, html`<div class="page-head"><div><h1>Library</h1><p>Every artist you've scrobbled</p></div></div>${toolbar}${body}`);
+      view.querySelectorAll("th[data-sort]").forEach((th) => th.addEventListener("click", () => setParams({ sort: th.dataset.sort })));
+      view.querySelector("#prev")?.addEventListener("click", () => setParams({ page: page - 1 }));
+      view.querySelector("#next")?.addEventListener("click", () => setParams({ page: page + 1 }));
+      const qi = view.querySelector("#q");
+      let t;
+      qi?.addEventListener("input", () => { clearTimeout(t); t = setTimeout(() => setParams({ q: qi.value.trim() }), 300); });
+      if (q && qi) { qi.focus(); qi.setSelectionRange(q.length, q.length); }
+    } else {
+      const items = await api(`/api/top/${kind}?` + qs({ start: period.start, end: period.end, limit: 200 }));
+      const nameOf = { artist: artistName, track: trackName, album: albumName }[kind];
+      body = card(`Top ${kind}s`, rankList(items, { nameOf }), period.label);
+      mount(view, html`<div class="page-head"><div><h1>Library</h1><p>${period.label}</p></div></div>${toolbar}${body}`);
+    }
+    view.querySelectorAll("#kind button").forEach((b) => b.addEventListener("click", () => setParams({ kind: b.dataset.k })));
+    view.querySelector("#period").addEventListener("change", (e) => setParams({ period: e.target.value }));
+  }
+
+  async function artistView(id) {
+    const [a, ov] = await Promise.all([api(`/api/artists/${id}`), api("/api/overview")]);
+    const lastfm = `https://www.last.fm/music/${encodeURIComponent(a.name).replace(/%20/g, "+")}`;
+    const mb = `https://musicbrainz.org/search?${qs({ query: a.name, type: "artist" })}`;
+    const discovered = a.prehistory
+      ? html`already in rotation when your history begins`
+      : a.gateway_id
+        ? html`right after ${link.artist(a.gateway_id, a.gateway_name)}`
+        : html`as the first thing in a session`;
+    mount(view, html`
+      <div class="hero"><div><div class="kicker">Artist · #${Fmt.int(a.rank)} all time</div><h1>${a.name}</h1></div>
+        <div class="links"><a href="${lastfm}" target="_blank" rel="noopener noreferrer">last.fm ↗</a><a href="${mb}" target="_blank" rel="noopener noreferrer">MusicBrainz ↗</a></div></div>
+      <div class="tiles">
+        <div class="tile"><div class="label">Plays</div><div class="value">${Fmt.int(a.plays)}</div><div class="sub">${Fmt.pct(a.share)} of everything</div></div>
+        <div class="tile"><div class="label">Tracks heard</div><div class="value">${Fmt.int(a.n_tracks)}</div><div class="sub">on ${Fmt.int(a.n_days)} different days</div></div>
+        <div class="tile"><div class="label">First heard</div><div class="value">${Fmt.date(a.first_ts)}</div><div class="sub">${a.first_track ?? ""}</div></div>
+        <div class="tile"><div class="label">Last played</div><div class="value">${Fmt.date(a.last_ts)}</div><div class="sub">${Fmt.ago(a.last_ts, ov.last_ts)}</div></div>
+        <div class="tile"><div class="label">Peak month</div><div class="value">${Fmt.month(a.peak_month.month)}</div><div class="sub">${Fmt.int(a.peak_month.plays)} plays</div></div>
+      </div>
+      <div class="grid">
+        ${card("Plays per month", html`<div class="chart" id="c-artist"></div>`, html`Discovered ${discovered}`)}
+        <div class="grid cols-3">
+          ${card("Top tracks", rankList(a.tracks.slice(0, 15), { nameOf: (t) => link.track(t.id, t.name) }))}
+          ${card("Albums", rankList(a.albums.slice(0, 15), { nameOf: (t) => html`${link.album(t.id, t.name)}<small>${t.n_tracks} tracks</small>` }))}
+          ${card("Listened alongside", a.related.length ? html`<ol class="rank">${a.related.map((r, i) => html`
+              <li><span class="pos">${i + 1}</span><span class="name">${link.artist(r.id, r.name)}</span>
+              <span class="num secondary" title="shared sessions">${Fmt.int(r.shared)}</span>
+              <span class="bar"><i style="width:${(Math.min(1, r.score / a.related[0].score) * 100).toFixed(1)}%"></i></span></li>`)}</ol>`
+            : html`<p class="empty">Not enough shared sessions yet.</p>`, "Artists that share your listening sessions; number = sessions together")}
+        </div>
+        <div class="grid cols-2">
+          ${card("Time of day", html`<div class="chart" id="c-hours"></div>`, "Plays by local hour")}
+          ${card("Led you to", a.led_to.length ? rankList(a.led_to, { nameOf: (r) => html`${link.artist(r.id, r.name)}<small>${Fmt.date(r.first_ts)}</small>` })
+            : html`<p class="empty">No discoveries started right after this artist.</p>`, "Artists you first heard right after playing this one")}
+        </div>
+      </div>`);
+    Charts.columns(document.getElementById("c-artist"), a.monthly, {
+      value: (d) => d.plays, xLabel: (d) => (d.month.endsWith("-01") ? d.month.slice(0, 4) : null), label: "Plays per month",
+      tip: (d) => ({ title: Fmt.month(d.month), rows: [{ value: Fmt.int(d.plays), label: "plays" }] }),
+    });
+    Charts.columns(document.getElementById("c-hours"), a.hours.map((v, h) => ({ h, v })), {
+      value: (d) => d.v, height: 160, xLabel: (d) => (d.h % 3 === 0 ? String(d.h).padStart(2, "0") : null), label: "Plays by hour",
+      tip: (d) => ({ title: `${String(d.h).padStart(2, "0")}:00–${String(d.h).padStart(2, "0")}:59`, rows: [{ value: Fmt.int(d.v), label: "plays" }] }),
+    });
+  }
+
+  async function albumView(id) {
+    const al = await api(`/api/albums/${id}`);
+    mount(view, html`<div class="hero"><div><div class="kicker">Album · ${link.artist(al.artist_id, al.artist)}</div><h1>${al.name}</h1></div></div>
+      <div class="tiles"><div class="tile"><div class="label">Plays</div><div class="value">${Fmt.int(al.plays)}</div></div>
+      <div class="tile"><div class="label">Tracks heard</div><div class="value">${Fmt.int(al.tracks.length)}</div></div></div>
+      ${card("Tracks", rankList(al.tracks, { nameOf: (t) => html`${link.track(t.id, t.name)}<small>last ${Fmt.date(t.last_ts)}</small>` }))}`);
+  }
+
+  async function trackView(id) {
+    const t = await api(`/api/tracks/${id}`);
+    mount(view, html`<div class="hero"><div><div class="kicker">Track · ${link.artist(t.artist_id, t.artist)}</div><h1>${t.name}</h1></div></div>
+      <div class="tiles">
+        <div class="tile"><div class="label">Plays</div><div class="value">${Fmt.int(t.plays)}</div><div class="sub">on ${Fmt.int(t.n_days)} days</div></div>
+        <div class="tile"><div class="label">First played</div><div class="value">${Fmt.date(t.first_ts)}</div></div>
+        <div class="tile"><div class="label">Last played</div><div class="value">${Fmt.date(t.last_ts)}</div></div>
+        <div class="tile"><div class="label">Most in one day</div><div class="value">${Fmt.int(t.best_day.plays)}</div><div class="sub">${Fmt.day(t.best_day.day)}</div></div>
+      </div>
+      ${card("Plays per year", html`<div class="chart" id="c-track"></div>`)}`);
+    Charts.columns(document.getElementById("c-track"), t.yearly, {
+      value: (d) => d.plays, height: 180, xLabel: (d) => d.year, label: "Plays per year",
+      tip: (d) => ({ title: d.year, rows: [{ value: Fmt.int(d.plays), label: "plays" }] }),
+    });
+  }
+
+  async function connectionsView(params) {
+    const n = [60, 120, 200].includes(+params.get("n")) ? +params.get("n") : 120;
+    const g = await api(`/api/graph?n=${n}`);
+    if (!g.nodes.length) return emptyState();
+    const named = (c) => c.members.slice(0, 3).map((m) => m.name).join(" · ");
+    mount(view, html`
+      <div class="page-head"><div><h1>Connections</h1>
+        <p>Your top ${g.nodes.length} artists, linked when you play them in the same listening sessions. Colours are taste clusters found from those links.</p></div>
+        <div class="seg" id="size">${[60, 120, 200].map((k) => html`<button data-n="${k}" class="${k === n ? "on" : ""}">${k}</button>`)}</div></div>
+      <div class="grid" style="grid-template-columns:minmax(0,3fr) minmax(220px,1fr)">
+        <div class="graph-wrap" id="graph"></div>
+        <div class="clusters" id="clusters">${g.clusters.filter((c) => c.size > 1).map((c) => html`
+          <div class="cluster" data-c="${c.id}" tabindex="0"><div class="head"><span class="dot" style="background:${clusterColor(c.id)}"></span>
+            ${c.size} artists <span class="badge">${Fmt.int(c.plays)} plays</span></div><p>${named(c)}</p></div>`)}
+          ${g.clusters.some((c) => c.size === 1) ? html`<p class="muted">${g.clusters.filter((c) => c.size === 1).length} artists stand alone (no strong links).</p>` : ""}
+        </div>
+      </div>
+      <p class="muted">Hover a node for its strongest links, drag to rearrange, scroll to zoom, click to open. Click a cluster to highlight it.</p>`);
+    const graph = TasteGraph.create(document.getElementById("graph"), g, {
+      color: clusterColor, onSelect: (node) => (location.hash = `#/artist/${node.id}`),
+    });
+    let pinned = null;
+    view.querySelectorAll(".cluster").forEach((el) => {
+      const toggle = () => {
+        pinned = pinned === +el.dataset.c ? null : +el.dataset.c;
+        view.querySelectorAll(".cluster").forEach((x) => x.classList.toggle("on", +x.dataset.c === pinned));
+        graph.highlightCluster(pinned);
+      };
+      el.addEventListener("click", toggle);
+      el.addEventListener("keydown", (e) => e.key === "Enter" && toggle());
+    });
+    view.querySelectorAll("#size button").forEach((b) => b.addEventListener("click", () => (location.hash = `#/connections?n=${b.dataset.n}`)));
+  }
+
+  async function erasView() {
+    const [eras, timeline] = await Promise.all([api("/api/eras"), api("/api/timeline")]);
+    if (!eras.length) return emptyState();
+    mount(view, html`
+      <div class="page-head"><div><h1>Eras</h1><p>How your taste moved, year by year</p></div></div>
+      <div class="grid">
+        ${card("New artists per month", html`<div class="chart" id="c-new"></div>`, "Artists heard for the first time (not counting your first 30 days of history)")}
+        <div class="grid cols-2">${eras.slice().reverse().map((e) => card(e.year, html`
+          <dl class="kv" style="margin-bottom:12px">
+            <dt>Scrobbles</dt><dd>${Fmt.int(e.plays)} · ${Fmt.int(e.artists)} artists · ${Fmt.int(e.new_artists)} new</dd>
+            ${e.signature ? html`<dt>Signature</dt><dd>${link.artist(e.signature.id, e.signature.name)} <span class="badge">${Fmt.dec(e.signature.lift)}× its usual share</span></dd>` : ""}
+            ${e.best_new ? html`<dt>Big discovery</dt><dd>${link.artist(e.best_new.id, e.best_new.name)} <span class="muted">${Fmt.int(e.best_new.plays)} plays</span></dd>` : ""}
+          </dl>${rankList(e.top, { nameOf: artistName })}`))}</div>
+      </div>`);
+    Charts.columns(document.getElementById("c-new"), timeline, {
+      value: (d) => d.new_artists, xLabel: (d) => (d.month.endsWith("-01") ? d.month.slice(0, 4) : null), height: 180, label: "New artists per month",
+      tip: (d) => ({ title: Fmt.month(d.month), rows: [{ value: Fmt.int(d.new_artists), label: "new artists" }] }),
+    });
+  }
+
+  async function insightsView() {
+    const [i, ov] = await Promise.all([api("/api/insights"), api("/api/overview")]);
+    if (!i.reference_ts) return emptyState();
+    const ref = i.reference_ts;
+    const list = (items, render) => (items.length ? html`<ul class="insight-list">${items.map(render)}</ul>` : html`<p class="empty">Nothing stands out yet.</p>`);
+    mount(view, html`
+      <div class="page-head"><div><h1>Insights</h1><p>Patterns in your history, measured up to your latest scrobble (${Fmt.date(ov.last_ts)})</p></div></div>
+      <div class="grid cols-2">
+        ${card("Rediscover", list(i.rediscover, (r) => html`<li><div>${link.artist(r.id, r.name)}
+            <div class="why">because you're into ${r.because.map((b, k) => html`${k ? ", " : ""}${link.artist(b.id, b.name)}`)}</div></div>
+            <span class="muted num">${Fmt.int(r.plays)} plays · ${Fmt.ago(r.last_ts, ref)}</span></li>`),
+          "Artists you used to play alongside your current favourites, untouched for a year")}
+        ${card("On the rise", list(i.rising, (r) => html`<li>${link.artist(r.id, r.name)}
+            <span class="num"><span class="up">${Fmt.dec(r.growth)}×</span> <span class="muted">${Fmt.int(r.recent)} plays in 90 d</span></span></li>`),
+          "Last 90 days vs. your usual pace for them over the year before")}
+        ${card("Forgotten favourites", list(i.forgotten, (r) => html`<li>${link.artist(r.id, r.name)}
+            <span class="muted num">${Fmt.int(r.plays)} plays · last ${Fmt.ago(r.last_ts, ref)}</span></li>`),
+          "Big artists you haven't played in over a year")}
+        ${card("Obsessions", list(i.obsessions, (r) => html`<li><div>${link.artist(r.id, r.name)} <span class="muted">${Fmt.month(r.month)}</span></div>
+            <span class="num">${Fmt.pct(r.share)} <span class="muted">of the month</span></span></li>`),
+          "Months where one artist took over")}
+        ${card("Staying power", list(i.staying_power, (r) => html`<li>${link.artist(r.id, r.name)}
+            <span class="muted num">${r.n_years} years · ${Fmt.int(r.plays)} plays</span></li>`),
+          "Played in the most different years")}
+        ${card("Gateways", list(i.gateways, (r) => html`<li>${link.artist(r.id, r.name)}
+            <span class="muted num">led to ${Fmt.int(r.led_to)} artists · ${Fmt.int(r.downstream_plays)} plays</span></li>`),
+          "Artists you were playing right before discovering others, weighted by how much those discoveries stuck")}
+        ${card("Binges", list(i.binges, (r) => html`<li><div>${link.track(r.id, r.name)} <span class="muted">${r.artist}</span></div>
+            <span class="muted num">${Fmt.int(r.plays)}× on ${Fmt.day(r.day)}</span></li>`),
+          "Most plays of one track in a single day")}
+        ${card("One-track artists", list(i.one_track, (r) => html`<li><div>${link.artist(r.id, r.name)} <span class="muted">${r.track}</span></div>
+            <span class="muted num">${Fmt.pct(r.share)} of ${Fmt.int(r.plays)} plays</span></li>`),
+          "Artists where one song is almost all you play")}
+        ${card("Deep dives", list(i.deep_dives, (r) => html`<li>${link.artist(r.id, r.name)}
+            <span class="muted num">${Fmt.int(r.n_tracks)} tracks · ${Fmt.int(r.plays)} plays</span></li>`),
+          "Artists whose catalogue you've explored the furthest")}
+      </div>`);
+  }
+
+  async function importView() {
+    const log = await api("/api/imports", { fresh: true });
+    mount(view, html`
+      <div class="page-head"><div><h1>Import</h1>
+        <p>Drop a CSV from lastfm-to-csv. Re-importing a full export is safe: scrobbles already in the database are skipped.</p></div></div>
+      <div class="grid cols-2">
+        <section class="card"><label class="drop" id="drop">
+          <input type="file" id="file" accept=".csv,text/csv" hidden>
+          <strong>Drop a CSV here</strong><br><span class="muted">or click to choose a file</span></label>
+          <div id="result"></div></section>
+        ${card("How it works", html`<dl class="kv">
+          <dt>Format</dt><dd><code>artist, album, track, date</code> without a header (lastfm-to-csv), or any CSV with a header containing artist / track / date or uts</dd>
+          <dt>Encoding</dt><dd>UTF-8 (with or without BOM), Windows-1252 or Latin-1 are detected automatically</dd>
+          <dt>Time</dt><dd>last.fm dates are UTC; local hours and days use your configured zone (MTC_TZ)</dd>
+          <dt>CLI</dt><dd><code>.venv/bin/python -m mtc import export.csv</code></dd>
+        </dl>`)}
+      </div>
+      <div class="grid" style="margin-top:16px">${card("Import history", log.length ? html`<div class="table-wrap"><table>
+        <thead><tr><th>When</th><th>Source</th><th>File</th><th class="num">Read</th><th class="num">Added</th><th class="num">Skipped</th><th>Covers</th></tr></thead>
+        <tbody>${log.map((r) => html`<tr><td>${Fmt.date(r.started_at)}</td><td>${r.source}</td><td>${r.label ?? ""} <span class="muted">${r.encoding ?? ""}</span></td>
+          <td class="num">${Fmt.int(r.rows_read)}</td><td class="num">${Fmt.int(r.rows_added)}</td><td class="num">${Fmt.int(r.rows_skipped)}</td>
+          <td class="muted">${r.min_ts ? html`${Fmt.date(r.min_ts)} – ${Fmt.date(r.max_ts)}` : "–"}</td></tr>`)}</tbody></table></div>`
+        : html`<p class="empty">No imports yet.</p>`)}</div>`);
+    const drop = view.querySelector("#drop");
+    const input = view.querySelector("#file");
+    const result = view.querySelector("#result");
+    async function upload(file) {
+      mount(result, html`<div class="notice">Importing ${file.name} (${Fmt.compact(file.size / 1024)} kB)…</div>`);
+      try {
+        const res = await fetch("/api/import", { method: "POST", body: file, headers: { "content-type": "text/csv", "x-filename": encodeURIComponent(file.name) } });
+        if (!res.ok) throw new Error(await res.text());
+        const r = await res.json();
+        cache.clear();
+        mount(result, html`<div class="notice">Added <strong>${Fmt.int(r.rows_added)}</strong> new scrobbles from ${Fmt.int(r.rows_read)} rows
+          (${Fmt.int(r.duplicates)} already known, ${Fmt.int(r.rows_skipped)} skipped, ${r.encoding}).</div>`);
+        setTimeout(() => route(), 1200);
+      } catch (err) {
+        mount(result, html`<div class="notice err">Import failed: ${err.message}</div>`);
+      }
+    }
+    input.addEventListener("change", () => input.files[0] && upload(input.files[0]));
+    drop.addEventListener("dragover", (e) => { e.preventDefault(); drop.classList.add("over"); });
+    drop.addEventListener("dragleave", () => drop.classList.remove("over"));
+    drop.addEventListener("drop", (e) => {
+      e.preventDefault();
+      drop.classList.remove("over");
+      if (e.dataTransfer.files[0]) upload(e.dataTransfer.files[0]);
+    });
+  }
+
+  // ---------- search ----------
+  function setupSearch() {
+    const input = document.getElementById("search");
+    const box = document.getElementById("search-results");
+    let timer, seq = 0;
+    const close = () => { box.hidden = true; };
+    input.addEventListener("input", () => {
+      clearTimeout(timer);
+      const q = input.value.trim();
+      if (!q) return close();
+      timer = setTimeout(async () => {
+        const my = ++seq;
+        const r = await api("/api/search?" + qs({ q }));
+        if (my !== seq) return;
+        const group = (title, items, href, sub) => (items.length ? html`<h3>${title}</h3>${items.map((it) => html`
+          <a href="${href(it)}"><span>${it.name}${sub ? html` <span class="muted">${sub(it)}</span>` : ""}</span><span class="muted num">${Fmt.int(it.plays)}</span></a>`)}` : "");
+        const any = r.artists.length + r.tracks.length + r.albums.length;
+        mount(box, any ? html`${group("Artists", r.artists, (a) => `#/artist/${a.id}`)}${group("Tracks", r.tracks, (t) => `#/track/${t.id}`, (t) => t.artist)}${group("Albums", r.albums, (a) => `#/album/${a.id}`, (a) => a.artist)}`
+          : html`<p class="empty" style="padding:8px">No matches</p>`);
+        box.hidden = false;
+      }, 180);
+    });
+    input.addEventListener("keydown", (e) => {
+      const links = [...box.querySelectorAll("a")];
+      const cur = links.findIndex((a) => a.classList.contains("sel"));
+      if (e.key === "Escape") { close(); input.blur(); }
+      if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+        e.preventDefault();
+        const next = links[(cur + (e.key === "ArrowDown" ? 1 : -1) + links.length) % links.length];
+        links.forEach((a) => a.classList.toggle("sel", a === next));
+      }
+      if (e.key === "Enter" && links.length) location.hash = (links[cur] ?? links[0]).getAttribute("href");
+    });
+    box.addEventListener("click", () => { close(); input.value = ""; });
+    document.addEventListener("click", (e) => { if (!e.target.closest(".search")) close(); });
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "/" && document.activeElement.tagName !== "INPUT") { e.preventDefault(); input.focus(); }
+    });
+  }
+
+  // ---------- theme ----------
+  function setupTheme() {
+    const root = document.documentElement;
+    try { const saved = localStorage.getItem("mtc-theme"); if (saved) root.dataset.theme = saved; } catch { /* storage unavailable */ }
+    document.getElementById("theme").addEventListener("click", () => {
+      const dark = root.dataset.theme ? root.dataset.theme === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
+      root.dataset.theme = dark ? "light" : "dark";
+      try { localStorage.setItem("mtc-theme", root.dataset.theme); } catch { /* ignore */ }
+    });
+  }
+
+  // ---------- router ----------
+  const routes = [
+    [/^\/?$/, overviewView],
+    [/^\/library$/, libraryView],
+    [/^\/artist\/(\d+)$/, artistView],
+    [/^\/album\/(\d+)$/, albumView],
+    [/^\/track\/(\d+)$/, trackView],
+    [/^\/connections$/, connectionsView],
+    [/^\/eras$/, erasView],
+    [/^\/insights$/, insightsView],
+    [/^\/import$/, importView],
+  ];
+  let routeSeq = 0;
+  async function route() {
+    const hash = location.hash.slice(1) || "/";
+    const [path, query = ""] = hash.split("?");
+    const params = new URLSearchParams(query);
+    const my = ++routeSeq;
+    document.querySelectorAll("#nav a").forEach((a) => {
+      const target = a.getAttribute("href").slice(1);
+      a.classList.toggle("active", target === "/" ? path === "/" : path.startsWith(target));
+    });
+    view.classList.add("loading");
+    try {
+      for (const [re, fn] of routes) {
+        const m = re.exec(path);
+        if (m) {
+          Charts.cleanup();
+          await fn(m[1] ?? params, params);
+          break;
+        }
+      }
+      if (my === routeSeq && !routes.some(([re]) => re.test(path))) mount(view, html`<h1>Not found</h1>`);
+    } catch (err) {
+      if (my === routeSeq) mount(view, html`<div class="notice err">Couldn't load this view: ${err.message}</div>`);
+      console.error(err);
+    } finally {
+      if (my === routeSeq) view.classList.remove("loading");
+    }
+    if (!/^\/library/.test(path)) window.scrollTo(0, 0);
+  }
+
+  setupTheme();
+  setupSearch();
+  window.addEventListener("hashchange", route);
+  route();
+})();

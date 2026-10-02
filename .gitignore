@@ -1,0 +1,9 @@
+.venv/
+__pycache__/
+data/
+*.db
+*.db-wal
+*.db-shm
+*.csv
+!tests/fixtures/*.csv
+.DS_Store
