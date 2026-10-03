@@ -20,5 +20,6 @@ Local FastAPI + SQLite app (Python 3.14, vanilla JS in `static/`). See README fo
 - Non-GET `/api` requests with a foreign `Origin` are refused (the server is reachable from any website via localhost); keep it that way.
 - SQL is always parameterized. In the UI, data goes through the `html` tagged template (escapes by default) or `textContent`.
 - Numbers use Finnish formatting (`Fmt.int` gives `12 345`). No locale compact notation.
+- Sizes are tokens too (`--fs-*` type scale, `--gap`, `--card-pad`, `--row-h`, `--radius-*`); don't hard-code font sizes or radii. Side-by-side cards go in `.grid.cols-2/3`, which stretches a row to one height; keep their lists to about 10 rows. Cards of very uneven length go in `.masonry`.
 - Colours are CSS tokens in `static/style.css`, from the Friends onThe Web palette. Re-run the dataviz palette validator if you change the categorical slots.
 - UI changes: verify in the browser (Chrome MCP, or `javascript_tool` DOM checks) before calling them done.

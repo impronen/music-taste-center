@@ -131,7 +131,7 @@
       api("/api/top/artist?" + qs({ ...range, limit: 10 })),
       api("/api/top/track?" + qs({ ...range, limit: 10 })),
       api("/api/top/album?" + qs({ ...range, limit: 10 })),
-      api("/api/recent?limit=15"),
+      api("/api/recent?limit=8"),
     ]);
     const prev = sum.previous;
     // Change against the previous period of the same length; text stays in text colours, the arrow carries direction.
@@ -169,16 +169,16 @@
           ${card("Top albums", rankList(tal, { nameOf: albumName, thumbs: true }), period.label)}
         </div>
         <div class="grid cols-2">
-          ${card("New in this period", sum.discoveries.length ? rankList(sum.discoveries, {
-              nameOf: (r) => html`${link.artist(r.id, r.name)}<small>${Fmt.date(r.first_ts)}${r.gateway_name ? html` · after ${r.gateway_name}` : ""}</small>` })
-            : html`<p class="empty">No new artists in this period.</p>`, "Artists first heard in this period, by plays in it")}
           ${card("Listening clock", html`<div class="chart" id="c-clock"></div>`, `${period.label} · plays by weekday and local hour`)}
+          ${card("Novelty", html`<div class="chart" id="c-novelty"></div>`, "All time · share of plays going to artists you first heard within the previous 12 months")}
         </div>
         <div class="grid cols-2">
-          ${card("Novelty", html`<div class="chart" id="c-novelty"></div>`, "All time · share of plays going to artists you first heard within the previous 12 months")}
+          ${card("New in this period", sum.discoveries.length ? rankList(sum.discoveries.slice(0, 8), {
+              nameOf: (r) => html`${link.artist(r.id, r.name)}<small>${Fmt.date(r.first_ts)}${r.gateway_name ? html` · after ${r.gateway_name}` : ""}</small>` })
+            : html`<p class="empty">No new artists in this period.</p>`, "Artists first heard in this period, by plays in it")}
           ${card("Recently played", html`<div class="table-wrap"><table><tbody>${recent.map((r) => html`
-            <tr><td>${link.track(r.track_id, r.track)}<div class="muted small">${r.artist}</div></td>
-            <td class="num muted">${Fmt.date(r.ts)}</td></tr>`)}</tbody></table></div>`)}
+            <tr><td class="ellipsis">${link.track(r.track_id, r.track)} <span class="muted small">${r.artist}</span></td>
+            <td class="num muted">${Fmt.date(r.ts)}</td></tr>`)}</tbody></table></div>`, "Your newest scrobbles")}
         </div>
       </div>`);
     bindPeriodBar((key) => {
@@ -217,7 +217,7 @@
   function emptyState() {
     mount(view, html`<div class="page-head"><div><h1>No scrobbles yet</h1>
       <p>Export your history with lastfm-to-csv, then import the file.</p></div></div>
-      <p><a class="badge" href="#/import">Go to import →</a></p>`);
+      <p><a class="cta" href="#/import">Go to import →</a></p>`);
   }
 
   async function libraryView(params) {
@@ -304,9 +304,9 @@
       <div class="grid">
         ${card("Plays per month", html`<div class="chart" id="c-artist"></div>`, html`Discovered ${discovered}`)}
         <div class="grid cols-3">
-          ${card("Top tracks", rankList(a.tracks.slice(0, 15), { nameOf: (t) => link.track(t.id, t.name) }))}
-          ${card("Albums", rankList(a.albums.slice(0, 15), { thumbs: true, nameOf: (t) => html`${link.album(t.id, t.name)}<small>${t.release_date ? `${year(t.release_date)} · ` : ""}${t.n_tracks} tracks</small>` }))}
-          ${card("Listened alongside", a.related.length ? html`<ol class="rank">${a.related.map((r, i) => html`
+          ${card("Top tracks", rankList(a.tracks.slice(0, 10), { nameOf: (t) => link.track(t.id, t.name) }))}
+          ${card("Albums", rankList(a.albums.slice(0, 10), { thumbs: true, nameOf: (t) => html`${link.album(t.id, t.name)}<small>${t.release_date ? `${year(t.release_date)} · ` : ""}${t.n_tracks} tracks</small>` }))}
+          ${card("Listened alongside", a.related.length ? html`<ol class="rank">${a.related.slice(0, 10).map((r, i) => html`
               <li><span class="pos">${i + 1}</span><span class="name">${link.artist(r.id, r.name)}</span>
               <span class="num secondary" title="shared sessions">${Fmt.int(r.shared)}</span>
               <span class="bar"><i style="width:${(Math.min(1, r.score / a.related[0].score) * 100).toFixed(1)}%"></i></span></li>`)}</ol>`
@@ -433,7 +433,7 @@
             ${e.signature ? html`<dt>Signature</dt><dd>${link.artist(e.signature.id, e.signature.name)} <span class="badge">${Fmt.dec(e.signature.lift)}× its usual share</span></dd>` : ""}
             ${e.best_new ? html`<dt>Big discovery</dt><dd>${link.artist(e.best_new.id, e.best_new.name)} <span class="muted">${Fmt.int(e.best_new.plays)} plays</span></dd>` : ""}
             ${e.genres?.length ? html`<dt>Genres</dt><dd class="chips">${e.genres.map((g) => html`<a class="chip" href="#/tag/${g.id}">${g.name} <span class="muted">${Fmt.pct(g.share)}</span></a>`)}</dd>` : ""}
-          </dl>${rankList(e.top, { nameOf: artistName })}`))}</div>
+          </dl>${rankList(e.top, { nameOf: artistName })}`, "", "era"))}</div>
       </div>`);
     Charts.columns(document.getElementById("c-new"), timeline, {
       value: (d) => d.new_artists, xLabel: (d) => (d.month.endsWith("-01") ? d.month.slice(0, 4) : null), height: 180, label: "New artists per month",
@@ -448,13 +448,13 @@
     const list = (items, render) => (items.length ? html`<ul class="insight-list">${items.map(render)}</ul>` : html`<p class="empty">Nothing stands out yet.</p>`);
     mount(view, html`
       <div class="page-head"><div><h1>Insights</h1><p>Patterns in your history, measured up to your latest scrobble (${Fmt.date(ov.last_ts)})</p></div></div>
-      <div class="grid cols-2">
+      <div class="masonry">
         ${card("Rediscover", list(i.rediscover, (r) => html`<li><div>${link.artist(r.id, r.name)}
             <div class="why">because you're into ${r.because.map((b, k) => html`${k ? ", " : ""}${link.artist(b.id, b.name)}`)}</div></div>
             <span class="muted num">${Fmt.int(r.plays)} plays · ${Fmt.ago(r.last_ts, ref)}</span></li>`),
           "Artists you used to play alongside your current favourites, untouched for a year")}
         ${card("On the rise", list(i.rising, (r) => html`<li>${link.artist(r.id, r.name)}
-            <span class="num"><span class="up">${Fmt.dec(r.growth)}×</span> <span class="muted">${Fmt.int(r.recent)} plays in 90 d</span></span></li>`),
+            <span class="num"><span>${Fmt.dec(r.growth)}×</span> <span class="muted">${Fmt.int(r.recent)} plays in 90 d</span></span></li>`),
           "Last 90 days vs. your usual pace for them over the year before")}
         ${card("Forgotten favourites", list(i.forgotten, (r) => html`<li>${link.artist(r.id, r.name)}
             <span class="muted num">${Fmt.int(r.plays)} plays · last ${Fmt.ago(r.last_ts, ref)}</span></li>`),
