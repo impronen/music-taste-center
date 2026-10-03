@@ -13,15 +13,31 @@
   const part = (v) => (v instanceof Raw ? v.s : Array.isArray(v) ? v.map(part).join("") : v == null || v === false ? "" : esc(v));
   const html = (strings, ...vals) => raw(strings.reduce((acc, s, i) => acc + s + (i < vals.length ? part(vals[i]) : ""), ""));
   const mount = (el, tpl) => { el.innerHTML = tpl.s; };
+  // Each view reads `rendering` synchronously when it starts and mounts through paint(seq, …),
+  // which refuses (and stops the view) once a newer route has started.
+  class Stale extends Error {}
+  let routeSeq = 0, rendering = 0;
+  const paint = (seq, tpl) => {
+    if (seq !== routeSeq) throw new Stale();
+    mount(view, tpl);
+  };
 
   // ---------- data ----------
   // GETs are cached for a few minutes; imports, merges and finished tag fetches clear the cache.
   const TTL_MS = 5 * 60 * 1000;
   const cache = new Map();
+  let dataVersion = null;
+  function noteVersion(res) {
+    const v = res.headers.get("x-data-version");
+    if (!v) return;
+    if (dataVersion && v !== dataVersion) cache.clear(); // scrobbles or tags changed somewhere
+    dataVersion = v;
+  }
   async function api(path, { fresh = false } = {}) {
     const hit = cache.get(path);
     if (!fresh && hit && Date.now() - hit.at < TTL_MS) return hit.data;
     const res = await fetch(path);
+    noteVersion(res);
     if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
     const data = await res.json();
     cache.set(path, { at: Date.now(), data });
@@ -29,6 +45,7 @@
   }
   async function postJson(path, body, method = "POST", invalid = "Invalid input") {
     const res = await fetch(path, { method, headers: { "content-type": "application/json" }, body: JSON.stringify(body ?? {}) });
+    noteVersion(res);
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(typeof data.detail === "string" ? data.detail : res.status === 422 ? invalid : `HTTP ${res.status}`);
     return data;
@@ -111,9 +128,12 @@
   // Presets count back from the newest scrobble, so an old export still makes sense.
   const QUICK = [["7d", "7 days"], ["30d", "30 days"], ["90d", "90 days"], ["365d", "Year"], ["all", "All time"]];
   const isoDay = (ts) => new Date(ts * 1000).toISOString().slice(0, 10);
+  // first/last local day of the history (the server's time zone), as YYYY-MM-DD
+  const firstDay = (ov) => ov.first_day ?? isoDay(ov.first_ts);
+  const lastDay = (ov) => ov.last_day ?? isoDay(ov.last_ts);
   function periods(ov) {
     if (!ov || ov.empty) return [{ key: "all", label: "All time" }];
-    const end = new Date(ov.last_ts * 1000);
+    const end = new Date(lastDay(ov) + "T00:00:00Z"); // pure date arithmetic in UTC
     const iso = (d) => d.toISOString().slice(0, 10);
     const back = (days) => iso(new Date(end - days * 864e5));
     const out = [
@@ -122,7 +142,7 @@
       { key: "90d", label: "Last 90 days", days: 90, start: back(89), end: iso(end) },
       { key: "365d", label: "Last 12 months", days: 365, start: back(364), end: iso(end) },
     ];
-    const y0 = new Date(ov.first_ts * 1000).getUTCFullYear();
+    const y0 = +firstDay(ov).slice(0, 4);
     for (let y = end.getUTCFullYear(); y >= y0; y--) out.push({ key: String(y), label: String(y), start: `${y}-01-01`, end: `${y}-12-31` });
     out.push({ key: "all", label: "All time" });
     return out;
@@ -152,7 +172,7 @@
   // Presets as a pill segment, plus one button that opens a popover with year, month and dates.
   function periodControls(period, ov, { compact = false } = {}) {
     const years = periods(ov).filter((p) => /^\d{4}$/.test(p.key));
-    const [lo, hi] = [isoDay(ov.first_ts), isoDay(ov.last_ts)];
+    const [lo, hi] = [firstDay(ov), lastDay(ov)];
     const isQuick = QUICK.some(([k]) => k === period.key);
     return html`<div class="period-row">
       ${compact ? "" : html`<div class="seg" role="group" aria-label="Period">${QUICK.map(([k, l]) =>
@@ -197,15 +217,16 @@
   }
 
   // ---------- views ----------
-  function emptyState() {
-    mount(view, html`<div class="page-head"><div><h1>No scrobbles yet</h1>
+  function emptyState(seq) {
+    paint(seq, html`<div class="page-head"><div><h1>No scrobbles yet</h1>
       <p class="lead">Export your history with lastfm-to-csv, then import the file.</p>
       <p style="margin-top:20px"><a class="btn primary" href="#/import">${icon("upload")} Go to Import</a></p></div></div>`);
   }
 
   async function overviewView(params) {
+    const seq = rendering;
     const ov = await api("/api/overview");
-    if (ov.empty) return emptyState();
+    if (ov.empty) return emptyState(seq);
     const period = parseRange(params.get("period") || storage.get("mtc-period") || "30d", ov);
     const range = { start: period.start, end: period.end };
     const [sum, act, timeline, clock, ta, tt, tal, recent, seasonal] = await Promise.all([
@@ -242,7 +263,7 @@
       recentRows.push(html`<li class="link-row"><a href="#/track/${r.track_id}"><span class="time">${Fmt.time(r.ts)}</span>
         <span class="grow"><b>${r.track}</b> <span class="meta">· ${r.artist}</span></span></a></li>`);
     }
-    mount(view, html`
+    paint(seq, html`
       <section class="hero-ov">
         <div>
           <span class="kicker">${rangeText(sum.start, sum.end)}</span>
@@ -322,8 +343,9 @@
     genre: [["name", "Genre"], ["plays", "Share", "num"], [null, "Your artists"]],
   };
   async function libraryView(params) {
+    const seq = rendering;
     const ov = await api("/api/overview");
-    if (ov.empty) return emptyState();
+    if (ov.empty) return emptyState(seq);
     const kind = KINDS.some(([k]) => k === params.get("kind")) ? params.get("kind") : "artist";
     const period = parseRange(params.get("period") || "all", ov);
     const q = params.get("q") || "";
@@ -342,7 +364,7 @@
     const data = await api("/api/library?" + qs({ kind, start: period.start, end: period.end, q, sort, artist: artistId, limit: size, offset: page * size }));
     const noun = KINDS.find(([k]) => k === kind)[1].toLowerCase();
     const lead = period.key === "all"
-      ? html`${Fmt.int(data.total)} ${noun} you've scrobbled since ${Fmt.month(isoDay(ov.first_ts).slice(0, 7))}${q ? html`, matching “${q}”` : ""}.`
+      ? html`${Fmt.int(data.total)} ${noun} you've scrobbled since ${Fmt.month(firstDay(ov).slice(0, 7))}${q ? html`, matching “${q}”` : ""}.`
       : html`${Fmt.int(data.total)} ${noun} in ${period.days ? period.label.toLowerCase() : period.label}${q ? html`, matching “${q}”` : ""}.`;
     const artistChip = data.artist ? html`<button type="button" class="chip" id="artist-filter" aria-label="Remove the filter for ${data.artist.name}">
       ${data.artist.name} <span aria-hidden="true">×</span></button>` : "";
@@ -366,7 +388,7 @@
         <td class="num strong">${Fmt.pct(g.share)}</td><td class="secondary">${g.artists.map((a, k) => html`${k ? ", " : ""}${link.artist(a.id, a.name)}`)}</td></tr>`,
     };
     const from = data.total ? page * size + 1 : 0, to = Math.min(data.total, (page + 1) * size);
-    mount(view, html`
+    paint(seq, html`
       <div class="page-head"><div><h1>Library</h1><p class="lead">${lead}</p></div></div>
       <div class="toolbar">
         <div class="seg" role="group" aria-label="Show">${KINDS.map(([k, l]) => html`<button type="button" data-kind="${k}" aria-pressed="${String(k === kind)}">${l}</button>`)}</div>
@@ -425,6 +447,7 @@
   const extLink = (href, label) => html`<a class="btn secondary small" href="${href}" target="_blank" rel="noopener noreferrer">${label} ${icon("external", 14)}</a>`;
 
   async function artistView(id) {
+    const seq = rendering;
     const [a, ov] = await Promise.all([api(`/api/artists/${id}`), api("/api/overview")]);
     const lastfm = `https://www.last.fm/music/${encodeURIComponent(a.name).replace(/%20/g, "+")}`;
     const mb = `https://musicbrainz.org/search?${qs({ query: a.name, type: "artist" })}`;
@@ -436,7 +459,7 @@
     const peakMonth = a.peak_month.month;
     const maxShared = Math.max(1, ...a.related.map((r) => r.score));
     const hoursPeak = a.hours.indexOf(Math.max(...a.hours));
-    mount(view, html`
+    paint(seq, html`
       <section class="hero">
         <div class="cover-circle"><div class="disc">${a.image_url ? html`<img src="${a.image_url}" alt="" loading="lazy" referrerpolicy="no-referrer">` : (a.name.trim()[0] ?? "?").toUpperCase()}</div>
           <span class="rank-badge" title="Your #${a.rank} artist of all time">#${Fmt.int(a.rank)}</span></div>
@@ -455,7 +478,7 @@
       <div class="tiles">
         ${tile("Plays", Fmt.int(a.plays), `${Fmt.pct(a.share)} of everything`, "accent")}
         ${tile("Tracks heard", Fmt.int(a.n_tracks), `on ${Fmt.int(a.n_days)} different days`)}
-        ${tile("First heard", Fmt.month(isoDay(a.first_ts).slice(0, 7)), a.first_track ?? "", "", true)}
+        ${tile("First heard", Fmt.month((a.first_lday ?? isoDay(a.first_ts)).slice(0, 7)), a.first_track ?? "", "", true)}
         ${tile("Last played", Fmt.ago(a.last_ts, ov.last_ts).replace(/^today$/, "Today"), Fmt.date(a.last_ts), "sage", true)}
         ${tile("Peak month", Fmt.month(peakMonth), `${Fmt.int(a.peak_month.plays)} plays`, "", true)}
       </div>
@@ -489,9 +512,10 @@
   }
 
   async function albumView(id) {
+    const seq = rendering;
     const al = await api(`/api/albums/${id}`);
     const meta = al.meta?.status === "ok" ? al.meta : null;
-    mount(view, html`
+    paint(seq, html`
       <section class="hero">
         <div class="cover-square">${meta?.image_url ? html`<img src="${meta.image_url}" alt="" loading="lazy" referrerpolicy="no-referrer">` : (al.name.trim()[0] ?? "?").toUpperCase()}</div>
         <div><span class="kicker">Album · <a href="#/artist/${al.artist_id}">${al.artist}</a></span><h1>${al.name}</h1>${tagChips(al.tags)}</div>
@@ -507,8 +531,9 @@
   }
 
   async function trackView(id) {
+    const seq = rendering;
     const t = await api(`/api/tracks/${id}`);
-    mount(view, html`
+    paint(seq, html`
       <section class="hero no-cover"><div><span class="kicker">Track · <a href="#/artist/${t.artist_id}">${t.artist}</a></span><h1>${t.name}</h1></div></section>
       <div class="tiles">
         ${tile("Plays", Fmt.int(t.plays), `on ${Fmt.int(t.n_days)} days`, "accent")}
@@ -524,10 +549,11 @@
   }
 
   async function tagView(id) {
+    const seq = rendering;
     const t = await api(`/api/tags/${id}`);
     const kind = { genre: "Genre", place: "Place", year: "Year", decade: "Decade", other: "Tag" }[t.kind] ?? "Tag";
     const plays = t.monthly.reduce((s, m) => s + m.plays, 0);
-    mount(view, html`
+    paint(seq, html`
       <section class="hero no-cover"><div><span class="kicker">${kind}</span><h1>${t.name}</h1>
         ${t.kind === "genre" ? html`<p class="lead">About <strong>${Fmt.int(plays)} plays</strong>, with each artist's plays split across its top genre tags.</p>` : ""}</div>
         <div class="hero-links">${extLink(`https://www.last.fm/tag/${encodeURIComponent(t.name)}`, "last.fm")}</div></section>
@@ -563,6 +589,7 @@
   const plural = (season, n) => (season === "winter" ? `winter${n === 1 ? "" : "s"}` : `${season}${n === 1 ? "" : "s"}`);
 
   async function rhythmsView(params) {
+    const seq = rendering;
     const kind = params.get("kind") === "place" ? "place" : "genre";
     const [r, sa] = await Promise.all([api(`/api/rhythms?kind=${kind}`), api("/api/rhythms/artists")]);
     const tabs = html`<div class="seg" role="group" aria-label="Show">${[["genre", "Genres"], ["place", "Places"]].map(([k, l]) =>
@@ -579,7 +606,7 @@
       view.querySelector("#how-link")?.addEventListener("click", (e) => { e.preventDefault(); const d = document.getElementById("how"); d.open = true; scrollToId("how"); });
     };
     if (!r.covered) {
-      mount(view, html`${head}${card("No tags yet", html`<p>Rhythms need ${kind} tags from last.fm. Fetch them on the Import page; the views fill in as tags arrive.</p>
+      paint(seq, html`${head}${card("No tags yet", html`<p>Rhythms need ${kind} tags from last.fm. Fetch them on the Import page; the views fill in as tags arrive.</p>
         <p style="margin-top:16px"><a class="btn primary" href="#/import">Go to Import →</a></p>`, { cls: "accent-soft" })}`);
       bindTabs();
       return;
@@ -596,7 +623,7 @@
         : html`<p class="empty">No ${kind} stands out: about your usual mix.</p>`}</div>
       ${sc.artists.length ? html`<p class="more-than">More than usual: ${sc.artists.map((a, i) => html`${i ? ", " : ""}<a href="#/artist/${a.id}">${a.name}</a>`)}</p>` : ""}
     </section>`;
-    mount(view, html`${head}
+    paint(seq, html`${head}
       ${due.length || seasonGenres.length ? html`<section class="card accent-soft season-hero">
         <div class="season-badge" aria-hidden="true">Your<br>season</div>
         <div><p>It's ${season}${seasonGenres.length ? html`, which usually means <strong>more ${seasonGenres.join(" and ")}</strong> for you` : ""}.
@@ -649,13 +676,14 @@
 
   // ---------- connections ----------
   async function connectionsView(params) {
+    const seq = rendering;
     const n = [60, 120, 200].includes(+params.get("n")) ? +params.get("n") : 120;
     const g = await api(`/api/graph?n=${n}`);
-    if (!g.nodes.length) return emptyState();
+    if (!g.nodes.length) return emptyState(seq);
     const named = (c) => c.members.slice(0, 3).map((m) => m.name).join(" · ");
     const real = g.clusters.filter((c) => c.size > 1);
     const singles = g.clusters.filter((c) => c.size === 1).length;
-    mount(view, html`
+    paint(seq, html`
       <div class="page-head"><div><h1>Connections</h1>
         <p class="lead">Your top ${g.nodes.length} artists. Two artists are linked when you play them in the same sessions; colours are the taste clusters those links form.</p></div>
         <div class="seg" role="group" aria-label="Show"><span class="label">Show</span>${[60, 120, 200].map((k) =>
@@ -692,10 +720,11 @@
 
   // ---------- eras ----------
   async function erasView() {
+    const seq = rendering;
     const [eras, timeline] = await Promise.all([api("/api/eras"), api("/api/timeline")]);
-    if (!eras.length) return emptyState();
+    if (!eras.length) return emptyState(seq);
     const years = eras.slice().reverse();
-    mount(view, html`
+    paint(seq, html`
       <div class="page-head"><div><h1>Eras</h1><p class="lead">How your taste moved, year by year.</p></div></div>
       <nav class="jumpbar" aria-label="Jump to a year">${years.map((e) => html`<button type="button" data-year="${e.year}">${e.year}</button>`)}</nav>
       ${card("New artists each month", html`<div class="chart sage" id="c-new"></div>`, { cls: "canvas", sub: "Not counting your first 30 days of history" })}
@@ -721,8 +750,9 @@
 
   // ---------- insights ----------
   async function insightsView() {
+    const seq = rendering;
     const [i, ov] = await Promise.all([api("/api/insights"), api("/api/overview")]);
-    if (!i.reference_ts) return emptyState();
+    if (!i.reference_ts) return emptyState(seq);
     const ref = i.reference_ts;
     const years = (ov.last_ts - ov.first_ts) / (365.25 * 86400);
     const rows = (items, render, emptyText) => (items.length ? html`<ul class="rows">${items.slice(0, 6).map(render)}</ul>` : html`<p class="empty box">${emptyText}</p>`);
@@ -745,7 +775,7 @@
       ["deep-dives", "Deep dives", "Catalogues you've explored the furthest", "",
         rows(i.deep_dives, (r) => row(artistHref(r), r.name, `${Fmt.int(r.plays)} plays`, `${Fmt.int(r.n_tracks)} tracks`), "Nothing yet.")],
     ];
-    mount(view, html`
+    paint(seq, html`
       <div class="page-head"><div><h1>Insights</h1><p class="lead">Patterns in your history, up to your latest scrobble on ${Fmt.date(ov.last_ts)}.</p></div></div>
       <nav class="jumpbar" aria-label="Jump to a section"><button type="button" data-to="rediscover">Rediscover</button>
         ${sections.map(([id, title]) => html`<button type="button" data-to="${id}">${title}</button>`)}</nav>
@@ -836,6 +866,7 @@
   }
 
   async function cleanupView(params) {
+    const seq = rendering;
     const [groups, rules] = await Promise.all([api("/api/maintenance/duplicates", { fresh: true }), api("/api/maintenance/aliases", { fresh: true })]);
     const preset = params.get("merge") ? await api(`/api/artists/${Number(params.get("merge"))}`).catch(() => null) : null;
     const PAGE = 20;
@@ -845,7 +876,7 @@
           aria-checked="${String(a.id === g.target_id)}" data-id="${a.id}">${a.name} <span class="plays">${Fmt.int(a.plays)}</span><span class="keep-mark">KEEP</span></button>`)}</div>
         <div class="dupe-actions"><span class="reason">${reasonFor(g.artists.map((a) => a.name), g.artists.map((a) => a.lastfm_name))}</span>
           <button type="button" class="btn ghost small dismiss">Not the same</button><button type="button" class="btn primary small merge">Merge</button></div></li>`;
-    mount(view, html`
+    paint(seq, html`
       <div class="page-head"><div><h1>Cleanup</h1>
         <p class="lead">Combine artists spelled more than one way. A merge moves every scrobble to the name you keep, and future imports of the other spelling land there too.</p></div></div>
       <div class="status-pill" id="cleanup-msg" role="status" aria-live="polite"></div>
@@ -882,6 +913,7 @@
       return html`Merged ${r.merged.map((m) => `“${m.source}”`).join(", ")} into <a href="#/artist/${r.target_id}">${r.merged[0].target}</a>: ${Fmt.int(moved)} scrobbles moved. Future imports go to the same place.`;
     }
     async function refresh(message) {
+      if (!location.hash.startsWith("#/cleanup")) return; // the user moved on
       await cleanupView(new URLSearchParams());
       if (message) say(message);
     }
@@ -971,6 +1003,7 @@
 
   // ---------- import ----------
   async function importView() {
+    const seq = rendering;
     const [log, md, job, st] = await Promise.all([api("/api/imports", { fresh: true }), api("/api/metadata/status", { fresh: true }),
       api("/api/metadata/job", { fresh: true }), api("/api/settings", { fresh: true })]);
     const waiting = md.pending_artists + md.pending_albums + md.pending_releases;
@@ -980,7 +1013,7 @@
       ["Fetch tags & covers", st.has_key && !waiting && md.artists_done > 0],
     ];
     const current = steps.findIndex(([, done]) => !done);
-    mount(view, html`
+    paint(seq, html`
       <div class="page-head"><div><h1>Import</h1><p class="lead">Bring in your scrobbles, then fill in tags, covers and release dates.</p></div></div>
       <ol class="steps" aria-label="Setup steps" style="list-style:none;padding:0">${steps.map(([label, done], i) => html`<li class="step ${done ? "done" : i === current ? "current" : ""}">
         <span class="n">${done ? icon("check", 14) : i + 1}</span>${label}${done ? html`<span class="sr-only"> (done)</span>` : ""}</li>`)}</ol>
@@ -1245,7 +1278,7 @@
     [/^\/import$/, importView],
     [/^\/cleanup$/, cleanupView],
   ];
-  let routeSeq = 0, firstRoute = true, lastPath = null;
+  let firstRoute = true, lastPath = null;
   // A selector that finds "the same control" again after a view re-renders.
   function focusKey(el) {
     if (!el || !view.contains(el)) return null;
@@ -1274,11 +1307,16 @@
       if (match) {
         Charts.cleanup();
         const m = match[0].exec(path);
+        rendering = my;
+        // has anything changed on the server (an import, a fetch, the updater) since we cached?
+        try { noteVersion(await fetch("/api/version")); } catch { /* offline: keep the cache */ }
+        if (my !== routeSeq) return;
         await match[1](m[1] ?? params, params);
       } else if (my === routeSeq) {
         mount(view, html`<div class="page-head"><div><h1>Not found</h1><p class="lead"><a href="#/">Back to the overview</a></p></div></div>`);
       }
     } catch (err) {
+      if (err instanceof Stale) return; // a newer page took over
       if (my === routeSeq) mount(view, html`<div class="page-head"><div><h1>Something went wrong</h1><p class="lead">Couldn't load this view: ${err.message}</p></div></div>`);
       console.error(err);
     } finally {

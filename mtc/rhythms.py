@@ -33,20 +33,17 @@ _SEASON_OF = {m: name for name, months in SEASONS.items() for m in months}
 _cache: dict = {}
 
 
-def _signature(conn) -> tuple:
-    """Changes after an import, rebuild, tag fetch or merge."""
-    return (db.get_meta(conn, "derived_at"),
-            *conn.execute("SELECT MAX(tags_fetched_at), (SELECT COUNT(*) FROM artist_tags),"
-                          " (SELECT COUNT(*) FROM scrobbles) FROM artist_info").fetchone())
-
-
-def _cached(conn, key: tuple, compute):
-    sig = _signature(conn)
-    hit = _cache.get(key)
+def _cached(conn, key: tuple, compute, *, tags: bool = True):
+    """Memoise per database file. Scrobble-only results (tags=False) survive a running tag
+    fetch; tag-dependent ones are recomputed when either version changes."""
+    scrobbles, tag_version = db.versions(conn)
+    sig = (scrobbles, tag_version if tags else None)
+    full_key = (conn.execute("PRAGMA database_list").fetchone()[2], *key)
+    hit = _cache.get(full_key)
     if hit and hit[0] == sig:
         return hit[1]
     value = compute()
-    _cache[key] = (sig, value)
+    _cache[full_key] = (sig, value)
     return value
 
 
@@ -55,7 +52,7 @@ def _cached(conn, key: tuple, compute):
 
 def _counts(conn) -> dict[str, Counter]:
     """Plays per (artist, year, bucket) for every dimension, from one pass over the scrobbles."""
-    return _cached(conn, ("counts",), lambda: _collect(conn))
+    return _cached(conn, ("counts",), lambda: _collect(conn), tags=False)
 
 
 def _collect(conn) -> dict[str, Counter]:
@@ -202,7 +199,7 @@ def _season_artists(conn, season: str, limit: int = 5) -> list[dict]:
         shares = {a: [(a, 1.0)] for (a,) in conn.execute("SELECT artist_id FROM artist_stats WHERE plays >= 30")}
         obs, cov, _, _ = _spread(conn, "season", shares)
         return _lift(obs, cov)
-    lifts = _cached(conn, ("artist_seasons",), compute).get(season, {})
+    lifts = _cached(conn, ("artist_seasons",), compute, tags=False).get(season, {})
     best = sorted(((k, x) for k, x in lifts.items() if x["observed"] >= 30 and x["lift"] >= 1.3
                    and x["years"] and x["up"] * 2 >= x["years"]), key=lambda kx: -kx[1]["lift"])[:limit]
     names = dict(conn.execute(
@@ -288,7 +285,7 @@ def _day_diff(a: float, b: float) -> float:
 
 def seasonal_artists(conn: sqlite3.Connection, today: date | None = None, limit: int = 20) -> dict:
     """Artists that come back around the same time every year, and which of them are due."""
-    found = _cached(conn, ("seasonal_artists",), lambda: _seasonal(conn))
+    found = _cached(conn, ("seasonal_artists",), lambda: _seasonal(conn), tags=False)
     if today is None:
         last = conn.execute("SELECT MAX(lday) FROM scrobbles").fetchone()[0]
         today = date.fromisoformat(last) if last else date.today()

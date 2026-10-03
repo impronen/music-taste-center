@@ -31,6 +31,23 @@ def migrate(conn: sqlite3.Connection) -> None:
         conn.executescript(f"BEGIN;\n{sql}\nPRAGMA user_version = {number:d};\nCOMMIT;")
 
 
+# Version counters for caches: "scrobbles" changes with imports, rebuilds and merges; "tags"
+# with every metadata write (tag fetch, not-found lookups, merges). Bump inside the writing
+# transaction so readers never see new data with an old version.
+VERSION_KEYS = ("scrobbles_version", "tags_version")
+
+
+def bump(conn: sqlite3.Connection, *keys: str) -> None:
+    for key in keys:
+        conn.execute("INSERT INTO meta(key, value) VALUES (?, '1')"
+                     " ON CONFLICT(key) DO UPDATE SET value = CAST(value AS INTEGER) + 1", (key,))
+
+
+def versions(conn: sqlite3.Connection) -> tuple[int, int]:
+    v = dict(conn.execute("SELECT key, value FROM meta WHERE key IN (?, ?)", VERSION_KEYS))
+    return tuple(int(v.get(k) or 0) for k in VERSION_KEYS)
+
+
 def get_meta(conn: sqlite3.Connection, key: str) -> str | None:
     row = conn.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
     return row[0] if row else None

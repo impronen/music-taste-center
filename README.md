@@ -136,7 +136,7 @@ Your username and API key are saved under **Import → last.fm account**, or wit
 2. page `user.getrecenttracks` with `from=<that ts>` (skip the `nowplaying` track, which has no date)
 3. pass the results to `ingest_records`, then call `derive.rebuild(conn)`
 
-Duplicates are ignored, so overlapping windows are harmless. The MBIDs from the API are stored, which will help with release tracking later.
+Duplicates are ignored, so overlapping windows are harmless. `ingest_records` reads every record before it takes the database write lock, so a generator that pages the API is fine; run the updater in a background thread (like `mtc/jobs.py`) so the server keeps answering. Open pages notice the new scrobbles on the next page change (the `X-Data-Version` header). The MBIDs from the API are stored, which will help with release tracking later.
 
 ## Configuration
 

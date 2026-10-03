@@ -15,6 +15,7 @@ def rebuild(conn: sqlite3.Connection) -> dict:
         n_sessions = _sessions_and_stats(conn)
         n_links = _links(conn)
         db.set_meta(conn, "derived_at", str(int(time.time())))
+        db.bump(conn, "scrobbles_version")
     return {"sessions": n_sessions, "links": n_links, "seconds": round(time.perf_counter() - started, 2)}
 
 

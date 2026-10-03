@@ -78,7 +78,7 @@ def overview(conn: sqlite3.Connection) -> dict:
         "empty": False,
         "plays": total["plays"], "artists": total["artists"], "tracks": total["tracks"], "albums": total["albums"],
         "listening_days": total["days"], "calendar_days": calendar_days,
-        "first_ts": lo, "last_ts": hi,
+        "first_ts": lo, "last_ts": hi, "first_day": days[0], "last_day": days[-1],
         "per_day": total["plays"] / calendar_days,
         "per_listening_day": total["plays"] / total["days"],
         "longest_streak": longest, "longest_streak_end": longest_end,
@@ -100,7 +100,7 @@ def timeline(conn: sqlite3.Connection) -> list[dict]:
         for r in conn.execute(
             "SELECT substr(s.lday, 1, 7) AS m, COUNT(*),"
             " SUM(CASE WHEN st.prehistory = 0 AND s.ts - st.first_ts < 365 * 86400 THEN 1 ELSE 0 END)"
-            " FROM scrobbles s JOIN artist_stats st ON st.artist_id = s.artist_id GROUP BY m"
+            " FROM scrobbles s LEFT JOIN artist_stats st ON st.artist_id = s.artist_id GROUP BY m"
         )
     }
     new = dict(
@@ -512,7 +512,8 @@ def eras(conn: sqlite3.Connection) -> list[dict]:
         c = by_year[y]
         year_total = sum(c.values())
         floor = max(10, year_total * 0.005)
-        lift = {a: (n / year_total) / (alltime[a] / total) for a, n in c.items() if n >= floor}
+        # artists without stats yet (imported, not rebuilt) can't have a lift
+        lift = {a: (n / year_total) / (alltime[a] / total) for a, n in c.items() if n >= floor and alltime.get(a)}
         signature = max(lift, key=lambda a: (lift[a], c[a]), default=None)
         new = [a for a in c if first_year.get(a) == y]
         best_new = max(new, key=lambda a: c[a], default=None)
