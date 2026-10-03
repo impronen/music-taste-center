@@ -1,4 +1,5 @@
 """HTTP layer: JSON endpoints under /api and the single-page UI from static/."""
+import logging
 import sqlite3
 from collections.abc import Callable, Iterator
 from contextlib import asynccontextmanager, closing
@@ -11,7 +12,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 
-from . import config, db, derive, enrich, fsutil, ingest, insights, jobs, maintenance, rhythms, settings
+from . import config, db, derive, enrich, fsutil, ingest, insights, jobs, maintenance, rhythms, settings, updater
 from .webapi import Fatal, NotFound
 
 MAX_UPLOAD_BYTES = 300 * 1024 * 1024
@@ -48,19 +49,29 @@ class UsernameRequest(BaseModel):
 
 
 def create_app(db_path: str | Path | None = None, *, lastfm_factory: Callable | None = None,
-               musicbrainz_factory: Callable | None = None) -> FastAPI:
-    """The factories replace the real last.fm / MusicBrainz clients (tests pass fakes)."""
+               musicbrainz_factory: Callable | None = None, auto_update: bool = False) -> FastAPI:
+    """The factories replace the real last.fm / MusicBrainz clients (tests pass fakes).
+    `auto_update` pulls new scrobbles from last.fm at startup, gated to 3 runs a day (updater.py);
+    it is off by default so tests and tools never reach the network, and `serve` turns it on."""
     path = Path(db_path or config.DB_PATH)
     db.connect(path).close()  # apply migrations at startup
     job = jobs.EnrichJob(path, lastfm_factory=lastfm_factory, musicbrainz_factory=musicbrainz_factory)
+    auto = updater.AutoUpdater(path, lastfm_factory=lastfm_factory)
 
     @asynccontextmanager
     async def lifespan(_app):
+        if auto_update:
+            try:  # the updater is optional: a bad settings file must not stop the server starting
+                await run_in_threadpool(auto.start_if_due)
+            except Exception:
+                logging.getLogger("uvicorn.error").exception("couldn't start the last.fm updater")
         yield
+        await run_in_threadpool(auto.shutdown)
         job.shutdown()  # finish the current item, then stop
 
     app = FastAPI(title="Music Taste Center", docs_url="/api/docs", openapi_url="/api/openapi.json", lifespan=lifespan)
     app.state.enrich_job = job
+    app.state.updater = auto
 
     def conn() -> Iterator[sqlite3.Connection]:
         c = db.connect(path)
@@ -227,6 +238,11 @@ def create_app(db_path: str | Path | None = None, *, lastfm_factory: Callable | 
             return {"works": None, "error": f"couldn't reach last.fm: {exc}"}
         settings.mark_key_works(key)
         return {"works": True}
+
+    @app.get("/api/updater")
+    def updater_status(c=Conn):
+        """When the startup scrobble update last ran, how it went, and when it may run next."""
+        return {**updater.status(c), "running": auto.running, "skipped": auto.skipped}
 
     @app.get("/api/settings")
     def get_settings():

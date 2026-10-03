@@ -1,9 +1,10 @@
-"""CLI: python -m mtc [serve|import|rebuild|enrich|set-key|set-user|merge-artist|duplicates|stats]."""
+"""CLI: python -m mtc [serve|import|rebuild|enrich|update|set-key|set-user|merge-artist|duplicates|stats]."""
 import argparse
 import json
+import os
 import sys
 
-from . import config, db, derive, enrich, ingest, insights, maintenance, settings
+from . import config, db, derive, enrich, ingest, insights, maintenance, settings, updater
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -14,6 +15,7 @@ def main(argv: list[str] | None = None) -> int:
     s = sub.add_parser("serve", help="run the web UI (default)")
     s.add_argument("--host", default="127.0.0.1")
     s.add_argument("--port", type=int, default=8765)
+    s.add_argument("--no-update", action="store_true", help="don't pull new scrobbles from last.fm at startup")
 
     i = sub.add_parser("import", help="import one or more lastfm-to-csv exports")
     i.add_argument("files", nargs="+")
@@ -27,6 +29,10 @@ def main(argv: list[str] | None = None) -> int:
     e.add_argument("--refresh-days", type=float, default=config.METADATA_TTL_DAYS,
                    help=f"refetch items older than this (default {config.METADATA_TTL_DAYS})")
     e.add_argument("--status", action="store_true", help="only print coverage")
+
+    up = sub.add_parser("update", help="pull new scrobbles from last.fm (at most 3 runs per 24 hours)")
+    up.add_argument("--force", action="store_true", help="ignore the daily limit")
+    up.add_argument("--status", action="store_true", help="only print when it last ran and may run next")
 
     k = sub.add_parser("set-key", help="store your last.fm API key in data/settings.json")
     k.add_argument("api_key")
@@ -46,7 +52,8 @@ def main(argv: list[str] | None = None) -> int:
 
         from .api import create_app
 
-        uvicorn.run(create_app(args.db), host=getattr(args, "host", "127.0.0.1"), port=getattr(args, "port", 8765))
+        auto = not getattr(args, "no_update", False) and os.environ.get("MTC_AUTO_UPDATE", "1") != "0"
+        uvicorn.run(create_app(args.db, auto_update=auto), host=getattr(args, "host", "127.0.0.1"), port=getattr(args, "port", 8765))
         return 0
 
     conn = db.connect(args.db)
@@ -72,6 +79,20 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"Stopped: {exc}")
                 return 1
         print(json.dumps(enrich.status(conn), indent=2))
+    elif cmd == "update":
+        if not args.status:
+            user = settings.lastfm_username()
+            if not user or not settings.lastfm_api_key():
+                print("Needs both: python -m mtc set-user NAME and python -m mtc set-key KEY")
+                return 1
+            from .lastfm import LastFm
+
+            r = updater.run_once(conn, LastFm(settings.lastfm_api_key(), min_interval=config.LASTFM_MIN_INTERVAL_S),
+                                 user, force=args.force)
+            print(json.dumps(r))
+            if r["state"] == "failed":
+                return 1
+        print(json.dumps(updater.status(conn), indent=2))
     elif cmd == "set-key":
         settings.update(lastfm_api_key=args.api_key.strip())
         print(f"Saved to {config.SETTINGS_PATH}")

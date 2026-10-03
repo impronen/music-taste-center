@@ -6,6 +6,7 @@ Quirks handled here:
 - numbers are strings; album.getInfo has no release date (despite the docs) - those come
   from MusicBrainz, see musicbrainz.py.
 """
+from .ingest import Scrobble, clean
 from .webapi import ApiError, Fatal, JsonApi, NotFound, Transient
 
 # https://www.last.fm/api/errorcodes
@@ -109,3 +110,25 @@ class LastFm(JsonApi):
 
     def album_tags(self, artist: str, album: str) -> list[tuple[str, int]]:
         return tag_list(self.call("album.getTopTags", artist=artist, album=album).get("toptags"))
+
+    def recent_tracks_page(self, user: str, since: int | None, page: int, limit: int = 200) -> tuple[list[Scrobble], int]:
+        """One page of user.getRecentTracks, newest first, after `since` (unix seconds) when given.
+        Returns (scrobbles, total pages). The "now playing" entry has no date and is left out."""
+        params = {"user": user, "limit": str(limit), "page": str(page)}
+        if since:
+            params["from"] = str(since)
+        rt = self.call("user.getRecentTracks", **params).get("recenttracks")
+        if not isinstance(rt, dict):  # not an empty page: an odd answer must not look like "nothing new"
+            raise ApiError("last.fm answered without a recenttracks block")
+        out = []
+        for t in as_list(rt.get("track")):
+            ts = to_int((t.get("date") or {}).get("uts")) if isinstance(t, dict) else None
+            artist = clean((t.get("artist") or {}).get("#text") or (t.get("artist") or {}).get("name")) if ts else ""
+            title = clean(t.get("name")) if ts else ""
+            if not (ts and artist and title):
+                continue
+            out.append(Scrobble(
+                artist=artist, track=title, ts=ts, album=clean((t.get("album") or {}).get("#text")),
+                artist_mbid=(t.get("artist") or {}).get("mbid") or None, track_mbid=t.get("mbid") or None,
+                album_mbid=(t.get("album") or {}).get("mbid") or None))
+        return out, to_int((rt.get("@attr") or {}).get("totalPages")) or 0
