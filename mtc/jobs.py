@@ -96,6 +96,7 @@ class EnrichJob:
 
     def _run(self, limits: dict) -> None:
         final, error = "done", None
+        limits_key = settings.lastfm_api_key()
         conn = db.connect(self.db_path)
         try:
             summary = enrich.run(
@@ -104,6 +105,8 @@ class EnrichJob:
                 musicbrainz=self._musicbrainz_factory() if self._musicbrainz_factory else None,
                 **limits, log=lambda _: None, progress=self._progress, stop=self._stop)
             final = "stopped" if summary.get("stopped") else "done"
+            if any(summary.get(ph, {}).get("ok") for ph in ("artists", "albums")):
+                settings.mark_key_works(limits_key)  # the key this run used works (not a newer one)
         except Fatal as exc:
             final, error = "failed", str(exc)
         except Exception as exc:  # keep the UI informed instead of dying silently

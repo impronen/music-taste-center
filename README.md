@@ -153,6 +153,15 @@ Duplicates are ignored, so overlapping windows are harmless. The MBIDs from the 
 TZ=Europe/Helsinki .venv/bin/python -m unittest discover -s tests -t .
 ```
 
-## Colours
+## Design
 
-The UI uses the [Friends onThe Web](https://www.colourlovers.com/palette/1499441/Friends-onThe-Web-w) palette. Teal (#149095) carries data, orange (#E04807) is the brand highlight, and lime → green → deep green forms the heat ramp. Cluster colours extend the palette with a few extra hues. Their order is checked for colour-blind separation between neighbouring colours in both themes. Only the first three cluster colours stay distinct when every pair is compared, so the graph also lets you click a cluster to highlight it.
+The UI uses the "Organic" design system: a cream background, terracotta (#C67139) for data and primary actions, sage (#7A8A5E) for discovery, time and "more than usual", with Caprasimo headings over Figtree text. Both fonts are self-hosted in `static/fonts/` (SIL Open Font License, see the `OFL-*.txt` files there), so the app loads nothing from the internet at runtime.
+
+- **One theme definition.** Every colour is a token on `:root`, defined once for light and dark with `light-dark()`. The ◐ button overrides the system setting.
+- **Data colours are validated.** The cluster colours (terracotta, blue, sage, plum, ochre) and the lift scale (terracotta = less, sand = as usual, sage = more) keep the design's hues. Their lightness and chroma were adjusted until they passed the dataviz palette validator in both themes: colour-blind separation between neighbouring clusters, and visible steps that clear the background. The graph also dims every cluster except the selected one, so it doesn't rely on colour alone.
+- **Accessible by default.**
+  - Charts are focusable: arrow keys read values, and Enter opens the day or month.
+  - Sortable columns are buttons with `aria-sort`.
+  - Toggles expose `aria-pressed`.
+  - Focus moves to the page heading after navigation.
+  - Muted text keeps at least 4.5:1 contrast.

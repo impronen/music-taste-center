@@ -374,7 +374,7 @@ class JobTests(unittest.TestCase):
         from mtc import settings
         from mtc.__main__ import main
         with self.client() as client:
-            self.assertEqual(client.get("/api/settings").json(), {"lastfm_username": None, "has_key": False})
+            self.assertEqual(client.get("/api/settings").json(), {"lastfm_username": None, "has_key": False, "key_works": False})
             for bad in ("", "1abc", "a", "has space", "x" * 16, "ä-user"):
                 self.assertEqual(client.put("/api/settings/username", json={"username": bad}).status_code, 422, bad)
             r = client.put("/api/settings/username", json={"username": " Some_User-1 "})
@@ -390,6 +390,29 @@ class JobTests(unittest.TestCase):
         self.assertEqual(settings.lastfm_username(), "Other")
         with mock.patch.dict(os.environ, {"LASTFM_USER": "FromEnv"}):
             self.assertEqual(settings.lastfm_username(), "FromEnv")
+
+    def test_key_verification(self):
+        with self.client(lastfm_factory=self.lf) as client:
+            self.assertEqual(client.post("/api/metadata/key/verify").json(), {"works": True})
+            client.put("/api/metadata/key", json={"key": "b" * 32})
+            self.assertTrue(client.get("/api/settings").json()["has_key"])
+            self.assertFalse(client.get("/api/settings").json()["key_works"])  # a new key isn't verified yet
+            self.assertEqual(client.post("/api/metadata/key/verify").json(), {"works": True})
+            self.assertTrue(client.get("/api/settings").json()["key_works"])
+        # a fetch that finished with the old key must not vouch for a key saved meanwhile
+        from mtc import settings
+        settings.mark_key_works("b" * 32)
+        settings.update(lastfm_api_key="c" * 32)
+        self.assertFalse(settings.key_works())
+        bad = lambda: LastFm("k", lastfm_transport({("artist.getInfo", "Cher"): (403, {"error": 10, "message": "Invalid API key"})}),
+                             min_interval=0, sleep=lambda s: None)
+        with self.client(lastfm_factory=bad) as client:
+            r = client.post("/api/metadata/key/verify").json()
+            self.assertFalse(r["works"])
+            self.assertFalse(client.get("/api/settings").json()["key_works"])
+        config.SETTINGS_PATH.unlink()  # no key at all (and no real client: tests never touch the network)
+        with self.client() as client:
+            self.assertEqual(client.post("/api/metadata/key/verify").status_code, 400)
 
     def test_cross_origin_writes_are_refused(self):
         with self.client() as client:

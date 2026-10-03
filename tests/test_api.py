@@ -84,6 +84,42 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(c.get("/api/activity", params={"start": "2099-01-01"}).json()["items"], [])
         self.assertEqual(c.get("/api/summary", params={"start": "2024-1-1"}).status_code, 422)
 
+    def test_library_table(self):
+        c = self.client
+        everything = c.get("/api/library").json()
+        self.assertEqual(everything["total"], c.get("/api/artists", params={"limit": 1}).json()["total"])
+        self.assertEqual(everything["items"][0]["plays"], max(a["plays"] for a in everything["items"]))
+        end = c.get("/api/summary").json()["end"]
+        start = (date.fromisoformat(end) - timedelta(days=89)).isoformat()
+        for kind in ("artist", "track", "album"):
+            r = c.get("/api/library", params={"kind": kind, "start": start, "end": end, "limit": 500}).json()
+            top = c.get(f"/api/top/{kind}", params={"start": start, "end": end, "limit": 500}).json()
+            self.assertEqual((r["total"], sum(x["plays"] for x in r["items"])), (len(top), sum(x["plays"] for x in top)), kind)
+        # filtering keeps working for any period; tracks also match their artist's name
+        q = everything["items"][0]["name"][:4]
+        filtered = c.get("/api/library", params={"kind": "track", "start": start, "end": end, "q": q}).json()
+        self.assertTrue(filtered["total"] and all(q.casefold() in (t["name"] + t["artist"]).casefold() for t in filtered["items"]))
+        names = [a["name"] for a in c.get("/api/library", params={"sort": "name", "limit": 500}).json()["items"]]
+        self.assertEqual(names, sorted(names, key=str.casefold))
+        page2 = c.get("/api/library", params={"limit": 5, "offset": 5}).json()["items"]
+        self.assertEqual([a["id"] for a in page2], [a["id"] for a in everything["items"][5:10]])
+        # all time is served from artist_stats; it must agree with aggregating the scrobbles
+        lo = c.get("/api/summary").json()["start"]
+        fast = c.get("/api/library", params={"limit": 500}).json()["items"]
+        slow = c.get("/api/library", params={"start": lo, "end": end, "limit": 500}).json()["items"]
+        self.assertEqual({a["id"]: (a["plays"], a["tracks"]) for a in fast}, {a["id"]: (a["plays"], a["tracks"]) for a in slow})
+        # one artist exactly (not a name match), and the artist's name comes back for the chip
+        a = everything["items"][0]
+        one = c.get("/api/library", params={"kind": "track", "artist": a["id"], "limit": 500}).json()
+        self.assertEqual(one["artist"]["name"], a["name"])
+        self.assertTrue(one["total"] and all(t["artist_id"] == a["id"] for t in one["items"]))
+        self.assertEqual(sum(t["plays"] for t in one["items"]), a["plays"])
+        past = c.get("/api/library", params={"offset": 10_000}).json()
+        self.assertEqual((past["items"], past["total"]), ([], everything["total"]))
+        self.assertEqual(c.get("/api/library", params={"kind": "genre"}).json()["total"], 0)  # no tags here
+        self.assertEqual(c.get("/api/library", params={"kind": "user"}).status_code, 422)
+        self.assertEqual(c.get("/api/library", params={"sort": "plays; DROP"}).status_code, 422)
+
 
 if __name__ == "__main__":
     unittest.main()

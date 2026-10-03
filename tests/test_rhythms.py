@@ -74,7 +74,7 @@ class RhythmTests(unittest.TestCase):
     def test_drift_and_diversity(self):
         for y in self.o["drift"]["years"]:
             self.assertAlmostEqual(sum(y["shares"]) + y["other"], 1, places=2)
-        self.assertEqual(len(self.o["drift"]["series"]), len(set(GENRES.values())) + 1)  # + christmas
+        self.assertEqual(len(self.o["drift"]["series"]), 5)  # one per categorical colour; the rest is "other"
         d = self.o["diversity"]
         self.assertTrue(all(1 <= m["effective"] <= 6 for m in d["monthly"]))
         self.assertEqual(len(d["by_month"]), 12)

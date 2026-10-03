@@ -54,6 +54,19 @@ class MaintenanceTests(unittest.TestCase):
         self.assertNotEqual(lk("The The"), "")
         self.assertEqual(lk("!!!"), "")  # no letters: never grouped
 
+    def test_merge_preview_matches_the_merge(self):
+        good, typo = self.artist_id(GOOD), self.artist_id(TYPO)
+        before = self.conn.total_changes
+        p = maintenance.merge_preview(self.conn, [typo], good)
+        self.assertEqual(self.conn.total_changes, before)  # nothing written
+        self.assertEqual((p["scrobbles"], p["duplicates"], p["tracks_combined"], p["albums_combined"]), (8, 1, 1, 1))
+        r = maintenance.merge_artists(self.conn, typo, good)
+        self.assertEqual((r["scrobbles_moved"], r["duplicates_dropped"]), (p["scrobbles"], p["duplicates"]))
+        with self.assertRaises(ValueError):
+            maintenance.merge_preview(self.conn, [good], good)
+        with self.assertRaises(LookupError):
+            maintenance.merge_preview(self.conn, [999], good)
+
     def test_merge_combines_everything(self):
         good, typo = self.artist_id(GOOD), self.artist_id(TYPO)
         r = maintenance.merge_artists(self.conn, typo, good)
@@ -147,6 +160,8 @@ class MaintenanceTests(unittest.TestCase):
             self.assertEqual(client.post("/api/maintenance/merge", json={"source_ids": sources, "target_id": sources[0]}).status_code, 400)
             self.assertEqual(client.post("/api/maintenance/merge", json={"source_ids": sources, "target_id": g["target_id"]},
                                          headers={"origin": "https://evil.example"}).status_code, 403)
+            preview = client.post("/api/maintenance/merge/preview", json={"source_ids": sources, "target_id": g["target_id"]}).json()
+            self.assertEqual(preview["scrobbles"], 8)
             r = client.post("/api/maintenance/merge", json={"source_ids": sources, "target_id": g["target_id"]}).json()
             self.assertEqual(r["merged"][0]["scrobbles_moved"], 8)
             self.assertEqual(client.get(f"/api/artists/{g['target_id']}").json()["plays"], 20)
