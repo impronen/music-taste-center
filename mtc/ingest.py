@@ -153,6 +153,8 @@ class _Ids:
     def __init__(self, conn: sqlite3.Connection):
         self.conn = conn
         self.artists = {r[0]: r[1] for r in conn.execute("SELECT name_key, id FROM artists")}
+        # name rules from merges (maintenance.merge_artists): a known misspelling maps to its artist
+        self.artists.update((r[0], r[1]) for r in conn.execute("SELECT name_key, artist_id FROM artist_aliases"))
         self.tracks = {(r[0], r[1]): r[2] for r in conn.execute("SELECT artist_id, title_key, id FROM tracks")}
         self.albums = {(r[0], r[1]): r[2] for r in conn.execute("SELECT artist_id, title_key, id FROM albums")}
 

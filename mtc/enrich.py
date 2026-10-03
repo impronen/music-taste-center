@@ -265,6 +265,8 @@ def _phases(conn, phase, lastfm, musicbrainz, artists, albums, releases, refresh
             lastfm = lastfm or LastFm(_key(), min_interval=config.LASTFM_MIN_INTERVAL_S)
 
         def do_artist(it):
+            if _gone(conn, "artists", it[0]):
+                return "merged", it[1]
             status, n = enrich_artist(conn, lastfm, it[0], it[1])
             return status, f"{it[1]}" + (f" · {n} tags" if status == "ok" else "")
         phase("artists", items, 2 * lf_interval, do_artist)
@@ -274,6 +276,8 @@ def _phases(conn, phase, lastfm, musicbrainz, artists, albums, releases, refresh
             lastfm = lastfm or LastFm(_key(), min_interval=config.LASTFM_MIN_INTERVAL_S)
 
         def do_album(it):
+            if _gone(conn, "albums", it[0]):
+                return "merged", f"{it[1]} – {it[2]}"
             status, n = enrich_album(conn, lastfm, it[0], it[1], it[2])
             return status, f"{it[1]} – {it[2]}" + (f" · {n} tags" if status == "ok" else "")
         phase("albums", items, 2 * lf_interval, do_album)
@@ -283,10 +287,17 @@ def _phases(conn, phase, lastfm, musicbrainz, artists, albums, releases, refresh
             musicbrainz = musicbrainz or MusicBrainz(min_interval=config.MUSICBRAINZ_MIN_INTERVAL_S)
 
         def do_release(it):
+            if _gone(conn, "albums", it[0]):
+                return "merged", f"{it[1]} – {it[2]}"
             status = enrich_release(conn, musicbrainz, *it)
             date = conn.execute("SELECT release_date FROM album_info WHERE album_id = ?", (it[0],)).fetchone()[0]
             return status, f"{it[1]} – {it[2]}" + (f" · {date}" if date else "")
         phase("releases", items, 1.5 * config.MUSICBRAINZ_MIN_INTERVAL_S, do_release)
+
+
+def _gone(conn, table: str, item_id: int) -> bool:
+    """True when the item was merged away (maintenance) after the work list was made."""
+    return conn.execute(f"SELECT 1 FROM {table} WHERE id = ?", (item_id,)).fetchone() is None
 
 
 def _key() -> str:

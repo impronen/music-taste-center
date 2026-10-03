@@ -37,6 +37,7 @@ MTC_DB=/tmp/demo.db .venv/bin/python app.py
 | **Artist** | Plays per month, top tracks and albums, *how you discovered them* (the artist you were playing right before), who they *led you to*, artists *listened alongside*, and time of day |
 | **Connections** | Force graph of your top artists, linked by co-listening, with taste clusters found automatically |
 | **Eras** | Per year: top artists, the *signature* artist (most over-represented compared with all time), and the biggest new discovery |
+| **Cleanup** | Merge artists that are spelled in more than one way, with suggested duplicates and name rules that fix future imports |
 | **Insights** | Rediscover (recommendations from your own past), on the rise, forgotten favourites, obsessions, staying power, gateways, binges, one-track artists, deep dives |
 
 ### How the connections work
@@ -61,6 +62,7 @@ mtc/
   musicbrainz.py MusicBrainz client (release-group dates)
   webapi.py      shared throttled HTTP client with retries; transport injectable for tests
   tags.py        tag normalization and classification
+  maintenance.py artist merges, name rules (artist_aliases) and duplicate suggestions
   insights.py    all read queries
   api.py         FastAPI JSON endpoints (/api/docs) + static UI
   migrations/    numbered SQL migrations (PRAGMA user_version)
@@ -95,6 +97,20 @@ The same from a terminal:
 - **Genre profile.** Each artist's plays are split across its top 5 genre tags in proportion to their weights. The result appears under Library → Genres, on per-genre pages, and in Eras.
 - **Images.** Album covers come from last.fm and are loaded from its CDN. last.fm no longer serves artist photos (only a placeholder), so an artist page shows the cover of your most-played album.
 - **What leaves your machine.** Only artist and album names, sent to last.fm and MusicBrainz, plus the cover image requests. last.fm's terms allow non-commercial use and at most 100 MB of cached data; this stores a few kB per artist.
+
+## Cleaning up duplicate artists
+
+last.fm data has spelling variants of the same artist ("Sunn 0)))" with a zero vs "Sunn O)))"). On the **Cleanup** page, or via **Merge…** on an artist page, merge the wrong spelling into the right one:
+
+- **Everything moves.** All scrobbles go to the artist you keep. Tracks and albums with the same (case-insensitive) title are combined, and a play scrobbled under both spellings at the same minute is kept once. Derived tables are rebuilt.
+- **A name rule stays.** Future imports (CSV or API) of the merged spelling go straight to the kept artist, and re-importing an old export doesn't bring the duplicate back. Rules follow chained merges. You can also add a rule for a spelling you haven't imported yet. Removing a rule doesn't split artists that were already merged.
+- **Suggestions.** Artists whose names match when accents, punctuation, 0/o, `&`/"and" and a leading "the" are ignored, or that last.fm autocorrects to the same name (after a tag fetch). It suggests keeping last.fm's spelling, otherwise the most played one. **Not the same** hides a group.
+- **Merges can't be undone**, so the button asks for a second click.
+
+```sh
+.venv/bin/python -m mtc duplicates                         # list suggestions (* = suggested keeper)
+.venv/bin/python -m mtc merge-artist "Sunn 0)))" "Sunn O)))"   # merge SOURCE into TARGET
+```
 
 ## Adding a live updater (last.fm API)
 

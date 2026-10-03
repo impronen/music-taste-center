@@ -1,9 +1,9 @@
-"""CLI: python -m mtc [serve|import|rebuild|enrich|set-key|set-user|stats]."""
+"""CLI: python -m mtc [serve|import|rebuild|enrich|set-key|set-user|merge-artist|duplicates|stats]."""
 import argparse
 import json
 import sys
 
-from . import config, db, derive, enrich, ingest, insights, settings
+from . import config, db, derive, enrich, ingest, insights, maintenance, settings
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -32,6 +32,10 @@ def main(argv: list[str] | None = None) -> int:
     k.add_argument("api_key")
     u = sub.add_parser("set-user", help="store your last.fm username in data/settings.json")
     u.add_argument("username")
+    m = sub.add_parser("merge-artist", help="merge SOURCE into TARGET and keep a name rule for future imports")
+    m.add_argument("source")
+    m.add_argument("target")
+    sub.add_parser("duplicates", help="list artists that look like spelling variants of each other")
     sub.add_parser("stats", help="print a short overview")
 
     args = p.parse_args(argv)
@@ -77,6 +81,24 @@ def main(argv: list[str] | None = None) -> int:
         except ValueError as exc:
             print(exc)
             return 1
+    elif cmd == "merge-artist":
+        ids = []
+        for name in (args.source, args.target):
+            row = conn.execute("SELECT id FROM artists WHERE name_key = ?", (ingest.key(name),)).fetchone()
+            if row is None:
+                print(f"No artist named {name!r}")
+                return 1
+            ids.append(row[0])
+        try:
+            r = maintenance.merge_artists(conn, *ids)
+        except ValueError as exc:
+            print(exc)
+            return 1
+        print(f"Merged {r['source']} into {r['target']}: {r['scrobbles_moved']} scrobbles moved,"
+              f" {r['duplicates_dropped']} duplicates dropped. Future imports of {r['source']!r} go to {r['target']!r}.")
+    elif cmd == "duplicates":
+        for g in maintenance.duplicate_candidates(conn):
+            print("  ".join(f"{a['name']} ({a['plays']})" + (" *" if a["id"] == g["target_id"] else "") for a in g["artists"]))
     elif cmd == "stats":
         o = insights.overview(conn)
         print(json.dumps({k: v for k, v in o.items() if k != "recent_top"}, indent=2, default=str))

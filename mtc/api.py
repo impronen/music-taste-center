@@ -10,7 +10,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import config, db, derive, enrich, fsutil, ingest, insights, jobs, settings
+from . import config, db, derive, enrich, fsutil, ingest, insights, jobs, maintenance, settings
 from .webapi import Fatal
 
 MAX_UPLOAD_BYTES = 300 * 1024 * 1024
@@ -26,6 +26,20 @@ class FetchRequest(BaseModel):
 
 class KeyRequest(BaseModel):
     key: str = Field(..., pattern=r"^\s*[A-Za-z0-9]{16,64}\s*$")
+
+
+class MergeRequest(BaseModel):
+    source_ids: list[int] = Field(..., min_length=1, max_length=50)
+    target_id: int
+
+
+class AliasRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=500)
+    target_id: int
+
+
+class DismissRequest(BaseModel):
+    key: str = Field(..., min_length=1, max_length=20000)
 
 
 class UsernameRequest(BaseModel):
@@ -163,6 +177,45 @@ def create_app(db_path: str | Path | None = None, *, lastfm_factory: Callable | 
     @app.put("/api/settings/username")
     def save_username(req: UsernameRequest):
         return {"lastfm_username": settings.set_lastfm_username(req.username)}
+
+    @app.get("/api/maintenance/duplicates")
+    def duplicates(c=Conn):
+        return maintenance.duplicate_candidates(c)
+
+    @app.post("/api/maintenance/merge")
+    def merge(req: MergeRequest, c=Conn):
+        """Merge each source artist into the target, then rebuild derived tables once."""
+        if req.target_id in req.source_ids:
+            raise HTTPException(400, "the target can't also be a source")
+        try:
+            results = [maintenance.merge_artists(c, s, req.target_id, rebuild=False) for s in dict.fromkeys(req.source_ids)]
+        except LookupError as exc:
+            raise HTTPException(404, str(exc)) from None
+        finally:
+            derive.rebuild(c)
+        return {"target_id": req.target_id, "merged": results}
+
+    @app.post("/api/maintenance/dismiss")
+    def dismiss(req: DismissRequest, c=Conn):
+        maintenance.dismiss(c, req.key)
+        return {"ok": True}
+
+    @app.get("/api/maintenance/aliases")
+    def alias_list(c=Conn):
+        return maintenance.aliases(c)
+
+    @app.post("/api/maintenance/aliases")
+    def alias_add(req: AliasRequest, c=Conn):
+        try:
+            return maintenance.add_alias(c, req.name, req.target_id)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from None
+        except LookupError as exc:
+            raise HTTPException(404, str(exc)) from None
+
+    @app.delete("/api/maintenance/aliases/{alias_id}")
+    def alias_remove(alias_id: int, c=Conn):
+        return {"removed": found(maintenance.remove_alias(c, alias_id) or None)}
 
     @app.get("/api/imports")
     def import_log(c=Conn):

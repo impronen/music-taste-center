@@ -226,6 +226,7 @@
           title="${a.meta?.image_url ? "" : "Cover of your most-played album"}">` : ""}
         <div><div class="kicker">Artist · #${Fmt.int(a.rank)} all time</div><h1>${a.name}</h1>${tagChips(a.tags)}</div>
         <div class="links">${meta?.listeners ? html`<span class="muted">${Fmt.compact(meta.listeners)} last.fm listeners</span>` : ""}
+          <a href="#/cleanup?merge=${a.id}" title="Merge a duplicate spelling of this artist">Merge…</a>
           <a href="${meta?.url || lastfm}" target="_blank" rel="noopener noreferrer">last.fm ↗</a><a href="${meta?.mbid ? `https://musicbrainz.org/artist/${meta.mbid}` : mb}" target="_blank" rel="noopener noreferrer">MusicBrainz ↗</a></div></div>
       <div class="tiles">
         <div class="tile"><div class="label">Plays</div><div class="value">${Fmt.int(a.plays)}</div><div class="sub">${Fmt.pct(a.share)} of everything</div></div>
@@ -468,6 +469,166 @@
     });
   }
 
+  // ---------- cleanup: duplicate artists and name rules ----------
+  // Artist picker: a search box that resolves to an artist id (stored in data-id).
+  function bindPicker(input, onPick) {
+    const box = input.parentElement.querySelector(".picker-results");
+    let timer, seq = 0;
+    const pick = (id, name) => { input.value = name; input.dataset.id = id; box.hidden = true; onPick?.(id, name); };
+    input.addEventListener("input", () => {
+      delete input.dataset.id;
+      onPick?.(null);
+      clearTimeout(timer);
+      const q = input.value.trim();
+      if (!q) { box.hidden = true; return; }
+      timer = setTimeout(async () => {
+        const my = ++seq;
+        const r = await api("/api/artists?" + qs({ q, limit: 8 }));
+        if (my !== seq) return;
+        mount(box, r.items.length ? html`${r.items.map((a) => html`<button type="button" data-id="${a.id}" data-name="${a.name}">
+          <span>${a.name}</span><span class="muted num">${Fmt.int(a.plays)}</span></button>`)}` : html`<p class="empty">No artist matches</p>`);
+        box.hidden = false;
+      }, 150);
+    });
+    box.addEventListener("click", (e) => { const b = e.target.closest("button"); if (b) pick(Number(b.dataset.id), b.dataset.name); });
+    input.addEventListener("keydown", (e) => { if (e.key === "Escape") box.hidden = true; });
+    input.addEventListener("blur", () => setTimeout(() => { box.hidden = true; }, 150));
+    return pick;
+  }
+  const picker = (id, placeholder) => html`<span class="picker"><input id="${id}" type="search" autocomplete="off" spellcheck="false"
+    placeholder="${placeholder}" aria-label="${placeholder}"><span class="picker-results" hidden></span></span>`;
+
+  // Two-step button for irreversible actions: the first click arms it, the second runs.
+  function armed(button, confirmText, run) {
+    const label = button.textContent;
+    let timer;
+    button.addEventListener("click", async () => {
+      if (!button.classList.contains("armed")) {
+        button.classList.add("armed");
+        button.textContent = confirmText();
+        timer = setTimeout(() => { button.classList.remove("armed"); button.textContent = label; }, 6000);
+        return;
+      }
+      clearTimeout(timer);
+      button.disabled = true;
+      try { await run(); } finally { button.disabled = false; button.classList.remove("armed"); button.textContent = label; }
+    });
+  }
+
+  async function cleanupView(params) {
+    const [groups, rules] = await Promise.all([api("/api/maintenance/duplicates", { fresh: true }), api("/api/maintenance/aliases", { fresh: true })]);
+    const preset = params.get("merge") ? await api(`/api/artists/${Number(params.get("merge"))}`).catch(() => null) : null;
+    const PAGE = 25;
+    let shown = PAGE;
+    const groupHtml = (g) => html`<li class="dupe" data-key="${g.key}">
+        <div class="dupe-names">${g.artists.map((a) => html`<label class="dupe-name">
+          <input type="radio" name="t-${g.target_id}" value="${a.id}" ${a.id === g.target_id ? "checked" : ""}>
+          ${link.artist(a.id, a.name)} <span class="muted num">${Fmt.int(a.plays)}</span>
+          ${a.lastfm_name && a.lastfm_name !== a.name ? html`<span class="muted" title="last.fm's corrected name">→ ${a.lastfm_name}</span>` : ""}</label>`)}</div>
+        <div class="dupe-actions"><button type="button" class="primary merge">Merge</button><button type="button" class="ghost dismiss">Not the same</button></div></li>`;
+    mount(view, html`
+      <div class="page-head"><div><h1>Cleanup</h1>
+        <p>Combine artists that are spelled in more than one way. A merge moves every scrobble to the artist you keep and adds a name rule, so future imports of the other spelling land in the right place.</p></div></div>
+      <div id="cleanup-msg"></div>
+      <div class="grid">
+        ${card("Merge artists", html`<form class="merge-form" id="merge-form" autocomplete="off">
+            ${picker("m-source", "Artist to merge away (e.g. the misspelling)")}<span class="muted">into</span>${picker("m-target", "Artist to keep")}
+            <button class="primary" type="submit" id="m-go" disabled>Merge</button></form>`,
+          "Tracks and albums with the same title are combined. Merging can't be undone, but the name rule can be removed.")}
+        ${card(`Possible duplicates${groups.length ? ` · ${Fmt.int(groups.length)}` : ""}`, groups.length
+          ? html`<ol class="dupes" id="dupes">${groups.slice(0, shown).map(groupHtml)}</ol>
+              ${groups.length > shown ? html`<button type="button" id="dupes-more">Show all ${Fmt.int(groups.length)}</button>` : ""}`
+          : html`<p class="empty">No likely duplicates found.</p>`,
+          "Names that match when accents, punctuation, 0/o, & and a leading “the” are ignored, or that last.fm corrects to the same artist. The selected one is kept.")}
+        ${card("Name rules", html`${rules.length ? html`<div class="table-wrap"><table>
+            <thead><tr><th>Spelling</th><th>Becomes</th><th class="num">Scrobbles merged</th><th>Added</th><th></th></tr></thead>
+            <tbody>${rules.map((r) => html`<tr><td>${r.name}</td><td>${link.artist(r.artist_id, r.artist)}</td><td class="num">${Fmt.int(r.scrobbles)}</td>
+              <td class="muted">${Fmt.date(r.created_at)}</td><td class="num"><button type="button" class="ghost rule-remove" data-id="${r.id}">Remove</button></td></tr>`)}</tbody></table></div>`
+            : html`<p class="empty">No rules yet. Merging two artists creates one.</p>`}
+            <form class="merge-form" id="rule-form" autocomplete="off">
+              <input id="r-name" type="text" spellcheck="false" placeholder="A spelling not imported yet" aria-label="Spelling" required maxlength="500">
+              <span class="muted">→</span>${picker("r-target", "Artist")}<button type="submit" id="r-go" disabled>Add rule</button></form>`,
+          "Applied whenever scrobbles are imported. Removing a rule doesn't split artists that were already merged.")}
+      </div>`);
+
+    const say = (tpl, err = false) => { // looked up each time: actions re-render the page first
+      const msg = document.getElementById("cleanup-msg");
+      mount(msg, html`<div class="notice ${err ? "err" : ""}">${tpl}</div>`);
+      msg.scrollIntoView({ block: "nearest" });
+    };
+    async function merge(sourceIds, targetId) {
+      const r = await postJson("/api/maintenance/merge", { source_ids: sourceIds, target_id: targetId });
+      cache.clear();
+      const moved = r.merged.reduce((n, m) => n + m.scrobbles_moved, 0);
+      return { r, moved, text: html`Merged ${r.merged.map((m) => m.source).join(", ")} into ${link.artist(r.target_id, r.merged[0].target)}:
+        ${Fmt.int(moved)} scrobbles moved${r.merged.some((m) => m.duplicates_dropped) ? `, ${Fmt.int(r.merged.reduce((n, m) => n + m.duplicates_dropped, 0))} double scrobbles dropped` : ""}.
+        Future imports of ${r.merged.length > 1 ? "those spellings" : "that spelling"} go to the same place.` };
+    }
+
+    // manual merge
+    const src = view.querySelector("#m-source"), dst = view.querySelector("#m-target"), go = view.querySelector("#m-go");
+    const ready = () => { go.disabled = !(src.dataset.id && dst.dataset.id && src.dataset.id !== dst.dataset.id); };
+    const pickSource = bindPicker(src, ready);
+    bindPicker(dst, ready);
+    if (preset) { pickSource(preset.id, preset.name); dst.focus(); }
+    view.querySelector("#merge-form").addEventListener("submit", (e) => e.preventDefault());
+    armed(go, () => `Confirm: keep ${dst.value}`, async () => {
+      try {
+        const { text } = await merge([Number(src.dataset.id)], Number(dst.dataset.id));
+        await cleanupView(new URLSearchParams());
+        say(text);
+      } catch (err) { say(err.message, true); }
+    });
+
+    // suggestions
+    function bindGroups() {
+      view.querySelectorAll(".dupe:not([data-bound])").forEach((li) => {
+        li.dataset.bound = "1";
+        const g = groups.find((x) => x.key === li.dataset.key);
+        const target = () => Number(li.querySelector("input:checked").value);
+        armed(li.querySelector(".merge"), () => `Keep ${g.artists.find((a) => a.id === target()).name}?`, async () => {
+          try {
+            const { text } = await merge(g.artists.map((a) => a.id).filter((id) => id !== target()), target());
+            await cleanupView(new URLSearchParams()); // refreshes the counts and the rules list
+            say(text);
+          } catch (err) { say(err.message, true); }
+        });
+        li.querySelector(".dismiss").addEventListener("click", async () => {
+          try { await postJson("/api/maintenance/dismiss", { key: g.key }); li.remove(); } catch (err) { say(err.message, true); }
+        });
+      });
+    }
+    bindGroups();
+    view.querySelector("#dupes-more")?.addEventListener("click", (e) => {
+      view.querySelector("#dupes").insertAdjacentHTML("beforeend", html`${groups.slice(shown).map(groupHtml)}`.s);
+      shown = groups.length;
+      e.target.remove();
+      bindGroups();
+    });
+
+    // rules
+    view.querySelectorAll(".rule-remove").forEach((b) => armed(b, () => "Remove?", async () => {
+      try {
+        const res = await fetch(`/api/maintenance/aliases/${b.dataset.id}`, { method: "DELETE" });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        await cleanupView(new URLSearchParams());
+      } catch (err) { say(err.message, true); }
+    }));
+    const rName = view.querySelector("#r-name"), rTarget = view.querySelector("#r-target"), rGo = view.querySelector("#r-go");
+    const rReady = () => { rGo.disabled = !(rName.value.trim() && rTarget.dataset.id); };
+    rName.addEventListener("input", rReady);
+    bindPicker(rTarget, rReady);
+    view.querySelector("#rule-form").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      try {
+        const r = await postJson("/api/maintenance/aliases", { name: rName.value, target_id: Number(rTarget.dataset.id) });
+        cache.clear();
+        await cleanupView(new URLSearchParams());
+        say(r.scrobbles_moved ? html`That spelling was already imported, so it was merged: ${Fmt.int(r.scrobbles_moved)} scrobbles moved.` : html`Rule added.`);
+      } catch (err) { say(err.message, true); }
+    });
+  }
+
   // ---------- metadata fetch (background job on the server) ----------
   const PHASE_LABEL = { artists: "Artist tags", albums: "Album tags & covers", releases: "Release dates (MusicBrainz)" };
   const duration = (s) => (s < 90 ? `${Math.max(1, Math.round(s))} s` : s < 5400 ? `${Math.round(s / 60)} min` : `${Fmt.dec(s / 3600, 1)} h`);
@@ -570,7 +731,7 @@
         <button class="primary" id="job-start" type="button" ${md.has_key && waiting ? "" : "disabled"}>Fetch tags &amp; covers</button></div>`;
     }
     mount(el, html`${head}${phases}${active(job) && job.log.length ? html`<ol class="job-log">${job.log.slice().reverse().map((l) =>
-      html`<li><span class="status ${l.status}">${l.status === "ok" ? "✓" : l.status === "not_found" ? "–" : "!"}</span>${l.item}</li>`)}</ol>` : ""}`);
+      html`<li><span class="status ${l.status}">${l.status === "ok" ? "✓" : l.status === "not_found" || l.status === "merged" ? "–" : "!"}</span>${l.item}</li>`)}</ol>` : ""}`);
     el.querySelector("#job-stop")?.addEventListener("click", async () => { renderJob(md, await postJson("/api/metadata/job/stop")); });
     el.querySelector("#job-start")?.addEventListener("click", async (e) => {
       e.target.disabled = true;
@@ -671,6 +832,7 @@
     [/^\/eras$/, erasView],
     [/^\/insights$/, insightsView],
     [/^\/import$/, importView],
+    [/^\/cleanup$/, cleanupView],
   ];
   let routeSeq = 0;
   async function route() {
