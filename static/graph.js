@@ -86,12 +86,12 @@
     let vb = { w: width * fit, h: height * fit };
     vb.x = (minX + maxX) / 2 - vb.w / 2;
     vb.y = (minY + maxY) / 2 - vb.h / 2;
-    // labels keep a constant on-screen size whatever the zoom
+    // labels keep a constant on-screen size whatever the zoom (each label group is scaled by k)
+    let k = vb.w / width;
     const setVB = () => {
       svg.setAttribute("viewBox", `${vb.x} ${vb.y} ${vb.w} ${vb.h}`);
-      const k = vb.w / width;
-      gLabels.style.fontSize = 11 * k + "px";
-      gLabels.style.strokeWidth = 3 * k + "px";
+      k = vb.w / width;
+      if (nodes[0]?.lbl) placeLabels();
     };
     el.append(svg);
     const gEdges = document.createElementNS(NS, "g");
@@ -108,8 +108,10 @@
       gEdges.append(l);
       return l;
     });
-    const labelRank = [...nodes].sort((a, b) => b.plays - a.plays).slice(0, 28).map((n) => n.id);
-    const major = new Set(labelRank);
+    // pill labels: the biggest artist of every cluster first, then the next biggest while they fit
+    const biggestPerCluster = new Map();
+    for (const n of [...nodes].sort((a, b) => b.plays - a.plays)) if (!biggestPerCluster.has(n.cluster)) biggestPerCluster.set(n.cluster, n.id);
+    const labelOrder = [...nodes].sort((a, b) => (biggestPerCluster.get(b.cluster) === b.id) - (biggestPerCluster.get(a.cluster) === a.id) || b.plays - a.plays);
     for (const n of nodes) {
       const c = document.createElementNS(NS, "circle");
       c.setAttribute("class", "node");
@@ -119,12 +121,18 @@
       c.setAttribute("aria-label", `${n.name}, ${n.plays} plays`);
       n.el = c;
       gNodes.append(c);
+      const g = document.createElementNS(NS, "g");
+      g.setAttribute("class", "lbl");
+      const bg = document.createElementNS(NS, "rect");
+      bg.setAttribute("class", "label-bg");
       const t = document.createElementNS(NS, "text");
-      t.setAttribute("class", "label" + (major.has(n.id) ? "" : " minor"));
+      t.setAttribute("class", "label");
       t.setAttribute("text-anchor", "middle");
+      t.setAttribute("font-size", "12");
       t.textContent = n.name;
-      n.label = t;
-      gLabels.append(t);
+      g.append(bg, t);
+      gLabels.append(g);
+      n.lbl = g; n.lblText = t; n.lblBg = bg;
 
       c.addEventListener("pointerenter", (e) => {
         if (dragging) return;
@@ -154,7 +162,30 @@
       }
       for (const n of nodes) {
         n.el.setAttribute("cx", n.x); n.el.setAttribute("cy", n.y);
-        n.label.setAttribute("x", n.x); n.label.setAttribute("y", n.y - n.r - 4);
+      }
+      placeLabels();
+    }
+    // Greedy, collision-free placement in screen units: below the node, else above; the rest stay
+    // hidden until their node or cluster is focused.
+    function placeLabels() {
+      const boxes = [];
+      for (const n of labelOrder) {
+        if (n.tw == null) n.tw = n.lblText.getComputedTextLength();
+        const w = n.tw + 16, h = 22;
+        n.lblBg.setAttribute("x", -w / 2); n.lblBg.setAttribute("y", -h / 2);
+        n.lblBg.setAttribute("width", w); n.lblBg.setAttribute("height", h); n.lblBg.setAttribute("rx", h / 2);
+        n.lblText.setAttribute("y", 4);
+        let spot = null;
+        for (const dy of [n.r / k + 15, -(n.r / k + 15)]) {
+          const cx = (n.x - vb.x) / k, cy = (n.y - vb.y) / k + dy;
+          const box = [cx - w / 2 - 3, cy - h / 2 - 2, cx + w / 2 + 3, cy + h / 2 + 2];
+          if (!boxes.some((b) => box[0] < b[2] && box[2] > b[0] && box[1] < b[3] && box[3] > b[1])) { spot = { dy, box }; break; }
+        }
+        const fits = spot && boxes.length < 14;
+        n.lbl.classList.toggle("minor", !fits);
+        const dy = spot ? spot.dy : n.r / k + 15;
+        if (fits) boxes.push(spot.box);
+        n.lbl.setAttribute("transform", `translate(${n.x} ${n.y + dy * k}) scale(${k})`);
       }
     }
     draw();
@@ -165,7 +196,7 @@
       for (const n of nodes) {
         const on = ids.has(n.id);
         n.el.classList.toggle("on", on);
-        n.label.classList.toggle("on", on);
+        n.lbl.classList.toggle("on", on);
       }
       for (const l of edgeEls) {
         const on = center != null
@@ -175,13 +206,30 @@
       }
     }
     function clearFocus() {
-      if (pinnedCluster != null) return highlightCluster(pinnedCluster);
       el.classList.remove("focus");
     }
+    // A selected cluster stays at full strength; everything else is dimmed to 0.4.
     function highlightCluster(id) {
       pinnedCluster = id;
-      if (id == null) return el.classList.remove("focus");
-      focusNodes(new Set(nodes.filter((n) => n.cluster === id).map((n) => n.id)), null);
+      for (const n of nodes) {
+        const dim = id != null && n.cluster !== id;
+        n.el.classList.toggle("dim", dim);
+        n.lbl.classList.toggle("dim", dim);
+        if (id != null && n.cluster === id && biggestPerCluster.get(id) === n.id) n.lbl.classList.remove("minor");
+      }
+      for (const l of edgeEls) {
+        const s = byId.get(l._e.source), t = byId.get(l._e.target);
+        const inside = id != null && s.cluster === id && t.cluster === id;
+        l.classList.toggle("in-cluster", inside);
+        l.classList.toggle("dim", id != null && !inside);
+      }
+    }
+    function zoom(factor) {
+      const cx = vb.x + vb.w / 2, cy = vb.y + vb.h / 2;
+      const w = Math.min(width * 4, Math.max(width / 6, vb.w * factor));
+      const s = w / vb.w;
+      vb = { x: cx - (cx - vb.x) * s, y: cy - (cy - vb.y) * s, w, h: vb.h * s };
+      setVB();
     }
 
     // ---- drag nodes, pan background, wheel zoom ----
@@ -233,7 +281,7 @@
       setVB();
     }, { passive: false });
 
-    return { highlightCluster };
+    return { highlightCluster, zoomIn: () => zoom(1 / 1.3), zoomOut: () => zoom(1.3) };
   }
 
   window.TasteGraph = { create };

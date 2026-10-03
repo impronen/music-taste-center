@@ -306,6 +306,55 @@ def artists(conn: sqlite3.Connection, q: str = "", sort: str = "plays", limit: i
     return {"total": total, "items": rows}
 
 
+# One table for every kind and period (Library). Sort keys map to SQL per kind; "desc" is the
+# natural direction (most plays, newest first, A–Z for names).
+_LIB_SORTS = {
+    "artist": {"plays": "plays DESC", "name": "a.name_key ASC", "tracks": "tracks DESC", "years": "st.n_years DESC, plays DESC",
+               "first": "st.first_ts ASC", "last": "last_ts DESC"},
+    "track": {"plays": "plays DESC", "name": "t.title_key ASC", "artist": "a.name_key ASC, plays DESC",
+              "first": "first_ts ASC", "last": "last_ts DESC"},
+    "album": {"plays": "plays DESC", "name": "al.title_key ASC", "artist": "a.name_key ASC, plays DESC",
+              "tracks": "tracks DESC", "released": "i.release_date DESC", "last": "last_ts DESC"},
+}
+
+
+def library(conn: sqlite3.Connection, kind: str = "artist", start: str | None = None, end: str | None = None,
+            q: str = "", sort: str = "plays", limit: int = 50, offset: int = 0) -> dict:
+    """Artists, tracks, albums or genres for any period, filtered by name, sorted and paged."""
+    if kind == "genre":
+        g = genres(conn, start, end, limit=500)
+        items = [x for x in g["items"] if not q or q.casefold() in x["name"].casefold()]
+        if sort == "name":
+            items.sort(key=lambda x: x["name"])
+        return {"kind": kind, "total": len(items), "items": items[offset:offset + limit], "coverage": g["coverage"]}
+    if kind not in _LIB_SORTS:
+        raise ValueError(f"unknown kind: {kind}")
+    order = _LIB_SORTS[kind].get(sort, _LIB_SORTS[kind]["plays"])
+    where, args = _range_sql(start, end)
+    name_col = {"artist": "a.name_key", "track": "t.title_key", "album": "al.title_key"}[kind]
+    if q:
+        pat = "%" + _like(q.casefold()) + "%"
+        # tracks and albums also match on the artist's name
+        where += f" AND ({name_col} LIKE ? ESCAPE '\\'" + (" OR a.name_key LIKE ? ESCAPE '\\')" if kind != "artist" else ")")
+        args += [pat] + ([pat] if kind != "artist" else [])
+    if kind == "artist":
+        base = ("SELECT a.id, a.name, COUNT(*) AS plays, COUNT(DISTINCT s.track_id) AS tracks, st.n_years AS years,"
+                " st.first_ts, MAX(s.ts) AS last_ts FROM scrobbles s JOIN artists a ON a.id = s.artist_id"
+                f" JOIN artist_stats st ON st.artist_id = a.id WHERE {where} GROUP BY a.id")
+    elif kind == "track":
+        base = ("SELECT t.id, t.title AS name, a.id AS artist_id, a.name AS artist, COUNT(*) AS plays,"
+                " MIN(s.ts) AS first_ts, MAX(s.ts) AS last_ts FROM scrobbles s JOIN tracks t ON t.id = s.track_id"
+                f" JOIN artists a ON a.id = s.artist_id WHERE {where} GROUP BY t.id")
+    else:
+        base = ("SELECT al.id, al.title AS name, a.id AS artist_id, a.name AS artist, COUNT(*) AS plays,"
+                " COUNT(DISTINCT s.track_id) AS tracks, MAX(s.ts) AS last_ts, i.image_url, i.release_date"
+                " FROM scrobbles s JOIN albums al ON al.id = s.album_id JOIN artists a ON a.id = s.artist_id"
+                f" LEFT JOIN album_info i ON i.album_id = al.id WHERE {where} GROUP BY al.id")
+    total = conn.execute(f"SELECT COUNT(*) FROM ({base})", args).fetchone()[0]
+    items = _rows(conn.execute(f"{base} ORDER BY {order}, 1 LIMIT ? OFFSET ?", (*args, limit, offset)))
+    return {"kind": kind, "total": total, "items": items}
+
+
 def _like(text: str) -> str:
     return text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 

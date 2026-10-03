@@ -11,7 +11,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from . import config, db, derive, enrich, fsutil, ingest, insights, jobs, maintenance, rhythms, settings
-from .webapi import Fatal
+from .webapi import Fatal, NotFound
 
 MAX_UPLOAD_BYTES = 300 * 1024 * 1024
 DATE = r"^\d{4}-\d{2}-\d{2}$"
@@ -106,6 +106,13 @@ def create_app(db_path: str | Path | None = None, *, lastfm_factory: Callable | 
     def artists(q: str = "", sort: str = "plays", limit: int = Query(50, ge=1, le=500), offset: int = Query(0, ge=0), c=Conn):
         return insights.artists(c, q.strip(), sort, limit, offset)
 
+    @app.get("/api/library")
+    def library(kind: str = Query("artist", pattern="^(artist|track|album|genre)$"),
+                start: str | None = Query(None, pattern=DATE), end: str | None = Query(None, pattern=DATE),
+                q: str = Query("", max_length=200), sort: str = Query("plays", pattern="^[a-z]{1,20}$"),
+                limit: int = Query(50, ge=1, le=500), offset: int = Query(0, ge=0), c=Conn):
+        return insights.library(c, kind, start, end, q.strip(), sort, limit, offset)
+
     @app.get("/api/artists/{artist_id}")
     def artist(artist_id: int, c=Conn):
         return found(insights.artist(c, artist_id))
@@ -182,13 +189,35 @@ def create_app(db_path: str | Path | None = None, *, lastfm_factory: Callable | 
     @app.put("/api/metadata/key")
     def save_key(req: KeyRequest):
         """Stores the last.fm API key in data/settings.json. The key is never sent back."""
-        settings.save({**settings.load(), "lastfm_api_key": req.key.strip()})
+        values = {k: v for k, v in settings.load().items() if k != "lastfm_key_ok_at"}
+        settings.save({**values, "lastfm_api_key": req.key.strip()})
         return {"has_key": True}
+
+    @app.post("/api/metadata/key/verify")
+    def verify_key():
+        """One cheap last.fm call with the saved key; remembers success for the "works" chip."""
+        key = settings.lastfm_api_key()
+        if not key and not lastfm_factory:
+            raise HTTPException(400, "no API key saved")
+        from .lastfm import LastFm
+        client = lastfm_factory() if lastfm_factory else LastFm(key, min_interval=config.LASTFM_MIN_INTERVAL_S)
+        try:
+            client.artist_info("Cher")
+        except NotFound:
+            pass  # last.fm answered, so the key is fine
+        except Fatal as exc:
+            settings.save({k: v for k, v in settings.load().items() if k != "lastfm_key_ok_at"})
+            return {"works": False, "error": str(exc)}
+        except Exception as exc:  # network trouble is not the key's fault
+            return {"works": None, "error": f"couldn't reach last.fm: {exc}"}
+        settings.save({**settings.load(), "lastfm_key_ok_at": int(__import__("time").time())})
+        return {"works": True}
 
     @app.get("/api/settings")
     def get_settings():
         """Non-secret settings for the UI. The API key itself is never sent back."""
-        return {"lastfm_username": settings.lastfm_username(), "has_key": bool(settings.lastfm_api_key())}
+        return {"lastfm_username": settings.lastfm_username(), "has_key": bool(settings.lastfm_api_key()),
+                "key_works": bool(settings.load().get("lastfm_key_ok_at")) if settings.lastfm_api_key() else False}
 
     @app.put("/api/settings/username")
     def save_username(req: UsernameRequest):
@@ -210,6 +239,15 @@ def create_app(db_path: str | Path | None = None, *, lastfm_factory: Callable | 
         finally:
             derive.rebuild(c)
         return {"target_id": req.target_id, "merged": results}
+
+    @app.post("/api/maintenance/merge/preview")
+    def merge_preview(req: MergeRequest, c=Conn):
+        try:
+            return maintenance.merge_preview(c, req.source_ids, req.target_id)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from None
+        except LookupError as exc:
+            raise HTTPException(404, str(exc)) from None
 
     @app.post("/api/maintenance/dismiss")
     def dismiss(req: DismissRequest, c=Conn):

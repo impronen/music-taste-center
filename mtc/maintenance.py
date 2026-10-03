@@ -71,6 +71,36 @@ def merge_artists(conn: sqlite3.Connection, source_id: int, target_id: int, *, r
     return result
 
 
+def merge_preview(conn: sqlite3.Connection, source_ids: list[int], target_id: int) -> dict:
+    """What merge_artists would do, without changing anything (for the confirmation dialog)."""
+    if target_id in source_ids:
+        raise ValueError("the target can't also be a source")
+    target = conn.execute("SELECT name FROM artists WHERE id = ?", (target_id,)).fetchone()
+    if target is None:
+        raise LookupError("artist not found")
+    out = {"target": target[0], "sources": [], "scrobbles": 0, "duplicates": 0, "tracks_combined": 0, "albums_combined": 0}
+    for sid in dict.fromkeys(source_ids):
+        row = conn.execute("SELECT name FROM artists WHERE id = ?", (sid,)).fetchone()
+        if row is None:
+            raise LookupError("artist not found")
+        n = conn.execute("SELECT COUNT(*) FROM scrobbles WHERE artist_id = ?", (sid,)).fetchone()[0]
+        dup = conn.execute(
+            "SELECT COUNT(*) FROM scrobbles s JOIN tracks t ON t.id = s.track_id"
+            " JOIN tracks tt ON tt.artist_id = ? AND tt.title_key = t.title_key"
+            " WHERE s.artist_id = ? AND EXISTS (SELECT 1 FROM scrobbles d WHERE d.track_id = tt.id AND d.ts = s.ts)",
+            (target_id, sid)).fetchone()[0]
+        tracks = conn.execute("SELECT COUNT(*) FROM tracks t WHERE t.artist_id = ? AND EXISTS (SELECT 1 FROM tracks"
+                              " x WHERE x.artist_id = ? AND x.title_key = t.title_key)", (sid, target_id)).fetchone()[0]
+        albums = conn.execute("SELECT COUNT(*) FROM albums al WHERE al.artist_id = ? AND EXISTS (SELECT 1 FROM albums"
+                              " x WHERE x.artist_id = ? AND x.title_key = al.title_key)", (sid, target_id)).fetchone()[0]
+        out["sources"].append({"id": sid, "name": row[0], "scrobbles": n})
+        out["scrobbles"] += n - dup
+        out["duplicates"] += dup
+        out["tracks_combined"] += tracks
+        out["albums_combined"] += albums
+    return out
+
+
 def aliases(conn: sqlite3.Connection) -> list[dict]:
     return [dict(r) for r in conn.execute(
         "SELECT x.id, x.name, x.name_key, x.artist_id, a.name AS artist, x.scrobbles, x.created_at"

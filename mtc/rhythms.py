@@ -210,8 +210,8 @@ def _season_artists(conn, season: str, limit: int = 5) -> list[dict]:
     return [{"id": k, "name": names.get(k), **_cell(x)} for k, x in best]
 
 
-def _drift(observed, covered, keys: list, names: dict, n: int = 8) -> dict:
-    """Per year: share of the top genres (fixed order) and everything else."""
+def _drift(observed, covered, keys: list, names: dict, n: int = 5) -> dict:
+    """Per year: share of the top genres (fixed order, one per categorical colour) and everything else."""
     top = keys[:n]
     years = []
     for year in sorted(observed):

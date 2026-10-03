@@ -1,5 +1,7 @@
-/* Small SVG chart kit: column, line and heatmap charts with hover tooltips.
-   Every label coming from data goes through textContent, never innerHTML. */
+/* Small SVG chart kit (Organic style): pill columns, area lines, a dot listening clock, lift
+   matrices and stacked columns, all with hover tooltips and keyboard access (a chart is one tab
+   stop; arrow keys move between marks, Enter opens a mark's link). Labels coming from data go
+   through textContent, never innerHTML. */
 (function () {
   "use strict";
 
@@ -12,15 +14,22 @@
   const pctFmt = new Intl.NumberFormat("fi-FI", { style: "percent", maximumFractionDigits: 1 });
   const dateFmt = new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short", year: "numeric" });
   const monthFmt = new Intl.DateTimeFormat("en-GB", { month: "short", year: "numeric", timeZone: "UTC" });
+  const timeFmt = new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit" });
   const Fmt = {
     int: (n) => intFmt.format(n ?? 0),
     dec: (n) => dec1.format(n ?? 0),
     pct: (n) => pctFmt.format(n ?? 0),
     date: (ts) => (ts ? dateFmt.format(new Date(ts * 1000)) : "–"),
     day: (iso) => (iso ? dateFmt.format(new Date(iso + "T12:00:00")) : "–"),
+    dayShort: (iso) => (iso ? dateFmt.format(new Date(iso + "T12:00:00")).replace(/ \d{4}$/, "") : "–"),
     month: (ym) => monthFmt.format(new Date(Date.UTC(+ym.slice(0, 4), +ym.slice(5, 7) - 1, 1))),
-    // release dates come as YYYY, YYYY-MM or YYYY-MM-DD
-    release: (d) => (!d ? "–" : d.length === 4 ? d : d.length === 7 ? Fmt.month(d) : Fmt.day(d)),
+    time: (ts) => timeFmt.format(new Date(ts * 1000)),
+    release: (d) => {
+      if (!d) return "–";
+      if (/^\d{4}$/.test(d)) return d;
+      if (/^\d{4}-\d{2}$/.test(d)) return monthFmt.format(new Date(Date.UTC(+d.slice(0, 4), +d.slice(5, 7) - 1, 1)));
+      return dateFmt.format(new Date(d + "T12:00:00"));
+    },
     // explicit thresholds instead of locale compact notation
     compact: (n) => {
       const a = Math.abs(n);
@@ -39,7 +48,7 @@
 
   // ---------- tooltip ----------
   const tip = () => document.getElementById("tooltip");
-  function showTip(evt, rows, title) {
+  function fillTip(rows, title) {
     const el = tip();
     el.replaceChildren();
     if (title) {
@@ -69,23 +78,24 @@
       el.append(row);
     }
     el.hidden = false;
-    moveTip(evt);
+    return el;
   }
-  function moveTip(evt) {
-    const el = tip();
+  function place(el, x, y) {
     const pad = 14;
-    const { innerWidth: w, innerHeight: h } = window;
     const r = el.getBoundingClientRect();
-    let x = evt.clientX + pad;
-    let y = evt.clientY + pad;
-    if (x + r.width > w - 8) x = evt.clientX - r.width - pad;
-    if (y + r.height > h - 8) y = evt.clientY - r.height - pad;
-    el.style.left = Math.max(8, x) + "px";
-    el.style.top = Math.max(8, y) + "px";
+    let px = x + pad, py = y + pad;
+    if (px + r.width > window.innerWidth - 8) px = x - r.width - pad;
+    if (py + r.height > window.innerHeight - 8) py = y - r.height - pad;
+    el.style.left = Math.max(8, px) + "px";
+    el.style.top = Math.max(8, py) + "px";
   }
-  function hideTip() {
-    tip().hidden = true;
+  function showTip(evt, rows, title) { place(fillTip(rows, title), evt.clientX, evt.clientY); }
+  function moveTip(evt) { place(tip(), evt.clientX, evt.clientY); }
+  function showTipAt(node, rows, title) {
+    const b = node.getBoundingClientRect();
+    place(fillTip(rows, title), b.left + b.width / 2, b.top);
   }
+  function hideTip() { tip().hidden = true; }
 
   // ---------- helpers ----------
   function svgEl(tag, attrs, parent) {
@@ -99,21 +109,22 @@
     t.textContent = str;
     return t;
   }
-  function niceTicks(max, count = 4, minStep = 0) {
+  function niceTicks(max, count = 4) {
     if (!(max > 0)) return [0, 1];
-    const raw = Math.max(max / count, minStep);
+    const raw = max / count;
     const mag = Math.pow(10, Math.floor(Math.log10(raw)));
-    let step = [1, 2, 2.5, 5, 10].map((m) => m * mag).find((s) => s >= raw);
-    if (minStep >= 1) step = Math.ceil(step);
+    const step = [1, 2, 2.5, 5, 10].map((m) => m * mag).find((s) => s >= raw);
     const ticks = [];
     for (let v = 0; v <= max + step * 0.001; v += step) ticks.push(v);
     if (ticks[ticks.length - 1] < max) ticks.push(ticks[ticks.length - 1] + step);
     return ticks;
   }
-  // Bar with a 4px rounded data-end and a square baseline.
-  function barPath(x, y, w, h) {
-    const r = Math.min(4, w / 2, h);
-    return `M${x},${y + h}V${y + r}Q${x},${y} ${x + r},${y}H${x + w - r}Q${x + w},${y} ${x + w},${y + r}V${y + h}Z`;
+  // Column with a pill top and a softly rounded foot: border-radius 999px 999px 6px 6px.
+  function pillPath(x, y, w, h, bottom = 6) {
+    const rt = Math.min(w / 2, h);
+    const rb = Math.min(bottom, w / 2, Math.max(0, h - rt));
+    return `M${x},${y + h - rb}V${y + rt}A${rt},${rt} 0 0 1 ${x + rt},${y}H${x + w - rt}A${rt},${rt} 0 0 1 ${x + w},${y + rt}`
+      + `V${y + h - rb}Q${x + w},${y + h} ${x + w - rb},${y + h}H${x + rb}Q${x},${y + h} ${x},${y + h - rb}Z`;
   }
   function responsive(el, draw) {
     let last = 0;
@@ -134,114 +145,158 @@
     observers.clear();
     hideTip();
   }
-  function yAxis(svg, ticks, y, left, right, fmt) {
-    for (const t of ticks) {
-      svgEl("line", { x1: left, x2: right, y1: y(t), y2: y(t), class: t === 0 ? "baseline" : "gridline" }, svg);
-      text(svg, left - 8, y(t) + 4, fmt(t), { "text-anchor": "end" });
-    }
+  function median(vals) {
+    const v = vals.filter((x) => x > 0).sort((a, b) => a - b);
+    return v.length ? v[Math.floor(v.length / 2)] : 0;
   }
-  function leftMargin(ticks, fmt) {
-    return Math.max(...ticks.map((t) => fmt(t).length)) * 6.6 + 14;
+  /* Keyboard access for a whole chart: one tab stop, arrows move, Enter/Space activates.
+     marks: [{ node, tip: () => ({rows, title}), activate? }] */
+  function keyboard(svg, marks, { label, cols } = {}) {
+    if (!marks.length) return;
+    svg.setAttribute("tabindex", "0");
+    svg.setAttribute("role", "group");
+    svg.setAttribute("aria-label", `${label ?? "Chart"}. Use the arrow keys to read values${marks.some((m) => m.activate) ? ", Enter to open" : ""}.`);
+    let i = -1;
+    const show = (k) => {
+      marks[i]?.node.classList.remove("hl");
+      i = Math.max(0, Math.min(marks.length - 1, k));
+      const m = marks[i];
+      m.node.classList.add("hl");
+      const t = m.tip();
+      showTipAt(m.node, t.rows, t.title);
+    };
+    svg.addEventListener("keydown", (e) => {
+      const step = { ArrowRight: 1, ArrowLeft: -1, ArrowDown: cols ?? 1, ArrowUp: -(cols ?? 1) }[e.key];
+      if (step) { e.preventDefault(); show(i < 0 ? 0 : i + step); }
+      else if (e.key === "Home") { e.preventDefault(); show(0); }
+      else if (e.key === "End") { e.preventDefault(); show(marks.length - 1); }
+      else if ((e.key === "Enter" || e.key === " ") && i >= 0 && marks[i].activate) { e.preventDefault(); marks[i].activate(); }
+      else if (e.key === "Escape") hideTip();
+    });
+    svg.addEventListener("blur", () => { marks[i]?.node.classList.remove("hl"); hideTip(); });
   }
-
-  // ---------- column chart ----------
-  /* data: [{...}], opts: { value(d), xLabel(d,i) -> string|null, tip(d) -> {title, rows}, height, onClick(d) } */
-  function columns(el, data, opts) {
-    const height = opts.height ?? 220;
-    const fmt = opts.yFormat ?? Fmt.compact;
-    responsive(el, (width) => {
-      el.replaceChildren();
-      const max = Math.max(0, ...data.map(opts.value));
-      const ticks = niceTicks(max, 4, opts.minStep ?? 1);
-      const top = 8, bottom = 24, right = 4;
-      const left = leftMargin(ticks, fmt);
-      const innerW = width - left - right, innerH = height - top - bottom;
-      const yMax = ticks[ticks.length - 1];
-      const y = (v) => top + innerH - (v / yMax) * innerH;
-      const svg = svgEl("svg", { width, height, viewBox: `0 0 ${width} ${height}`, role: "img", "aria-label": opts.label ?? "" }, el);
-      yAxis(svg, ticks, y, left, width - right, fmt);
-      const band = innerW / Math.max(1, data.length);
-      const bw = Math.max(1, Math.min(24, band - 2));
-      let lastLabelX = -Infinity;
-      data.forEach((d, i) => {
-        const v = opts.value(d);
-        const x0 = left + i * band;
-        const bx = x0 + (band - bw) / 2;
-        const h = Math.max(0, y(0) - y(v));
-        const bar = h > 0 ? svgEl("path", { d: barPath(bx, y(v), bw, h), class: "bar" }, svg) : null;
-        if (bar && opts.color) bar.style.fill = opts.color(d);
-        const hit = svgEl("rect", { x: x0, y: top, width: band, height: innerH, class: "hit" }, svg);
-        hit.addEventListener("pointerenter", (e) => {
-          bar?.classList.add("hl");
-          const t = opts.tip(d);
-          showTip(e, t.rows, t.title);
-        });
-        hit.addEventListener("pointermove", moveTip);
-        hit.addEventListener("pointerleave", () => {
-          bar?.classList.remove("hl");
-          hideTip();
-        });
-        if (opts.onClick) {
-          hit.style.cursor = "pointer";
-          hit.addEventListener("click", () => opts.onClick(d));
-        }
-        const label = opts.xLabel?.(d, i);
-        const cx = x0 + band / 2;
-        if (label != null && cx - lastLabelX >= label.length * 6.6 + 10) {
-          text(svg, cx, height - 6, label, { "text-anchor": "middle" });
-          lastLabelX = cx;
-        }
-      });
+  function hover(node, getTip) {
+    node.addEventListener("pointerenter", (e) => { const t = getTip(); showTip(e, t.rows, t.title); });
+    node.addEventListener("pointermove", moveTip);
+    node.addEventListener("pointerleave", hideTip);
+  }
+  function xLabels(svg, items, y, minGap = 10) {
+    let lastX = -Infinity;
+    items.forEach(({ label, cx }) => {
+      if (label != null && cx - lastX >= label.length * 7 + minGap) {
+        text(svg, cx, y, label, { "text-anchor": "middle" });
+        lastX = cx;
+      }
     });
   }
 
-  // ---------- line chart (single series, crosshair) ----------
+  // ---------- column chart ----------
+  /* opts: { value(d), xLabel(d,i), tip(d) -> {title, rows}, onClick(d), highlight(d) -> bool, height, label, axis }
+     Base bars are pale, bars above the median full accent, the peak (or highlighted) bar darkest. */
+  function columns(el, data, opts) {
+    const height = opts.height ?? 200;
+    responsive(el, (width) => {
+      el.replaceChildren();
+      const vals = data.map(opts.value);
+      const max = Math.max(0, ...vals);
+      const med = median(vals);
+      const peakIdx = data.findIndex((d, i) => (opts.highlight ? opts.highlight(d) : vals[i] === max && max > 0));
+      const top = 8, bottom = 26;
+      let left = 0;
+      let ticks = null;
+      if (opts.axis) {
+        ticks = niceTicks(max);
+        left = Math.max(...ticks.map((t) => Fmt.compact(t).length)) * 7.2 + 14;
+      }
+      const yMax = ticks ? ticks[ticks.length - 1] : max || 1;
+      const innerW = width - left, innerH = height - top - bottom;
+      const y = (v) => top + innerH - (v / yMax) * innerH;
+      const svg = svgEl("svg", { width, height, viewBox: `0 0 ${width} ${height}`, "aria-label": opts.label ?? "" }, el);
+      if (ticks) {
+        for (const t of ticks.slice(1)) {
+          svgEl("line", { x1: left, x2: width, y1: y(t), y2: y(t), class: "gridline" }, svg);
+          text(svg, left - 8, y(t) + 4, Fmt.compact(t), { "text-anchor": "end" });
+        }
+      }
+      const band = innerW / Math.max(1, data.length);
+      const gap = band > 14 ? Math.min(10, band * 0.28) : 1;
+      const bw = Math.max(1, Math.min(34, band - gap));
+      const marks = [];
+      const labels = [];
+      data.forEach((d, i) => {
+        const v = vals[i];
+        const x0 = left + i * band;
+        const bx = x0 + (band - bw) / 2;
+        const h = Math.max(v > 0 ? Math.min(bw, 4) : 0, y(0) - y(v));
+        const cls = i === peakIdx ? "bar peak" : v > med ? "bar up" : "bar";
+        const hit = svgEl("rect", { x: x0, y: top, width: band, height: innerH, class: "hit" + (opts.onClick ? " link" : "") }, svg);
+        const bar = h > 0 ? svgEl("path", { d: pillPath(bx, y(0) - h, bw, h), class: cls }, svg) : svgEl("rect", { x: bx, y: y(0), width: bw, height: 0, class: cls }, svg);
+        const t = () => opts.tip(d);
+        hover(hit, t);
+        hit.addEventListener("pointerenter", () => bar.classList.add("hl"));
+        hit.addEventListener("pointerleave", () => bar.classList.remove("hl"));
+        const activate = opts.onClick ? () => opts.onClick(d) : null;
+        if (activate) hit.addEventListener("click", activate);
+        marks.push({ node: bar, tip: t, activate });
+        labels.push({ label: opts.xLabel?.(d, i), cx: x0 + band / 2 });
+      });
+      svgEl("line", { x1: left, x2: width, y1: y(0) + 1, y2: y(0) + 1, class: "baseline" }, svg);
+      xLabels(svg, labels, height - 6);
+      keyboard(svg, marks, { label: opts.label });
+    });
+  }
+
+  // ---------- area line (single series) ----------
+  /* opts: { value(d), xLabel(d,i), tip(d), height, yMax, yMin, label, axis, yFormat, endDot } */
   function line(el, data, opts) {
     const height = opts.height ?? 200;
     const fmt = opts.yFormat ?? Fmt.compact;
     responsive(el, (width) => {
       el.replaceChildren();
       const vals = data.map(opts.value);
-      const max = opts.yMax ?? Math.max(0, ...vals.filter((v) => v != null));
-      const ticks = niceTicks(max);
-      const top = 8, bottom = 24, right = 8;
-      const left = leftMargin(ticks, fmt);
+      const finite = vals.filter((v) => v != null);
+      const max = opts.yMax ?? Math.max(0, ...finite);
+      const ticks = opts.axis ? niceTicks(max) : null;
+      const top = 10, bottom = 26, right = 8;
+      const left = ticks ? Math.max(...ticks.map((t) => fmt(t).length)) * 7.2 + 14 : 4;
       const innerW = width - left - right, innerH = height - top - bottom;
-      const yMax = ticks[ticks.length - 1];
+      const yMax = ticks ? ticks[ticks.length - 1] : max * 1.08 || 1;
+      const yMin = opts.yMin ?? 0;
       const x = (i) => left + (data.length <= 1 ? innerW / 2 : (i / (data.length - 1)) * innerW);
-      const y = (v) => top + innerH - (v / yMax) * innerH;
-      const svg = svgEl("svg", { width, height, viewBox: `0 0 ${width} ${height}`, role: "img", "aria-label": opts.label ?? "" }, el);
-      yAxis(svg, ticks, y, left, width - right, fmt);
-
-      // segments break on null
+      const y = (v) => top + innerH - ((v - yMin) / (yMax - yMin)) * innerH;
+      const svg = svgEl("svg", { width, height, viewBox: `0 0 ${width} ${height}`, "aria-label": opts.label ?? "" }, el);
+      if (ticks) {
+        for (const t of ticks.slice(1)) {
+          svgEl("line", { x1: left, x2: width - right, y1: y(t), y2: y(t), class: "gridline" }, svg);
+          text(svg, left - 8, y(t) + 4, fmt(t), { "text-anchor": "end" });
+        }
+      }
+      // smooth segments (Catmull-Rom to Bézier), broken on null
       let d = "", area = "", seg = [];
+      const curve = (pts) => pts.map(([px, py], k) => {
+        if (!k) return `M${px},${py}`;
+        const [x0, y0] = pts[k - 2] ?? pts[k - 1], [x1, y1] = pts[k - 1], [x3, y3] = pts[k + 1] ?? [px, py];
+        return `C${x1 + (px - x0) / 6},${y1 + (py - y0) / 6} ${px - (x3 - x1) / 6},${py - (y3 - y1) / 6} ${px},${py}`;
+      }).join("");
       const flush = () => {
         if (!seg.length) return;
-        d += seg.map(([i, v], k) => `${k ? "L" : "M"}${x(i)},${y(v)}`).join("");
-        area += `M${x(seg[0][0])},${y(0)}` + seg.map(([i, v]) => `L${x(i)},${y(v)}`).join("") + `L${x(seg[seg.length - 1][0])},${y(0)}Z`;
+        const pts = seg.map(([i, v]) => [x(i), y(v)]);
+        const c = curve(pts);
+        d += c;
+        area += c + `L${pts[pts.length - 1][0]},${y(yMin)}L${pts[0][0]},${y(yMin)}Z`;
         seg = [];
       };
       vals.forEach((v, i) => (v == null ? flush() : seg.push([i, v])));
       flush();
       svgEl("path", { d: area, class: "area" }, svg);
       svgEl("path", { d, class: "line" }, svg);
-
-      let lastLabelX = -Infinity;
-      data.forEach((row, i) => {
-        const label = opts.xLabel?.(row, i);
-        if (label != null && x(i) - lastLabelX >= label.length * 6.6 + 10) {
-          text(svg, x(i), height - 6, label, { "text-anchor": "middle" });
-          lastLabelX = x(i);
-        }
-      });
+      const lastI = vals.reduce((a, v, i) => (v == null ? a : i), -1);
+      if (opts.endDot !== false && lastI >= 0) svgEl("circle", { cx: x(lastI), cy: y(vals[lastI]), r: 5, class: "marker" }, svg);
+      xLabels(svg, data.map((row, i) => ({ label: opts.xLabel?.(row, i), cx: x(i) })), height - 6);
 
       const cross = svgEl("line", { y1: top, y2: top + innerH, class: "cross", visibility: "hidden" }, svg);
-      const marker = svgEl("circle", { r: 4, class: "marker", visibility: "hidden" }, svg);
-      const overlay = svgEl("rect", { x: left, y: top, width: innerW, height: innerH, class: "hit" }, svg);
-      overlay.addEventListener("pointermove", (e) => {
-        const box = svg.getBoundingClientRect();
-        const px = ((e.clientX - box.left) / box.width) * width;
-        const i = Math.max(0, Math.min(data.length - 1, Math.round(((px - left) / innerW) * (data.length - 1))));
+      const marker = svgEl("circle", { r: 5, class: "marker", visibility: "hidden" }, svg);
+      const point = (i) => {
         cross.setAttribute("x1", x(i));
         cross.setAttribute("x2", x(i));
         cross.setAttribute("visibility", "visible");
@@ -250,6 +305,13 @@
           marker.setAttribute("cy", y(vals[i]));
           marker.setAttribute("visibility", "visible");
         } else marker.setAttribute("visibility", "hidden");
+      };
+      const overlay = svgEl("rect", { x: left, y: top, width: innerW, height: innerH, class: "hit" }, svg);
+      overlay.addEventListener("pointermove", (e) => {
+        const box = svg.getBoundingClientRect();
+        const px = ((e.clientX - box.left) / box.width) * width;
+        const i = Math.max(0, Math.min(data.length - 1, Math.round(((px - left) / innerW) * (data.length - 1))));
+        point(i);
         const t = opts.tip(data[i]);
         showTip(e, t.rows, t.title);
       });
@@ -258,112 +320,113 @@
         marker.setAttribute("visibility", "hidden");
         hideTip();
       });
+      // keyboard: arrows move the crosshair along the series
+      keyboard(svg, data.map((row, i) => ({
+        node: { classList: { add: () => point(i), remove: () => {} }, getBoundingClientRect: () => marker.getBoundingClientRect() },
+        tip: () => opts.tip(row),
+      })), { label: opts.label });
     });
   }
 
-  // ---------- heatmap (7 x 24 listening clock) ----------
+  // ---------- listening clock: 7 × 24 dots, bigger and darker = more plays ----------
   const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
-  function heatmap(el, grid, opts = {}) {
+  function clock(el, grid, opts = {}) {
     const max = Math.max(1, ...grid.flat());
     const total = grid.flat().reduce((a, b) => a + b, 0) || 1;
     const bin = (v) => (v === 0 ? 0 : Math.min(7, Math.ceil((v / max) * 7)));
     responsive(el, (width) => {
       el.replaceChildren();
-      const left = 34, top = 4, gap = 2, bottom = 20;
+      const left = 40, top = 4, bottom = 24;
       const cw = (width - left) / 24;
-      const ch = Math.min(26, Math.max(14, cw * 0.8));
+      const ch = Math.max(18, Math.min(26, cw));
       const height = top + 7 * ch + bottom;
-      const svg = svgEl("svg", { width, height, viewBox: `0 0 ${width} ${height}`, role: "img", "aria-label": opts.label ?? "Listening clock" }, el);
+      const svg = svgEl("svg", { width, height, viewBox: `0 0 ${width} ${height}`, "aria-label": opts.label ?? "Listening clock" }, el);
+      const marks = [];
       grid.forEach((row, wd) => {
-        text(svg, 0, top + wd * ch + ch / 2 + 4, DAYS[wd]);
+        text(svg, 0, top + wd * ch + ch / 2 + 4, DAYS[wd], { class: "tick row-label" });
         row.forEach((v, h) => {
           const b = bin(v);
-          const cell = svgEl("rect", {
-            x: left + h * cw + gap / 2, y: top + wd * ch + gap / 2,
-            width: Math.max(1, cw - gap), height: ch - gap, rx: 2, class: "cell",
-          }, svg);
-          cell.style.fill = b ? `var(--seq-${b})` : "var(--surface-2)";
-          cell.addEventListener("pointerenter", (e) =>
-            showTip(e, [{ value: Fmt.int(v), label: `plays · ${Fmt.pct(v / total)}` }], `${DAYS[wd]} ${String(h).padStart(2, "0")}:00–${String(h).padStart(2, "0")}:59`));
-          cell.addEventListener("pointermove", moveTip);
-          cell.addEventListener("pointerleave", hideTip);
+          const r = ((b ? 6 + 2 * b : 5) / 2) * Math.min(1, cw / 22);
+          const dot = svgEl("circle", { cx: left + h * cw + cw / 2, cy: top + wd * ch + ch / 2, r: Math.max(2, r), class: "dot" }, svg);
+          dot.style.fill = `var(--seq-${b})`;
+          const t = () => ({ title: `${DAYS[wd]} ${String(h).padStart(2, "0")}:00–${String(h).padStart(2, "0")}:59`,
+            rows: [{ value: Fmt.int(v), label: `plays · ${Fmt.pct(v / total)} of the period` }] });
+          hover(dot, t);
+          marks.push({ node: dot, tip: t });
         });
       });
-      for (let h = 0; h < 24; h += cw < 22 ? 3 : 2) {
-        text(svg, left + h * cw + cw / 2, height - 4, String(h).padStart(2, "0"), { "text-anchor": "middle" });
+      for (let h = 0; h < 24; h += cw < 22 ? 6 : 3) {
+        text(svg, left + h * cw + cw / 2, height - 6, String(h).padStart(2, "0"), { "text-anchor": "middle" });
       }
+      keyboard(svg, marks, { label: opts.label ?? "Listening clock", cols: 24 });
     });
-    const legend = document.createElement("div");
-    legend.className = "legend-seq";
-    legend.append("fewer");
-    for (let b = 1; b <= 7; b++) {
-      const i = document.createElement("i");
-      i.style.background = `var(--seq-${b})`;
-      legend.append(i);
-    }
-    legend.append("more plays");
-    el.after(legend);
   }
 
-  // ---------- lift matrix (rows × columns, diverging around "as usual") ----------
+  // ---------- lift matrix (rows × columns, around "as usual") ----------
   /* data: { cols: [label], rows: [{ name, href?, cells: [{ lift|null, plays, expected, up, years }] }] }
-     opts: { label, yearsLabel ("years" / "winters"...) } — lift 1 is gray, teal above, orange below. */
-  const liftFmt = new Intl.NumberFormat("fi-FI", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+     opts: { label, yearsLabel, highlightCols: [index] } — sand is "as usual", sage more, terracotta less. */
+  const liftFmt = new Intl.NumberFormat("fi-FI", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+  const liftFmt2 = new Intl.NumberFormat("fi-FI", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   function liftStep(lift) {
     const a = Math.abs(Math.log2(lift));
-    const step = a < 0.15 ? 0 : a < 0.38 ? 1 : a < 0.7 ? 2 : 3; // within ±11 % reads as "as usual"; then ±30 %, ±62 %
+    return a < 0.15 ? 0 : a < 0.38 ? 1 : a < 0.7 ? 2 : 3; // within ±11 % reads as "as usual"; then ±30 %, ±62 %
+  }
+  function liftFill(lift) {
+    const step = liftStep(lift);
     return step === 0 ? "var(--div-mid)" : `var(--div-${lift > 1 ? "pos" : "neg"}-${step})`;
   }
   function matrix(el, data, opts = {}) {
     const { cols, rows } = data;
+    const hl = new Set(opts.highlightCols ?? []);
     responsive(el, (width) => {
       el.replaceChildren();
       const longest = Math.max(4, ...rows.map((r) => r.name.length));
-      const left = Math.min(150, Math.max(60, longest * 6.8 + 12));
-      const maxChars = Math.floor((left - 12) / 6.8);
-      const top = 2, bottom = 22, gap = 2;
+      const left = Math.min(150, Math.max(64, longest * 7.4 + 14));
+      const maxChars = Math.floor((left - 14) / 7.4);
+      const top = 24, gap = 6;
       const cw = (width - left) / cols.length;
-      const ch = Math.min(28, Math.max(18, cw * 0.6));
-      const height = top + rows.length * ch + bottom;
-      const svg = svgEl("svg", { width, height, viewBox: `0 0 ${width} ${height}`, role: "img", "aria-label": opts.label ?? "" }, el);
+      const ch = Math.max(28, Math.min(40, cw * 0.62));
+      const height = top + rows.length * ch + 4;
+      const svg = svgEl("svg", { width, height, viewBox: `0 0 ${width} ${height}`, "aria-label": opts.label ?? "" }, el);
+      const every = cw < 34 ? 2 : 1;
+      cols.forEach((c, ci) => {
+        if (ci % every === 0) text(svg, left + ci * cw + cw / 2, 14, c, { "text-anchor": "middle", class: "tick col-label" + (hl.has(ci) ? " hl" : "") });
+      });
+      const marks = [];
       rows.forEach((row, ri) => {
         const y = top + ri * ch;
         const name = row.name.length > maxChars ? row.name.slice(0, maxChars - 1) + "…" : row.name;
         const holder = row.href ? svgEl("a", { href: row.href }, svg) : svg;
-        const t = text(holder, left - 10, y + ch / 2 + 4, name, { "text-anchor": "end", class: "tick row-label" });
+        const t = text(holder, 0, y + ch / 2 + 4, name, { class: "tick row-label" });
         if (name !== row.name) svgEl("title", {}, t).textContent = row.name;
         row.cells.forEach((c, ci) => {
-          const cell = svgEl("rect", {
-            x: left + ci * cw + gap / 2, y: y + gap / 2, width: Math.max(1, cw - gap), height: ch - gap, rx: 3, class: "cell",
-          }, svg);
-          if (c.lift == null) {
-            cell.classList.add("nodata");
-          } else {
-            cell.style.fill = liftStep(c.lift);
+          const w = Math.max(4, cw - gap), h = ch - gap;
+          const cx = left + ci * cw + gap / 2, cy = y + gap / 2;
+          const cell = svgEl("rect", { x: cx, y: cy, width: w, height: h, rx: Math.min(h / 2, w / 2), class: "cell" }, svg);
+          if (c.lift == null) cell.classList.add("nodata");
+          else cell.style.fill = liftFill(c.lift);
+          if (c.lift != null && liftStep(c.lift) >= 2 && w >= 34) {
+            const v = text(svg, cx + w / 2, cy + h / 2 + 4.5, liftFmt.format(c.lift) + "×", { "text-anchor": "middle", class: "cell-v" });
+            v.style.fill = "var(--div-ink-strong)";
           }
-          cell.addEventListener("pointerenter", (e) => {
-            const rowsOut = c.lift == null
-              ? [{ value: "Not enough plays", label: "" }]
-              : [
-                  { value: liftFmt.format(c.lift) + "×", label: "your usual share" },
-                  { value: Fmt.int(c.plays), label: `plays · ${Fmt.int(c.expected)} expected` },
-                  ...(c.years ? [{ value: `${c.up} of ${c.years}`, label: `${opts.yearsLabel ?? "years"} above usual` }] : []),
-                ];
-            showTip(e, rowsOut, `${row.name} · ${cols[ci]}`);
+          const tp = () => ({
+            title: `${row.name} · ${cols[ci]}`,
+            rows: c.lift == null ? [{ value: "Too few plays", label: "" }] : [
+              { value: liftFmt2.format(c.lift) + "×", label: "your usual share" },
+              { value: Fmt.int(c.plays), label: `plays · ${Fmt.int(c.expected)} expected` },
+              ...(c.years ? [{ value: `${c.up} of ${c.years}`, label: `${opts.yearsLabel ?? "years"} above usual` }] : []),
+            ],
           });
-          cell.addEventListener("pointermove", moveTip);
-          cell.addEventListener("pointerleave", hideTip);
+          hover(cell, tp);
+          marks.push({ node: cell, tip: tp });
         });
       });
-      const every = cw < 30 ? 2 : 1;
-      cols.forEach((c, ci) => {
-        if (ci % every === 0) text(svg, left + ci * cw + cw / 2, height - 6, c, { "text-anchor": "middle" });
-      });
+      keyboard(svg, marks, { label: opts.label, cols: cols.length });
     });
     const legend = document.createElement("div");
     legend.className = "legend-seq";
     const sw = (v) => { const i = document.createElement("i"); i.style.background = v; legend.append(i); };
-    legend.append("less than usual");
+    legend.append("less");
     ["var(--div-neg-3)", "var(--div-neg-2)", "var(--div-neg-1)", "var(--div-mid)", "var(--div-pos-1)", "var(--div-pos-2)", "var(--div-pos-3)"].forEach(sw);
     legend.append("more than usual");
     const none = document.createElement("i");
@@ -372,44 +435,49 @@
     el.after(legend);
   }
 
-  // ---------- 100 % stacked columns ----------
-  /* data: [{...}], opts: { series: [{name}], shares(d) -> [0..1], other(d), xLabel(d), title(d), label }
-     Colours follow the series order (--series-1..8), the rest is "Other". */
+  // ---------- 100 % stacked pill columns ----------
+  /* opts: { series: [{name}], shares(d) -> [0..1], other(d), xLabel(d), title(d), label, colors? } */
+  let clipSeq = 0;
   function stacked(el, data, opts) {
-    const height = opts.height ?? 240;
-    const colors = opts.series.map((_, i) => (i < 8 ? `var(--series-${i + 1})` : "var(--series-other)"));
+    const height = opts.height ?? 220;
+    const colors = opts.colors ?? opts.series.map((_, i) => (i < 5 ? `var(--series-${i + 1})` : "var(--series-other)"));
     responsive(el, (width) => {
       el.replaceChildren();
-      const top = 8, bottom = 24, right = 4, left = 42;
-      const innerW = width - left - right, innerH = height - top - bottom;
-      const y = (v) => top + innerH - v * innerH;
-      const svg = svgEl("svg", { width, height, viewBox: `0 0 ${width} ${height}`, role: "img", "aria-label": opts.label ?? "" }, el);
-      yAxis(svg, [0, 0.25, 0.5, 0.75, 1], y, left, width - right, (v) => Fmt.pct(v));
-      const band = innerW / Math.max(1, data.length);
-      const bw = Math.max(4, Math.min(56, band - 8));
-      data.forEach((d) => {
-        const x = left + data.indexOf(d) * band + (band - bw) / 2;
+      const top = 4, bottom = 26;
+      const innerH = height - top - bottom;
+      const svg = svgEl("svg", { width, height, viewBox: `0 0 ${width} ${height}`, "aria-label": opts.label ?? "" }, el);
+      const defs = svgEl("defs", {}, svg);
+      const band = width / Math.max(1, data.length);
+      const bw = Math.max(8, Math.min(48, band - 10));
+      const marks = [];
+      data.forEach((d, di) => {
+        const x = di * band + (band - bw) / 2;
+        const id = `stk-${++clipSeq}`;
+        const clip = svgEl("clipPath", { id }, defs);
+        svgEl("rect", { x, y: top, width: bw, height: innerH, rx: bw / 2 }, clip);
+        const g = svgEl("g", { "clip-path": `url(#${id})` }, svg);
         const parts = [...opts.shares(d).map((v, i) => ({ v, color: colors[i], name: opts.series[i].name })),
-          { v: opts.other(d), color: "var(--series-other)", name: "Other" }].filter((p) => p.v > 0);
+          { v: opts.other(d), color: "var(--series-other)", name: "other" }].filter((p) => p.v > 0);
+        const sum = parts.reduce((s, p) => s + p.v, 0) || 1;
         let acc = 0;
         parts.forEach((p, i) => {
-          const y0 = y(acc), y1 = y(acc + p.v);
+          const y1 = top + innerH * (1 - (acc + p.v) / sum), y0 = top + innerH * (1 - acc / sum);
           acc += p.v;
-          const isTop = i === parts.length - 1;
-          const h = Math.max(0, y0 - y1 - (isTop ? 0 : 2)); // 2px surface gap between segments
-          const seg = svgEl("path", { d: isTop ? barPath(x, y0 - h, bw, h) : `M${x},${y0}V${y0 - h}H${x + bw}V${y0}Z`, class: "seg" }, svg);
+          const h = Math.max(0, y0 - y1 - (i === parts.length - 1 ? 0 : 2)); // 2px canvas gap between segments
+          const seg = svgEl("rect", { x, y: y0 - h, width: bw, height: h }, g);
           seg.style.fill = p.color;
-          seg.addEventListener("pointerenter", (e) => showTip(e, parts.slice().reverse().map((q) =>
-            ({ color: q.color, value: Fmt.pct(q.v), label: q.name })), opts.title(d)));
-          seg.addEventListener("pointermove", moveTip);
-          seg.addEventListener("pointerleave", hideTip);
         });
+        const hit = svgEl("rect", { x: di * band, y: top, width: band, height: innerH, class: "hit" }, svg);
+        const t = () => ({ title: opts.title(d), rows: parts.slice().reverse().map((q) => ({ color: q.color, value: Fmt.pct(q.v), label: q.name })) });
+        hover(hit, t);
+        marks.push({ node: hit, tip: t });
         text(svg, x + bw / 2, height - 6, opts.xLabel(d), { "text-anchor": "middle" });
       });
+      keyboard(svg, marks, { label: opts.label });
     });
     const legend = document.createElement("div");
     legend.className = "legend-cat";
-    [...opts.series.map((s, i) => ({ name: s.name, color: colors[i] })), { name: "Other", color: "var(--series-other)" }].forEach((s) => {
+    [...opts.series.map((s, i) => ({ name: s.name, color: colors[i] })), { name: "other", color: "var(--series-other)" }].forEach((s) => {
       const item = document.createElement("span");
       const i = document.createElement("i");
       i.style.background = s.color;
@@ -419,5 +487,5 @@
     el.after(legend);
   }
 
-  window.Charts = { columns, line, heatmap, matrix, stacked, cleanup, showTip, moveTip, hideTip, Fmt };
+  window.Charts = { columns, line, clock, matrix, stacked, liftStep, cleanup, showTip, moveTip, hideTip, Fmt };
 })();

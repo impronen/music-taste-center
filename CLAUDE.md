@@ -20,7 +20,8 @@ Local FastAPI + SQLite app (Python 3.14, vanilla JS in `static/`). See README fo
 - Non-GET `/api` requests with a foreign `Origin` are refused (the server is reachable from any website via localhost); keep it that way.
 - SQL is always parameterized. In the UI, data goes through the `html` tagged template (escapes by default) or `textContent`.
 - Numbers use Finnish formatting (`Fmt.int` gives `12 345`). No locale compact notation.
-- Sizes are tokens too (`--fs-*` type scale, `--gap`, `--card-pad`, `--row-h`, `--radius-*`); don't hard-code font sizes or radii. Side-by-side cards go in `.grid.cols-2/3`, which stretches a row to one height; keep their lists to about 10 rows. Cards of very uneven length go in `.masonry`.
+- Sizes are tokens too (`--fs-*` type scale with a 13px minimum, `--gap`, `--card-pad`, `--radius-*`); don't hard-code font sizes or radii. Side-by-side cards go in `.grid.cols-2/3/4/7-5`, which stretches a row to one height. Cards of very uneven length go in `.columns-3`.
 - Lift heatmaps use the validated diverging tokens `--div-neg-*`, `--div-mid` and `--div-pos-*` through `Charts.matrix`. Rhythm statistics live in `mtc/rhythms.py`; keep the per-year expectation (it detrends) and the shrinkage when changing them.
-- Colours are CSS tokens in `static/style.css`, from the Friends onThe Web palette. Re-run the dataviz palette validator if you change the categorical slots.
+- Colours are CSS tokens in `static/style.css` (Organic design system), defined once for both themes with `light-dark()`. Never add a second dark-theme block. Re-run the dataviz palette validator if you change `--series-*`, `--div-*` or `--seq-*`.
+- Layout patterns: page head (kicker, Caprasimo h1, `.lead` sentence), cards without borders tinted by role (`.canvas` for big charts, `.accent-soft`/`.sage-soft` for story and time content), pill controls (`.seg`, `.btn`, `.chip`), `rankList()` rows that are whole links. Interactive elements must work from the keyboard (charts are one tab stop with arrow keys).
 - UI changes: verify in the browser (Chrome MCP, or `javascript_tool` DOM checks) before calling them done.

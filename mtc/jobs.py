@@ -104,6 +104,8 @@ class EnrichJob:
                 musicbrainz=self._musicbrainz_factory() if self._musicbrainz_factory else None,
                 **limits, log=lambda _: None, progress=self._progress, stop=self._stop)
             final = "stopped" if summary.get("stopped") else "done"
+            if any(summary.get(ph, {}).get("ok") for ph in ("artists", "albums")):
+                settings.save({**settings.load(), "lastfm_key_ok_at": int(time.time())})  # the key works
         except Fatal as exc:
             final, error = "failed", str(exc)
         except Exception as exc:  # keep the UI informed instead of dying silently
