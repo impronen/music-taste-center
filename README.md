@@ -32,8 +32,8 @@ MTC_DB=/tmp/demo.db .venv/bin/python app.py
 
 | View | What it shows |
 |---|---|
-| **Overview** | Totals, streaks, scrobbles per month, *novelty* (share of plays going to artists discovered in the previous 12 months), a listening clock (weekday × hour), and the top artists, tracks and albums of the last 30 days |
-| **Library** | Every artist, sortable and filterable, plus top artists, tracks or albums for any period (last 30/90/365 days, a year, or a month clicked on a chart) |
+| **Overview** | Any period: last 7/30/90 days, last year, all time, a calendar year or month, or a custom date range. Shows totals with the change vs the previous period, scrobbles per day (up to 120 days) or per month, top artists, tracks and albums, new discoveries, and a listening clock. Also all-time *novelty* (share of plays going to artists discovered in the previous 12 months) and recent plays |
+| **Library** | Every artist, sortable and filterable, plus top artists, tracks, albums or genres for any period (the same period bar, or a day or month clicked on a chart) |
 | **Artist** | Plays per month, top tracks and albums, *how you discovered them* (the artist you were playing right before), who they *led you to*, artists *listened alongside*, and time of day |
 | **Connections** | Force graph of your top artists, linked by co-listening, with taste clusters found automatically |
 | **Eras** | Per year: top artists, the *signature* artist (most over-represented compared with all time), and the biggest new discovery |
@@ -46,6 +46,7 @@ MTC_DB=/tmp/demo.db .venv/bin/python app.py
 - **Links.** Two artists are linked when they appear in the same sessions. The score is the Ochiai coefficient `shared / sqrt(sessions_a × sessions_b)`, so a huge artist doesn't link to everything. Very long shuffle sessions only count their 30 most-played artists, and a link needs at least 3 shared sessions.
 - **Clusters.** Weighted label propagation over each artist's strongest links.
 - **Gateways.** An artist's gateway is whatever you played immediately before your first listen in the same session. Artists first heard in the first 30 days of your history are treated as already known, not discovered.
+- **Comparisons.** A period is compared with the one just before it: the same calendar months for years and months (2024 vs 2023), otherwise the same number of days.
 - **"Now"** means your newest scrobble, not today. An old export still gives sensible "recent" and "forgotten" results.
 
 All tunables live in `mtc/config.py`.

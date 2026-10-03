@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+from datetime import date, timedelta
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -44,6 +45,44 @@ class ApiTests(unittest.TestCase):
 
     def test_like_wildcards_are_literal(self):
         self.assertEqual(self.client.get("/api/artists", params={"q": "%"}).json()["total"], 0)
+
+    def test_period_summary_and_activity(self):
+        c = self.client
+        everything = c.get("/api/summary").json()
+        self.assertEqual(everything["plays"], c.get("/api/overview").json()["plays"])
+        self.assertIsNone(everything["previous"])
+        end = everything["end"]
+        start = (date.fromisoformat(end) - timedelta(days=29)).isoformat()
+        month = c.get("/api/summary", params={"start": start, "end": end}).json()
+        top = c.get("/api/top/artist", params={"start": start, "end": end, "limit": 500}).json()
+        self.assertEqual(month["plays"], sum(a["plays"] for a in top))
+        self.assertEqual((month["calendar_days"], month["artists"]), (30, len(top)))
+        self.assertLessEqual(month["longest_streak"], month["listening_days"])
+        prev = month["previous"]
+        self.assertEqual((prev["start"], prev["end"]),
+                         ((date.fromisoformat(start) - timedelta(days=30)).isoformat(),
+                          (date.fromisoformat(start) - timedelta(days=1)).isoformat()))
+        self.assertEqual(prev["plays"], c.get("/api/summary", params={"start": prev["start"], "end": prev["end"]}).json()["plays"])
+        # whole months compare with the same calendar months before them
+        from mtc.insights import _previous
+        self.assertEqual(_previous("2024-01-01", "2024-12-31"), ("2023-01-01", "2023-12-31"))
+        self.assertEqual(_previous("2024-03-01", "2024-03-31"), ("2024-02-01", "2024-02-29"))
+        self.assertEqual(_previous("2024-01-01", "2024-02-29"), ("2023-11-01", "2023-12-31"))
+        self.assertEqual(_previous("2024-03-10", "2024-03-16"), ("2024-03-03", "2024-03-09"))
+        # discoveries: first heard in the range, ranked by plays in it
+        first = everything["start"]
+        early = c.get("/api/summary", params={"start": first, "end": (date.fromisoformat(first) + timedelta(days=89)).isoformat()}).json()
+        self.assertTrue(all(d["plays"] > 0 for d in early["discoveries"]))
+        # activity: zero-filled days up to 120 days, months beyond
+        act = c.get("/api/activity", params={"start": start, "end": end}).json()
+        self.assertEqual((act["unit"], len(act["items"])), ("day", 30))
+        self.assertEqual(sum(d["plays"] for d in act["items"]), month["plays"])
+        self.assertEqual(c.get("/api/activity").json()["unit"], "month")
+        # ranges outside the data are empty, not errors
+        future = c.get("/api/summary", params={"start": "2099-01-01", "end": "2099-01-31"}).json()
+        self.assertEqual(future["plays"], 0)
+        self.assertEqual(c.get("/api/activity", params={"start": "2099-01-01"}).json()["items"], [])
+        self.assertEqual(c.get("/api/summary", params={"start": "2024-1-1"}).status_code, 422)
 
 
 if __name__ == "__main__":

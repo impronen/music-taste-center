@@ -79,6 +79,14 @@ def create_app(db_path: str | Path | None = None, *, lastfm_factory: Callable | 
     def overview(c=Conn):
         return insights.overview(c)
 
+    @app.get("/api/summary")
+    def period_summary(start: str | None = Query(None, pattern=DATE), end: str | None = Query(None, pattern=DATE), c=Conn):
+        return insights.summary(c, start, end)
+
+    @app.get("/api/activity")
+    def period_activity(start: str | None = Query(None, pattern=DATE), end: str | None = Query(None, pattern=DATE), c=Conn):
+        return insights.activity(c, start, end)
+
     @app.get("/api/timeline")
     def timeline(c=Conn):
         return insights.timeline(c)
