@@ -126,17 +126,17 @@ last.fm data has spelling variants of the same artist ("Sunn 0)))" with a zero v
 .venv/bin/python -m mtc merge-artist "Sunn 0)))" "Sunn O)))"   # merge SOURCE into TARGET
 ```
 
-## Adding a live updater (last.fm API)
+## Live updater (last.fm API)
 
-Your username and API key are saved under **Import → last.fm account**, or with `python -m mtc set-user NAME` and `set-key KEY`. Read them with `settings.lastfm_username()` and `settings.lastfm_api_key()`. Both return `None` when unset, and the env vars `LASTFM_USER` and `LASTFM_API_KEY` override the file. To run on every app start, hook into the `lifespan` in `mtc/api.py` (or the launcher), preferably in a background thread like `mtc/jobs.py` so the UI opens right away.
+When the server starts it pulls your new scrobbles from last.fm in a background thread, so the UI opens right away. It needs your username and API key (**Import → last.fm account**, or `python -m mtc set-user NAME` and `set-key KEY`; the env vars `LASTFM_USER` and `LASTFM_API_KEY` override the file).
 
-`ingest.ingest_records(conn, records, source="lastfm-api", label=user)` accepts any iterable of `ingest.Scrobble(artist, track, ts, album, artist_mbid, track_mbid, album_mbid)`. An updater only needs to:
+- **At most 3 runs in any 24 hours.** Each attempt, successful or not, is timestamped in the database (`meta`, key `updater_attempts`), so restarting the server a few times in a row doesn't hammer the API. A start with no username or key doesn't count.
+- **What it fetches:** everything after your newest stored scrobble, minus a day of overlap for late offline scrobbles (`user.getRecentTracks`, 200 per page, the "now playing" track skipped). An empty library fetches the whole history. All pages are read before anything is stored, so a failure half way changes nothing and the next run starts from the same point. Duplicates are ignored, so the overlap is harmless.
+- **See it:** `GET /api/updater` (last result, runs in the window, next allowed time) or `python -m mtc update --status`.
+- **Run it by hand:** `python -m mtc update` (same limit; `--force` ignores it).
+- **Turn it off:** `python -m mtc serve --no-update`, or `MTC_AUTO_UPDATE=0`. `create_app` leaves it off unless `auto_update=True` is passed, so tests never reach the network.
 
-1. read the newest timestamp: `SELECT MAX(ts) FROM scrobbles`
-2. page `user.getrecenttracks` with `from=<that ts>` (skip the `nowplaying` track, which has no date)
-3. pass the results to `ingest_records`, then call `derive.rebuild(conn)`
-
-Duplicates are ignored, so overlapping windows are harmless. `ingest_records` reads every record before it takes the database write lock, so a generator that pages the API is fine; run the updater in a background thread (like `mtc/jobs.py`) so the server keeps answering. Open pages notice the new scrobbles on the next page change (the `X-Data-Version` header). The MBIDs from the API are stored, which will help with release tracking later.
+The code is `mtc/updater.py` and `LastFm.recent_tracks_page`; everything goes through `ingest.ingest_records` with `source="lastfm-api"`. Open pages notice the new scrobbles on the next page change (the `X-Data-Version` header).
 
 ## Configuration
 
