@@ -1,13 +1,14 @@
 """HTTP layer: JSON endpoints under /api and the single-page UI from static/."""
 import sqlite3
 from collections.abc import Callable, Iterator
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, closing
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 
 from . import config, db, derive, enrich, fsutil, ingest, insights, jobs, maintenance, rhythms, settings
@@ -74,6 +75,21 @@ def create_app(db_path: str | Path | None = None, *, lastfm_factory: Callable | 
         if value is None:
             raise HTTPException(404, "not found")
         return value
+
+    db_uri = path.resolve().as_uri() + "?mode=ro"
+
+    def data_version() -> str | None:
+        """Changes whenever scrobbles or metadata change (any process: UI, CLI, updater)."""
+        try:
+            with closing(sqlite3.connect(db_uri, uri=True, timeout=1)) as ro:
+                return ".".join(map(str, db.versions(ro)))
+        except sqlite3.Error:
+            return None
+
+    @app.get("/api/version")
+    def version():
+        """Cheap check the UI makes on every page change; the X-Data-Version header carries it."""
+        return {"version": data_version()}
 
     @app.get("/api/overview")
     def overview(c=Conn):
@@ -231,12 +247,23 @@ def create_app(db_path: str | Path | None = None, *, lastfm_factory: Callable | 
         """Merge each source artist into the target, then rebuild derived tables once."""
         if req.target_id in req.source_ids:
             raise HTTPException(400, "the target can't also be a source")
+        results = []
+        failure: Exception | None = None
         try:
-            results = [maintenance.merge_artists(c, s, req.target_id, rebuild=False) for s in dict.fromkeys(req.source_ids)]
-        except LookupError as exc:
-            raise HTTPException(404, str(exc)) from None
-        finally:
-            derive.rebuild(c)
+            for s in dict.fromkeys(req.source_ids):
+                results.append(maintenance.merge_artists(c, s, req.target_id, rebuild=False))
+        except Exception as exc:
+            failure = exc
+        if results:  # rebuild only when something was merged
+            try:
+                derive.rebuild(c)
+            except Exception:
+                if failure is None:  # otherwise the merge's own error is the one worth reporting
+                    raise
+        if isinstance(failure, LookupError):
+            raise HTTPException(404, str(failure)) from None
+        if failure:
+            raise failure
         return {"target_id": req.target_id, "merged": results}
 
     @app.post("/api/maintenance/merge/preview")
@@ -282,9 +309,12 @@ def create_app(db_path: str | Path | None = None, *, lastfm_factory: Callable | 
             raise HTTPException(400, "empty upload")
         if len(body) > MAX_UPLOAD_BYTES:
             raise HTTPException(413, "file too large")
-        text, encoding = fsutil.decode(body)
         label = Path(unquote(request.headers.get("x-filename", "upload.csv"))).name[:200]
-        return ingest.import_csv_text(c, text, label=label, encoding=encoding)
+
+        def work():  # parse + ingest + rebuild take seconds: keep them off the event loop
+            text, encoding = fsutil.decode(body)
+            return ingest.import_csv_text(c, text, label=label, encoding=encoding)
+        return await run_in_threadpool(work)
 
     @app.post("/api/rebuild")
     def rebuild(c=Conn):
@@ -302,9 +332,15 @@ def create_app(db_path: str | Path | None = None, *, lastfm_factory: Callable | 
     @app.middleware("http")
     async def revalidate(request: Request, call_next):
         # Local app: always revalidate UI files (ETag) so code updates show up without a hard reload.
+        is_api = request.url.path.startswith("/api/")
+        # Read the version before the handler runs: a write that commits meanwhile then leaves the
+        # header older than the body, so the UI refetches, rather than caching old data as new.
+        v = await run_in_threadpool(data_version) if is_api else None
         response = await call_next(request)
-        if not request.url.path.startswith("/api/"):
+        if not is_api:
             response.headers["Cache-Control"] = "no-cache"
+        elif v is not None:
+            response.headers["X-Data-Version"] = v  # the UI drops its cache when this changes
         return response
 
     app.mount("/static", StaticFiles(directory=config.STATIC_DIR), name="static")

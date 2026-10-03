@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import config, fsutil
+from . import config, db, fsutil
 
 
 @dataclass(frozen=True, slots=True)
@@ -206,7 +206,11 @@ def ingest_records(
     skipped: int = 0,
 ) -> dict:
     """Insert scrobbles in one transaction and log the import. Does not rebuild derived tables;
-    call `derive.rebuild(conn)` afterwards (import_csv does both)."""
+    call `derive.rebuild(conn)` afterwards (import_csv does both).
+
+    `records` is fully read *before* the write transaction starts, so a generator that pages a
+    web API never holds the database lock while it waits for the network."""
+    records = list(records)
     with conn:
         import_id = conn.execute(
             "INSERT INTO imports(source, label, encoding, started_at, rows_skipped) VALUES (?, ?, ?, ?, ?)",
@@ -231,6 +235,8 @@ def ingest_records(
             rows,
         )
         added = conn.total_changes - before - entity_changes
+        if added:
+            db.bump(conn, "scrobbles_version")
         conn.execute(
             "UPDATE imports SET rows_read = ?, rows_added = ?, min_ts = ?, max_ts = ? WHERE id = ?",
             (read, added, lo, hi, import_id),
@@ -262,3 +268,4 @@ def recompute_local_time(conn: sqlite3.Connection) -> None:
     with conn:
         rows = [(*local_parts(ts), sid) for sid, ts in conn.execute("SELECT id, ts FROM scrobbles")]
         conn.executemany("UPDATE scrobbles SET lday = ?, lhour = ?, lwday = ? WHERE id = ?", rows)
+        db.bump(conn, "scrobbles_version")

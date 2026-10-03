@@ -11,7 +11,7 @@ import threading
 import time
 from collections.abc import Callable
 
-from . import config
+from . import config, db
 from . import tags as tagmod
 from .ingest import key
 from .lastfm import LastFm
@@ -104,8 +104,18 @@ def enrich_artist(conn: sqlite3.Connection, lf: LastFm, artist_id: int, name: st
         return info, lf.artist_tags(name) or info["tags"]
 
     status, payload, error = _fetch(fetch)
+    try:
+        return _store_artist(conn, artist_id, name, status, payload, error)
+    except sqlite3.IntegrityError:
+        if _gone(conn, "artists", artist_id):  # merged away while the request was in flight
+            return "merged", 0
+        raise
+
+
+def _store_artist(conn, artist_id: int, name: str, status: str, payload, error) -> tuple[str, int]:
     now = _now()
     with conn:
+        db.bump(conn, "tags_version")
         if status != "ok":
             # Never let a failed refresh wipe good data; a 'not_found' replaces it though.
             conn.execute(
@@ -137,8 +147,18 @@ def enrich_album(conn: sqlite3.Connection, lf: LastFm, album_id: int, artist: st
         return info, lf.album_tags(artist, title) or info["tags"]
 
     status, payload, error = _fetch(fetch)
+    try:
+        return _store_album(conn, album_id, artist, title, status, payload, error)
+    except sqlite3.IntegrityError:
+        if _gone(conn, "albums", album_id):  # merged away while the request was in flight
+            return "merged", 0
+        raise
+
+
+def _store_album(conn, album_id: int, artist: str, title: str, status: str, payload, error) -> tuple[str, int]:
     now = _now()
     with conn:
+        db.bump(conn, "tags_version")
         if status != "ok":
             conn.execute(
                 "INSERT INTO album_info(album_id, status, error, fetched_at) VALUES (?, ?, ?, ?)"
@@ -188,6 +208,7 @@ def enrich_release(conn: sqlite3.Connection, mb: MusicBrainz, album_id: int, art
     status, payload, error = _fetch(fetch)
     now = _now()
     with conn:
+        db.bump(conn, "tags_version")
         if status == "ok" and payload[0]["release_date"]:
             g = payload[0]
             conn.execute(

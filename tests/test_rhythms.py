@@ -30,6 +30,7 @@ def add_tags(conn, genre_of: dict[str, str], place_of: dict[str, str] | None = N
                 conn.execute("INSERT INTO artist_tags VALUES (?, ?, 50)", (aid, ids[place_of[name]]))
             conn.execute("INSERT INTO artist_info(artist_id, status, fetched_at, tags_fetched_at)"
                          " VALUES (?, 'ok', 0, 1)", (aid,))
+        db.bump(conn, "tags_version")  # as enrich does on every write
 
 
 def lift(matrix: dict, name: str, col: str) -> float:

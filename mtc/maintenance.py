@@ -4,10 +4,27 @@ import sqlite3
 import time
 import unicodedata
 
-from . import derive
+from . import db, derive
 from .ingest import key
 
 # ---------------------------------------------------------------- merging
+
+# Every (table, column, referenced table) that points at an artist, track or album, and so must
+# be moved or cleaned up by merge_artists. tests/test_robustness.py compares this with the schema:
+# a new table with such a foreign key (e.g. for release following) fails the test until merges
+# handle it.
+MERGE_HANDLES = {
+    ("scrobbles", "artist_id", "artists"), ("scrobbles", "track_id", "tracks"), ("scrobbles", "album_id", "albums"),
+    ("tracks", "artist_id", "artists"),            # moved, or combined with the target's same-titled track
+    ("albums", "artist_id", "artists"),            # moved, or combined with the target's same-titled album
+    ("album_info", "album_id", "albums"), ("album_tags", "album_id", "albums"),  # dropped with combined albums
+    ("artist_info", "artist_id", "artists"), ("artist_tags", "artist_id", "artists"),  # source's dropped
+    ("artist_aliases", "artist_id", "artists"),    # repointed to the target
+    ("artist_stats", "artist_id", "artists"), ("artist_stats", "gateway_id", "artists"),
+    ("artist_stats", "first_track_id", "tracks"),  # derived: source row dropped, gateways repointed, rebuilt
+    ("artist_links", "a", "artists"), ("artist_links", "b", "artists"),  # derived: dropped and rebuilt
+}
+
 
 
 def merge_artists(conn: sqlite3.Connection, source_id: int, target_id: int, *, rebuild: bool = True) -> dict:
@@ -23,6 +40,7 @@ def merge_artists(conn: sqlite3.Connection, source_id: int, target_id: int, *, r
     if src is None or dst is None:
         raise LookupError("artist not found")
     with conn:
+        db.bump(conn, "scrobbles_version", "tags_version")
         moved = conn.execute("SELECT COUNT(*) FROM scrobbles WHERE artist_id = ?", (source_id,)).fetchone()[0]
         # derived rows of the source go first (they reference its tracks); rebuilt below
         conn.execute("DELETE FROM artist_links WHERE a = ? OR b = ?", (source_id, source_id))
