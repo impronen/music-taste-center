@@ -133,6 +133,107 @@ def _months(first: str, last: str) -> list[str]:
     return out
 
 
+# ---------------------------------------------------------------- any period
+
+DAILY_MAX_DAYS = 120  # activity is per day up to this span, per month beyond
+
+
+def _clip(conn, start: str | None, end: str | None) -> tuple[str, str] | None:
+    """The requested local-date range clipped to the data; None when there is no data."""
+    lo, hi = conn.execute("SELECT MIN(lday), MAX(lday) FROM scrobbles").fetchone()
+    if lo is None:
+        return None
+    return max(start or lo, lo), min(end or hi, hi)
+
+
+def _days_between(a: str, b: str) -> int:
+    return (date.fromisoformat(b) - date.fromisoformat(a)).days + 1
+
+
+def _period_numbers(conn, start: str, end: str) -> dict:
+    where, args = _range_sql(start, end)
+    row = conn.execute(
+        "SELECT COUNT(*), COUNT(DISTINCT artist_id), COUNT(DISTINCT track_id), COUNT(DISTINCT album_id),"
+        f" COUNT(DISTINCT lday) FROM scrobbles s WHERE {where}", args).fetchone()
+    new = conn.execute("SELECT COUNT(*) FROM artist_stats WHERE prehistory = 0 AND first_lday BETWEEN ? AND ?",
+                       (start, end)).fetchone()[0]
+    return {"plays": row[0], "artists": row[1], "tracks": row[2], "albums": row[3], "listening_days": row[4],
+            "new_artists": new}
+
+
+def _previous(s: str, e: str) -> tuple[str, str]:
+    """The period just before s..e: the same calendar months for whole-month ranges (so 2024
+    compares with 2023, March with February), otherwise the same number of days."""
+    ds, de = date.fromisoformat(s), date.fromisoformat(e)
+    if ds.day == 1 and (de + timedelta(days=1)).day == 1:
+        months = (de.year - ds.year) * 12 + de.month - ds.month + 1
+        y, m = divmod(ds.year * 12 + ds.month - 1 - months, 12)
+        return date(y, m + 1, 1).isoformat(), (ds - timedelta(days=1)).isoformat()
+    return (ds - (de - ds) - timedelta(days=1)).isoformat(), (ds - timedelta(days=1)).isoformat()
+
+
+def summary(conn: sqlite3.Connection, start: str | None = None, end: str | None = None) -> dict:
+    """Headline numbers for a local-date range (default: everything), with the previous
+    period of the same length for comparison and the artists first heard in the range."""
+    span = _clip(conn, start, end)
+    if span is None:
+        return {"empty": True}
+    s, e = span
+    if s > e:
+        return {"empty": False, "start": s, "end": e, "plays": 0, "artists": 0, "tracks": 0, "albums": 0,
+                "listening_days": 0, "new_artists": 0, "calendar_days": 0, "per_day": 0, "top10_share": 0,
+                "longest_streak": 0, "longest_streak_end": None, "previous": None, "discoveries": []}
+    out = {"empty": False, "start": s, "end": e, **_period_numbers(conn, s, e)}
+    out["calendar_days"] = _days_between(s, e)
+    out["per_day"] = out["plays"] / out["calendar_days"]
+    where, args = _range_sql(s, e)
+    top10 = conn.execute(f"SELECT SUM(n) FROM (SELECT COUNT(*) AS n FROM scrobbles s WHERE {where}"
+                         " GROUP BY artist_id ORDER BY n DESC LIMIT 10)", args).fetchone()[0]
+    out["top10_share"] = (top10 or 0) / out["plays"] if out["plays"] else 0
+    days = [r[0] for r in conn.execute(f"SELECT DISTINCT lday FROM scrobbles s WHERE {where} ORDER BY lday", args)]
+    out["longest_streak"], _, out["longest_streak_end"] = _streaks(days) if days else (0, 0, None)
+    out["previous"] = None
+    lo = conn.execute("SELECT MIN(lday) FROM scrobbles").fetchone()[0]
+    if start and s > lo:  # an explicit range with history before it
+        ps, pe = _previous(s, e)
+        out["previous"] = {"start": ps, "end": pe, "partial": ps < lo, **_period_numbers(conn, ps, pe)}
+    out["discoveries"] = _rows(conn.execute(
+        "SELECT a.id, a.name, COUNT(*) AS plays, st.first_ts, g.id AS gateway_id, g.name AS gateway_name"
+        " FROM artist_stats st JOIN artists a ON a.id = st.artist_id"
+        " JOIN scrobbles s ON s.artist_id = st.artist_id AND s.lday BETWEEN ? AND ?"
+        " LEFT JOIN artists g ON g.id = st.gateway_id"
+        " WHERE st.prehistory = 0 AND st.first_lday BETWEEN ? AND ?"
+        " GROUP BY a.id ORDER BY plays DESC, a.name LIMIT 10", (s, e, s, e)))
+    return out
+
+
+def activity(conn: sqlite3.Connection, start: str | None = None, end: str | None = None) -> dict:
+    """Plays per day (spans up to DAILY_MAX_DAYS) or per month, zero-filled, with each
+    bucket's top artist and number of new artists."""
+    span = _clip(conn, start, end)
+    if span is None or span[0] > span[1]:
+        return {"unit": "day", "items": []}
+    s, e = span
+    unit = "day" if _days_between(s, e) <= DAILY_MAX_DAYS else "month"
+    b = "s.lday" if unit == "day" else "substr(s.lday, 1, 7)"
+    where, args = _range_sql(s, e)
+    plays = dict(conn.execute(f"SELECT {b}, COUNT(*) FROM scrobbles s WHERE {where} GROUP BY 1", args))
+    nb = "first_lday" if unit == "day" else "substr(first_lday, 1, 7)"
+    new = dict(conn.execute(f"SELECT {nb}, COUNT(*) FROM artist_stats WHERE prehistory = 0"
+                            " AND first_lday BETWEEN ? AND ? GROUP BY 1", (s, e)))
+    top = {k: {"id": aid, "name": name, "plays": n} for k, aid, name, n in conn.execute(
+        f"SELECT k, artist_id, name, n FROM (SELECT {b} AS k, s.artist_id, COUNT(*) AS n,"
+        f" ROW_NUMBER() OVER (PARTITION BY {b} ORDER BY COUNT(*) DESC) AS rk FROM scrobbles s WHERE {where}"
+        " GROUP BY k, s.artist_id) t JOIN artists a ON a.id = t.artist_id WHERE rk = 1", args)}
+    if unit == "day":
+        d0 = date.fromisoformat(s)
+        keys = [(d0 + timedelta(days=i)).isoformat() for i in range(_days_between(s, e))]
+    else:
+        keys = _months(s[:7], e[:7])
+    return {"unit": unit, "items": [{"key": k, "plays": plays.get(k, 0), "new_artists": new.get(k, 0), "top": top.get(k)}
+                                    for k in keys]}
+
+
 # ---------------------------------------------------------------- top lists & clock
 
 

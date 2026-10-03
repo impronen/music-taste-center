@@ -64,6 +64,7 @@
     const iso = (d) => d.toISOString().slice(0, 10);
     const back = (days) => iso(new Date(end - days * 864e5));
     const out = [
+      { key: "7d", label: "Last 7 days", start: back(6), end: iso(end) },
       { key: "30d", label: "Last 30 days", start: back(29), end: iso(end) },
       { key: "90d", label: "Last 90 days", start: back(89), end: iso(end) },
       { key: "365d", label: "Last 12 months", start: back(364), end: iso(end) },
@@ -74,6 +75,11 @@
     return out;
   }
   function parseRange(key, ov) {
+    const c = /^(\d{4}-\d{2}-\d{2})\.\.(\d{4}-\d{2}-\d{2})$/.exec(key || "");
+    if (c) {
+      const [start, end] = c[1] <= c[2] ? [c[1], c[2]] : [c[2], c[1]];
+      return { key: `${start}..${end}`, label: start === end ? Fmt.day(start) : `${Fmt.day(start)} – ${Fmt.day(end)}`, start, end };
+    }
     const m = /^(\d{4}-\d{2})$/.exec(key || "");
     if (m) {
       const [y, mo] = m[1].split("-").map(Number);
@@ -83,61 +89,124 @@
     return periods(ov).find((p) => p.key === key) ?? periods(ov).at(-1);
   }
 
+  // Period bar: quick presets, a year/month picker and a custom date range. onChange(key).
+  const QUICK = [["7d", "7 days"], ["30d", "30 days"], ["90d", "90 days"], ["365d", "1 year"], ["all", "All time"]];
+  const isoDay = (ts) => new Date(ts * 1000).toISOString().slice(0, 10);
+  function periodBar(period, ov) {
+    const years = periods(ov).filter((p) => /^\d{4}$/.test(p.key));
+    const other = !QUICK.some(([k]) => k === period.key) && !years.some((y) => y.key === period.key);
+    const [lo, hi] = [isoDay(ov.first_ts), isoDay(ov.last_ts)];
+    return html`<div class="toolbar period-bar">
+      <div class="seg" role="group" aria-label="Period">${QUICK.map(([k, l]) => html`<button type="button" data-period="${k}" class="${k === period.key ? "on" : ""}">${l}</button>`)}</div>
+      <select id="period-year" aria-label="Year or month">
+        <option value="" ${years.some((y) => y.key === period.key) || other ? "" : raw("selected")}>Year…</option>
+        ${years.map((y) => html`<option value="${y.key}" ${y.key === period.key ? raw("selected") : ""}>${y.label}</option>`)}
+        ${other ? html`<option value="${period.key}" selected>${period.label}</option>` : ""}</select>
+      <span class="date-range"><input type="date" id="period-from" min="${lo}" max="${hi}" value="${period.start ?? lo}" aria-label="From">
+        <span class="muted">–</span><input type="date" id="period-to" min="${lo}" max="${hi}" value="${period.end ?? hi}" aria-label="To">
+        <button type="button" id="period-apply">Show</button></span>
+    </div>`;
+  }
+  function bindPeriodBar(onChange) {
+    view.querySelectorAll("[data-period]").forEach((b) => b.addEventListener("click", () => onChange(b.dataset.period)));
+    view.querySelector("#period-year").addEventListener("change", (e) => e.target.value && onChange(e.target.value));
+    const from = view.querySelector("#period-from"), to = view.querySelector("#period-to");
+    const apply = () => from.value && to.value && onChange(`${from.value}..${to.value}`);
+    view.querySelector("#period-apply").addEventListener("click", apply);
+    [from, to].forEach((i) => i.addEventListener("keydown", (e) => { if (e.key === "Enter") apply(); }));
+  }
+  const storage = {
+    get: (k) => { try { return localStorage.getItem(k); } catch { return null; } },
+    set: (k, v) => { try { localStorage.setItem(k, v); } catch { /* storage unavailable */ } },
+  };
+
   // ---------- views ----------
-  async function overviewView() {
+  async function overviewView(params) {
     const ov = await api("/api/overview");
     if (ov.empty) return emptyState();
-    const p30 = periods(ov)[0];
-    const [timeline, clock, ta, tt, tal, recent] = await Promise.all([
-      api("/api/timeline"), api("/api/clock"),
-      api("/api/top/artist?" + qs({ start: p30.start, end: p30.end, limit: 10 })),
-      api("/api/top/track?" + qs({ start: p30.start, end: p30.end, limit: 10 })),
-      api("/api/top/album?" + qs({ start: p30.start, end: p30.end, limit: 10 })),
+    const period = parseRange(params.get("period") || storage.get("mtc-period") || "30d", ov);
+    const range = { start: period.start, end: period.end };
+    const [sum, act, timeline, clock, ta, tt, tal, recent] = await Promise.all([
+      api("/api/summary?" + qs(range)), api("/api/activity?" + qs(range)), api("/api/timeline"), api("/api/clock?" + qs(range)),
+      api("/api/top/artist?" + qs({ ...range, limit: 10 })),
+      api("/api/top/track?" + qs({ ...range, limit: 10 })),
+      api("/api/top/album?" + qs({ ...range, limit: 10 })),
       api("/api/recent?limit=15"),
     ]);
+    const prev = sum.previous;
+    // Change against the previous period of the same length; text stays in text colours, the arrow carries direction.
+    const delta = (key) => {
+      if (!prev || !prev[key]) return "";
+      const d = sum[key] / prev[key] - 1;
+      if (Math.abs(d) < 0.005) return html`<span class="delta">±0 %</span>`;
+      return html`<span class="delta" title="vs the previous period"><i class="${d > 0 ? "up" : "down"}">${d > 0 ? "▲" : "▼"}</i> ${Fmt.pct(Math.abs(d))}</span>`;
+    };
+    const range_ = (a, b) => (a === b ? Fmt.day(a) : `${Fmt.day(a)} – ${Fmt.day(b)}`);
+    const unitDay = act.unit === "day";
     mount(view, html`
       <div class="page-head"><div><h1>Your listening</h1>
-        <p>${Fmt.date(ov.first_ts)} – ${Fmt.date(ov.last_ts)} · ${Fmt.int(ov.calendar_days)} days of history</p></div></div>
+        <p>${period.key === "all" ? html`${range_(sum.start, sum.end)} · ${Fmt.int(sum.calendar_days)} days of history`
+          : html`${period.key.includes("..") ? "" : `${period.label} · `}${range_(sum.start, sum.end)}${prev ? html` · <span class="muted">changes vs ${range_(prev.start, prev.end)}${prev.partial ? " (partly before your history)" : ""}</span>` : ""}`}</p></div></div>
+      ${periodBar(period, ov)}
       <div class="tiles">
-        <div class="tile hero"><div class="label">Scrobbles</div><div class="value">${Fmt.int(ov.plays)}</div>
-          <div class="sub">${Fmt.dec(ov.per_day)} per day on average</div></div>
-        <div class="tile"><div class="label">Artists</div><div class="value">${Fmt.int(ov.artists)}</div>
-          <div class="sub">top 10 = ${Fmt.pct(ov.top10_share)} of plays</div></div>
-        <div class="tile"><div class="label">Tracks</div><div class="value">${Fmt.int(ov.tracks)}</div>
-          <div class="sub">${Fmt.int(ov.albums)} albums</div></div>
-        <div class="tile"><div class="label">Listening days</div><div class="value">${Fmt.int(ov.listening_days)}</div>
-          <div class="sub">${Fmt.pct(ov.listening_days / ov.calendar_days)} of all days</div></div>
-        <div class="tile"><div class="label">Longest streak</div><div class="value">${Fmt.int(ov.longest_streak)} d</div>
-          <div class="sub">ended ${Fmt.day(ov.longest_streak_end)} · current ${Fmt.int(ov.current_streak)} d</div></div>
+        <div class="tile big"><div class="label">Scrobbles</div><div class="value">${Fmt.int(sum.plays)}</div>
+          <div class="sub">${delta("plays")} ${Fmt.dec(sum.per_day)} per day</div></div>
+        <div class="tile"><div class="label">Artists</div><div class="value">${Fmt.int(sum.artists)}</div>
+          <div class="sub">${delta("artists")} top 10 = ${Fmt.pct(sum.top10_share)} of plays</div></div>
+        <div class="tile"><div class="label">New artists</div><div class="value">${Fmt.int(sum.new_artists)}</div>
+          <div class="sub">${delta("new_artists")} first heard in this period</div></div>
+        <div class="tile"><div class="label">Tracks</div><div class="value">${Fmt.int(sum.tracks)}</div>
+          <div class="sub">${delta("tracks")} ${Fmt.int(sum.albums)} albums</div></div>
+        <div class="tile"><div class="label">Listening days</div><div class="value">${Fmt.int(sum.listening_days)}</div>
+          <div class="sub">${Fmt.pct(sum.calendar_days ? sum.listening_days / sum.calendar_days : 0)} of ${Fmt.int(sum.calendar_days)} days · longest run ${Fmt.int(sum.longest_streak)}&nbsp;d</div></div>
       </div>
       <div class="grid">
-        ${card("Scrobbles per month", html`<div class="chart" id="c-timeline"></div>`, "Hover for the month's top artist · click to open that month in the library")}
-        <div class="grid cols-2">
-          ${card("Novelty", html`<div class="chart" id="c-novelty"></div>`, "Share of plays going to artists you first heard within the previous 12 months")}
-          ${card("Listening clock", html`<div class="chart" id="c-clock"></div>`, "Plays by weekday and local hour")}
-        </div>
+        ${card(unitDay ? "Scrobbles per day" : "Scrobbles per month", html`<div class="chart" id="c-timeline"></div>`,
+          `${period.label} · hover for the top artist · click to open ${unitDay ? "that day" : "that month"} in the library`)}
         <div class="grid cols-3">
-          ${card("Top artists", rankList(ta, { nameOf: artistName }), p30.label)}
-          ${card("Top tracks", rankList(tt, { nameOf: trackName }), p30.label)}
-          ${card("Top albums", rankList(tal, { nameOf: albumName, thumbs: true }), p30.label)}
+          ${card("Top artists", rankList(ta, { nameOf: artistName }), period.label)}
+          ${card("Top tracks", rankList(tt, { nameOf: trackName }), period.label)}
+          ${card("Top albums", rankList(tal, { nameOf: albumName, thumbs: true }), period.label)}
         </div>
-        ${card("Recently played", html`<div class="table-wrap"><table><tbody>${recent.map((r) => html`
-          <tr><td>${link.track(r.track_id, r.track)}</td><td>${link.artist(r.artist_id, r.artist)}</td>
-          <td class="muted">${r.album ?? ""}</td><td class="num muted">${Fmt.date(r.ts)}</td></tr>`)}</tbody></table></div>`)}
+        <div class="grid cols-2">
+          ${card("New in this period", sum.discoveries.length ? rankList(sum.discoveries, {
+              nameOf: (r) => html`${link.artist(r.id, r.name)}<small>${Fmt.date(r.first_ts)}${r.gateway_name ? html` · after ${r.gateway_name}` : ""}</small>` })
+            : html`<p class="empty">No new artists in this period.</p>`, "Artists first heard in this period, by plays in it")}
+          ${card("Listening clock", html`<div class="chart" id="c-clock"></div>`, `${period.label} · plays by weekday and local hour`)}
+        </div>
+        <div class="grid cols-2">
+          ${card("Novelty", html`<div class="chart" id="c-novelty"></div>`, "All time · share of plays going to artists you first heard within the previous 12 months")}
+          ${card("Recently played", html`<div class="table-wrap"><table><tbody>${recent.map((r) => html`
+            <tr><td>${link.track(r.track_id, r.track)}<div class="muted small">${r.artist}</div></td>
+            <td class="num muted">${Fmt.date(r.ts)}</td></tr>`)}</tbody></table></div>`)}
+        </div>
       </div>`);
-    const yearLabel = (d) => (d.month.endsWith("-01") ? d.month.slice(0, 4) : null);
-    Charts.columns(document.getElementById("c-timeline"), timeline, {
-      value: (d) => d.plays, xLabel: yearLabel, label: "Scrobbles per month",
+    bindPeriodBar((key) => {
+      storage.set("mtc-period", key);
+      location.hash = "#/?" + qs({ period: key });
+    });
+    const items = act.items;
+    const dayLabel = (d, i) => {
+      const day = +d.key.slice(8);
+      if (items.length <= 14) return `${day}`;
+      if (items.length <= 45) return i % 7 === 0 ? Fmt.day(d.key).replace(/ \d{4}$/, "") : null;
+      return day === 1 ? Fmt.month(d.key.slice(0, 7)).replace(/ \d{4}$/, "") : null;
+    };
+    const monthLabel = (d) => (items.length <= 24 ? (d.key.endsWith("-01") ? d.key.slice(0, 4) : Fmt.month(d.key).slice(0, 3))
+      : d.key.endsWith("-01") ? d.key.slice(0, 4) : null);
+    Charts.columns(document.getElementById("c-timeline"), items, {
+      value: (d) => d.plays, xLabel: unitDay ? dayLabel : monthLabel, label: unitDay ? "Scrobbles per day" : "Scrobbles per month",
       tip: (d) => ({
-        title: Fmt.month(d.month),
+        title: unitDay ? Fmt.day(d.key) : Fmt.month(d.key),
         rows: [
           { value: Fmt.int(d.plays), label: "scrobbles" },
           ...(d.top ? [{ value: d.top.name, label: `top artist · ${Fmt.int(d.top.plays)}` }] : []),
           { value: Fmt.int(d.new_artists), label: "new artists" },
         ],
       }),
-      onClick: (d) => (location.hash = `#/library?${qs({ kind: "artist", period: d.month })}`),
+      onClick: (d) => (location.hash = `#/library?${qs({ kind: "artist", period: unitDay ? `${d.key}..${d.key}` : d.key })}`),
     });
+    const yearLabel = (d) => (d.month.endsWith("-01") ? d.month.slice(0, 4) : null);
     Charts.line(document.getElementById("c-novelty"), timeline, {
       value: (d) => d.novelty, yMax: 1, yFormat: (v) => Fmt.pct(v), xLabel: yearLabel, label: "Novelty share",
       tip: (d) => ({ title: Fmt.month(d.month), rows: [{ value: d.novelty == null ? "–" : Fmt.pct(d.novelty), label: "from recent discoveries" }] }),
@@ -163,11 +232,8 @@
       const next = { kind, period: period.key, q, sort, page: 0, ...o };
       location.hash = "#/library?" + qs({ ...next, page: next.page || null, period: next.period === "all" ? null : next.period, sort: next.sort === "plays" ? null : next.sort });
     };
-    const presets = periods(ov);
-    const toolbar = html`<div class="toolbar">
+    const toolbar = html`${periodBar(period, ov)}<div class="toolbar">
       <div class="seg" id="kind">${["artist", "track", "album", "genre"].map((k) => html`<button data-k="${k}" class="${k === kind ? "on" : ""}">${k[0].toUpperCase() + k.slice(1)}s</button>`)}</div>
-      <select id="period" aria-label="Period">${presets.map((p) => html`<option value="${p.key}" ${p.key === period.key ? raw("selected") : ""}>${p.label}</option>`)}
-        ${presets.some((p) => p.key === period.key) ? "" : html`<option value="${period.key}" selected>${period.label}</option>`}</select>
       ${kind === "artist" && period.key === "all" ? html`<input id="q" type="search" placeholder="Filter artists" value="${q}">` : ""}
     </div>`;
 
@@ -207,7 +273,7 @@
       mount(view, html`<div class="page-head"><div><h1>Library</h1><p>${period.label}</p></div></div>${toolbar}${body}`);
     }
     view.querySelectorAll("#kind button").forEach((b) => b.addEventListener("click", () => setParams({ kind: b.dataset.k })));
-    view.querySelector("#period").addEventListener("change", (e) => setParams({ period: e.target.value }));
+    bindPeriodBar((key) => setParams({ period: key }));
   }
 
   async function artistView(id) {
