@@ -73,7 +73,7 @@ def main(argv: list[str] | None = None) -> int:
                 return 1
         print(json.dumps(enrich.status(conn), indent=2))
     elif cmd == "set-key":
-        settings.save({**settings.load(), "lastfm_api_key": args.api_key.strip()})
+        settings.update(lastfm_api_key=args.api_key.strip())
         print(f"Saved to {config.SETTINGS_PATH}")
     elif cmd == "set-user":
         try:

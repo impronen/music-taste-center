@@ -399,6 +399,11 @@ class JobTests(unittest.TestCase):
             self.assertFalse(client.get("/api/settings").json()["key_works"])  # a new key isn't verified yet
             self.assertEqual(client.post("/api/metadata/key/verify").json(), {"works": True})
             self.assertTrue(client.get("/api/settings").json()["key_works"])
+        # a fetch that finished with the old key must not vouch for a key saved meanwhile
+        from mtc import settings
+        settings.mark_key_works("b" * 32)
+        settings.update(lastfm_api_key="c" * 32)
+        self.assertFalse(settings.key_works())
         bad = lambda: LastFm("k", lastfm_transport({("artist.getInfo", "Cher"): (403, {"error": 10, "message": "Invalid API key"})}),
                              min_interval=0, sleep=lambda s: None)
         with self.client(lastfm_factory=bad) as client:

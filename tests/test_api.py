@@ -103,6 +103,19 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(names, sorted(names, key=str.casefold))
         page2 = c.get("/api/library", params={"limit": 5, "offset": 5}).json()["items"]
         self.assertEqual([a["id"] for a in page2], [a["id"] for a in everything["items"][5:10]])
+        # all time is served from artist_stats; it must agree with aggregating the scrobbles
+        lo = c.get("/api/summary").json()["start"]
+        fast = c.get("/api/library", params={"limit": 500}).json()["items"]
+        slow = c.get("/api/library", params={"start": lo, "end": end, "limit": 500}).json()["items"]
+        self.assertEqual({a["id"]: (a["plays"], a["tracks"]) for a in fast}, {a["id"]: (a["plays"], a["tracks"]) for a in slow})
+        # one artist exactly (not a name match), and the artist's name comes back for the chip
+        a = everything["items"][0]
+        one = c.get("/api/library", params={"kind": "track", "artist": a["id"], "limit": 500}).json()
+        self.assertEqual(one["artist"]["name"], a["name"])
+        self.assertTrue(one["total"] and all(t["artist_id"] == a["id"] for t in one["items"]))
+        self.assertEqual(sum(t["plays"] for t in one["items"]), a["plays"])
+        past = c.get("/api/library", params={"offset": 10_000}).json()
+        self.assertEqual((past["items"], past["total"]), ([], everything["total"]))
         self.assertEqual(c.get("/api/library", params={"kind": "genre"}).json()["total"], 0)  # no tags here
         self.assertEqual(c.get("/api/library", params={"kind": "user"}).status_code, 422)
         self.assertEqual(c.get("/api/library", params={"sort": "plays; DROP"}).status_code, 422)

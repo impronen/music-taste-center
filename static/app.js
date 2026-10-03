@@ -329,17 +329,23 @@
     const q = params.get("q") || "";
     const sort = params.get("sort") || "plays";
     const page = Math.max(0, +params.get("page") || 0);
+    const artistId = +params.get("artist") || null;
     const size = 50;
     const setParams = (o) => {
-      const next = { kind, period: period.key, q, sort, page: 0, ...o };
+      const next = { kind, period: period.key, q, sort, artist: artistId, page: 0, ...o };
       location.hash = "#/library?" + qs({ ...next, page: next.page || null, period: next.period === "all" ? null : next.period,
         sort: next.sort === "plays" ? null : next.sort, kind: next.kind === "artist" ? null : next.kind });
     };
-    const data = await api("/api/library?" + qs({ kind, start: period.start, end: period.end, q, sort, limit: size, offset: page * size }));
+    // text typed while the table was loading must survive the re-render
+    const typing = view.querySelector("#q");
+    const typed = typing && document.activeElement === typing ? typing.value : null;
+    const data = await api("/api/library?" + qs({ kind, start: period.start, end: period.end, q, sort, artist: artistId, limit: size, offset: page * size }));
     const noun = KINDS.find(([k]) => k === kind)[1].toLowerCase();
     const lead = period.key === "all"
       ? html`${Fmt.int(data.total)} ${noun} you've scrobbled since ${Fmt.month(isoDay(ov.first_ts).slice(0, 7))}${q ? html`, matching “${q}”` : ""}.`
       : html`${Fmt.int(data.total)} ${noun} in ${period.days ? period.label.toLowerCase() : period.label}${q ? html`, matching “${q}”` : ""}.`;
+    const artistChip = data.artist ? html`<button type="button" class="chip" id="artist-filter" aria-label="Remove the filter for ${data.artist.name}">
+      ${data.artist.name} <span aria-hidden="true">×</span></button>` : "";
     const th = ([key, label, cls]) => {
       if (!key) return html`<th scope="col">${label}</th>`;
       const on = sort === key;
@@ -365,6 +371,7 @@
       <div class="toolbar">
         <div class="seg" role="group" aria-label="Show">${KINDS.map(([k, l]) => html`<button type="button" data-kind="${k}" aria-pressed="${String(k === kind)}">${l}</button>`)}</div>
         ${periodControls(period, ov, { compact: true })}
+        ${artistChip}
         <label class="filter grow">${icon("filter", 16)}<input id="q" type="search" placeholder="Filter ${noun}" value="${q}" aria-label="Filter ${noun}"></label>
       </div>
       <div class="table-card">
@@ -382,10 +389,16 @@
     view.querySelector("#prev").addEventListener("click", () => setParams({ page: page - 1 }));
     view.querySelector("#next").addEventListener("click", () => setParams({ page: page + 1 }));
     bindPeriodControls((key) => setParams({ period: key }));
+    view.querySelector("#artist-filter")?.addEventListener("click", () => setParams({ artist: null }));
     const qi = view.querySelector("#q");
     let t;
-    qi.addEventListener("input", () => { clearTimeout(t); t = setTimeout(() => setParams({ q: qi.value.trim() }), 300); });
-    if (q) { qi.focus(); qi.setSelectionRange(q.length, q.length); }
+    const schedule = () => { clearTimeout(t); t = setTimeout(() => setParams({ q: qi.value.trim() }), 300); };
+    qi.addEventListener("input", schedule);
+    if (typed != null && typed.trim() !== q) {
+      qi.value = typed;
+      qi.focus();
+      schedule(); // the newer text wins
+    }
   }
 
   // ---------- artist, album, track, tag ----------
@@ -467,7 +480,7 @@
     Charts.columns(document.getElementById("c-artist"), a.monthly, {
       value: (d) => d.plays, height: 190, label: "Plays per month", xLabel: (d) => (d.month.endsWith("-01") ? d.month.slice(0, 4) : null),
       tip: (d) => ({ title: Fmt.month(d.month), rows: [{ value: Fmt.int(d.plays), label: "plays" }] }),
-      onClick: (d) => (location.hash = `#/library?${qs({ kind: "track", period: d.month, q: a.name })}`),
+      onClick: (d) => (location.hash = `#/library?${qs({ kind: "track", period: d.month, artist: a.id })}`),
     });
     Charts.columns(document.getElementById("c-hours"), a.hours.map((v, h) => ({ h, v })), {
       value: (d) => d.v, height: 170, label: "Plays by hour", xLabel: (d) => (d.h % 6 === 0 || d.h === 23 ? String(d.h).padStart(2, "0") : null),
@@ -991,7 +1004,7 @@
         ${card("Import history", log.length ? html`<ul class="rows history">${log.map((r) => html`<li><span class="date">${Fmt.date(r.started_at)}</span>
             <span class="grow">${r.label ?? r.source} <span class="meta">${r.min_ts ? html`${Fmt.month(isoDay(r.min_ts).slice(0, 7))} – ${Fmt.month(isoDay(r.max_ts).slice(0, 7))}` : ""}</span></span>
             <span class="key" title="${Fmt.int(r.rows_read)} rows read, ${Fmt.int(r.rows_skipped)} skipped${r.encoding ? `, ${r.encoding}` : ""}">+${Fmt.int(r.rows_added)}
-              <span class="meta">· ${Fmt.int(Math.max(0, r.rows_read - r.rows_added - r.rows_skipped))} known</span></span></li>`)}</ul>`
+              <span class="meta">· ${Fmt.int(Math.max(0, r.rows_read - r.rows_added))} known</span></span></li>`)}</ul>`
           : html`<p class="empty box">No imports yet.</p>`)}
       </div>`);
     renderMetadata(md, job, st);
@@ -1232,12 +1245,23 @@
     [/^\/import$/, importView],
     [/^\/cleanup$/, cleanupView],
   ];
-  let routeSeq = 0, firstRoute = true;
+  let routeSeq = 0, firstRoute = true, lastPath = null;
+  // A selector that finds "the same control" again after a view re-renders.
+  function focusKey(el) {
+    if (!el || !view.contains(el)) return null;
+    if (el.id) return `#${CSS.escape(el.id)}`;
+    for (const a of ["data-sort", "data-kind", "data-period", "data-n", "data-k", "data-year", "data-to"]) {
+      if (el.hasAttribute(a)) return `[${a}="${CSS.escape(el.getAttribute(a))}"]`;
+    }
+    return null;
+  }
   async function route() {
     const hash = location.hash.slice(1) || "/";
     const [path, query = ""] = hash.split("?");
     const params = new URLSearchParams(query);
     const my = ++routeSeq;
+    const samePage = path === lastPath;
+    const restore = samePage ? focusKey(document.activeElement) : null;
     const section = (p) => (p === "/" ? path === "/" : path.startsWith(p));
     document.querySelectorAll("#nav a, .util a").forEach((a) => {
       const target = a.getAttribute("href").slice(1);
@@ -1261,11 +1285,21 @@
       if (my === routeSeq) view.classList.remove("loading");
     }
     if (my !== routeSeq) return;
-    if (!/^\/library/.test(path) || firstRoute) window.scrollTo(0, 0);
-    // move focus to the new page's heading (screen readers announce it), except on first load
-    const h1 = view.querySelector("h1");
-    if (h1 && !firstRoute && !view.contains(document.activeElement)) { h1.tabIndex = -1; h1.focus({ preventScroll: true }); }
+    if (!samePage) window.scrollTo(0, 0);
+    if (samePage) {
+      // same page, new state (sort, filter, page, period…): keep focus on the control that was used
+      const el = restore && view.querySelector(restore);
+      if (el && document.activeElement !== el) {
+        el.focus({ preventScroll: true });
+        if (el.setSelectionRange && typeof el.value === "string" && el.type !== "date") el.setSelectionRange(el.value.length, el.value.length);
+      }
+    } else if (!firstRoute) {
+      // a new page: move focus to its heading so screen readers announce it
+      const h1 = view.querySelector("h1");
+      if (h1) { h1.tabIndex = -1; h1.focus({ preventScroll: true }); }
+    }
     firstRoute = false;
+    lastPath = path;
   }
 
   setupTheme();

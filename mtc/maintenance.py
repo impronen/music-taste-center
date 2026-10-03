@@ -72,7 +72,9 @@ def merge_artists(conn: sqlite3.Connection, source_id: int, target_id: int, *, r
 
 
 def merge_preview(conn: sqlite3.Connection, source_ids: list[int], target_id: int) -> dict:
-    """What merge_artists would do, without changing anything (for the confirmation dialog)."""
+    """What merge_artists would do, without changing anything (for the confirmation dialog).
+    Each source is compared with the target; with several sources, collisions between the
+    sources themselves aren't counted (the UI previews one source at a time)."""
     if target_id in source_ids:
         raise ValueError("the target can't also be a source")
     target = conn.execute("SELECT name FROM artists WHERE id = ?", (target_id,)).fetchone()

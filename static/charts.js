@@ -321,8 +321,9 @@
         hideTip();
       });
       // keyboard: arrows move the crosshair along the series
+      const hidePoint = () => { cross.setAttribute("visibility", "hidden"); marker.setAttribute("visibility", "hidden"); };
       keyboard(svg, data.map((row, i) => ({
-        node: { classList: { add: () => point(i), remove: () => {} }, getBoundingClientRect: () => marker.getBoundingClientRect() },
+        node: { classList: { add: () => point(i), remove: hidePoint }, getBoundingClientRect: () => marker.getBoundingClientRect() },
         tip: () => opts.tip(row),
       })), { label: opts.label });
     });

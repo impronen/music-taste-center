@@ -88,6 +88,7 @@
     vb.y = (minY + maxY) / 2 - vb.h / 2;
     // labels keep a constant on-screen size whatever the zoom (each label group is scaled by k)
     let k = vb.w / width;
+    let pinnedCluster = null; // selected cluster (stays highlighted)
     const setVB = () => {
       svg.setAttribute("viewBox", `${vb.x} ${vb.y} ${vb.w} ${vb.h}`);
       k = vb.w / width;
@@ -169,7 +170,9 @@
     // hidden until their node or cluster is focused.
     function placeLabels() {
       const boxes = [];
-      for (const n of labelOrder) {
+      // the selected cluster's biggest artist is always labelled, so place it first
+      const forced = pinnedCluster != null ? byId.get(biggestPerCluster.get(pinnedCluster)) : null;
+      for (const n of forced ? [forced, ...labelOrder.filter((x) => x !== forced)] : labelOrder) {
         if (n.tw == null) n.tw = n.lblText.getComputedTextLength();
         const w = n.tw + 16, h = 22;
         n.lblBg.setAttribute("x", -w / 2); n.lblBg.setAttribute("y", -h / 2);
@@ -181,16 +184,15 @@
           const box = [cx - w / 2 - 3, cy - h / 2 - 2, cx + w / 2 + 3, cy + h / 2 + 2];
           if (!boxes.some((b) => box[0] < b[2] && box[2] > b[0] && box[1] < b[3] && box[3] > b[1])) { spot = { dy, box }; break; }
         }
-        const fits = spot && boxes.length < 14;
+        const fits = n === forced || (spot && boxes.length < 14);
         n.lbl.classList.toggle("minor", !fits);
         const dy = spot ? spot.dy : n.r / k + 15;
-        if (fits) boxes.push(spot.box);
+        if (fits && spot) boxes.push(spot.box);
         n.lbl.setAttribute("transform", `translate(${n.x} ${n.y + dy * k}) scale(${k})`);
       }
     }
     draw();
 
-    let pinnedCluster = null;
     function focusNodes(ids, center) {
       el.classList.add("focus");
       for (const n of nodes) {
@@ -215,8 +217,8 @@
         const dim = id != null && n.cluster !== id;
         n.el.classList.toggle("dim", dim);
         n.lbl.classList.toggle("dim", dim);
-        if (id != null && n.cluster === id && biggestPerCluster.get(id) === n.id) n.lbl.classList.remove("minor");
       }
+      placeLabels();
       for (const l of edgeEls) {
         const s = byId.get(l._e.source), t = byId.get(l._e.target);
         const inside = id != null && s.cluster === id && t.cluster === id;

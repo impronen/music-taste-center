@@ -110,8 +110,8 @@ def create_app(db_path: str | Path | None = None, *, lastfm_factory: Callable | 
     def library(kind: str = Query("artist", pattern="^(artist|track|album|genre)$"),
                 start: str | None = Query(None, pattern=DATE), end: str | None = Query(None, pattern=DATE),
                 q: str = Query("", max_length=200), sort: str = Query("plays", pattern="^[a-z]{1,20}$"),
-                limit: int = Query(50, ge=1, le=500), offset: int = Query(0, ge=0), c=Conn):
-        return insights.library(c, kind, start, end, q.strip(), sort, limit, offset)
+                limit: int = Query(50, ge=1, le=500), offset: int = Query(0, ge=0), artist: int | None = Query(None, ge=1), c=Conn):
+        return insights.library(c, kind, start, end, q.strip(), sort, limit, offset, artist_id=artist)
 
     @app.get("/api/artists/{artist_id}")
     def artist(artist_id: int, c=Conn):
@@ -189,8 +189,7 @@ def create_app(db_path: str | Path | None = None, *, lastfm_factory: Callable | 
     @app.put("/api/metadata/key")
     def save_key(req: KeyRequest):
         """Stores the last.fm API key in data/settings.json. The key is never sent back."""
-        values = {k: v for k, v in settings.load().items() if k != "lastfm_key_ok_at"}
-        settings.save({**values, "lastfm_api_key": req.key.strip()})
+        settings.update(lastfm_api_key=req.key.strip())
         return {"has_key": True}
 
     @app.post("/api/metadata/key/verify")
@@ -206,18 +205,18 @@ def create_app(db_path: str | Path | None = None, *, lastfm_factory: Callable | 
         except NotFound:
             pass  # last.fm answered, so the key is fine
         except Fatal as exc:
-            settings.save({k: v for k, v in settings.load().items() if k != "lastfm_key_ok_at"})
+            settings.update(lastfm_key_ok=None, lastfm_key_ok_at=None)
             return {"works": False, "error": str(exc)}
         except Exception as exc:  # network trouble is not the key's fault
             return {"works": None, "error": f"couldn't reach last.fm: {exc}"}
-        settings.save({**settings.load(), "lastfm_key_ok_at": int(__import__("time").time())})
+        settings.mark_key_works(key)
         return {"works": True}
 
     @app.get("/api/settings")
     def get_settings():
         """Non-secret settings for the UI. The API key itself is never sent back."""
         return {"lastfm_username": settings.lastfm_username(), "has_key": bool(settings.lastfm_api_key()),
-                "key_works": bool(settings.load().get("lastfm_key_ok_at")) if settings.lastfm_api_key() else False}
+                "key_works": settings.key_works()}
 
     @app.put("/api/settings/username")
     def save_username(req: UsernameRequest):

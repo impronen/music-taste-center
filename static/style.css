@@ -411,6 +411,9 @@ td.strong { font-weight: 700; }
 .chart .hit.link { cursor: pointer; }
 .chart .hit:focus-visible { stroke: var(--color-accent); stroke-width: 2; }
 .chart .bar.hl { filter: brightness(0.88); }
+/* the mark the keyboard is on */
+.chart .dot.hl, .chart .cell.hl { stroke: var(--color-text); stroke-width: 2.5; }
+.chart .hit.hl { fill: color-mix(in srgb, var(--color-text) 8%, transparent); }
 .chart .line { fill: none; stroke: light-dark(var(--color-accent-2-700), var(--color-accent-2-400)); stroke-width: 3; stroke-linejoin: round; stroke-linecap: round; }
 .chart .area { fill: light-dark(var(--color-accent-2-300), color-mix(in srgb, #7a8a5e 40%, transparent)); }
 .chart .cross { stroke: var(--baseline); stroke-width: 1.5; }
