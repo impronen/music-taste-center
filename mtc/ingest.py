@@ -3,7 +3,9 @@
 `ingest_records` is the single entry point every source goes through: the CSV importer here,
 and later a last.fm API updater (user.getrecenttracks with `from=<latest ts>`), which only has
 to yield `Scrobble` objects. Re-importing overlapping data is safe: a scrobble is identified
-by (ts, artist, track) and duplicates are ignored.
+by (ts, artist, track) and duplicates are ignored. Timestamps are stored at minute precision,
+because lastfm-to-csv dates have no seconds; flooring every source to the minute makes the same
+listen from the CSV (20:11) and the API (20:11:23) collide instead of counting twice.
 """
 import csv
 import io
@@ -182,6 +184,11 @@ class _Ids:
         return self.albums[k]
 
 
+def minute(ts: int) -> int:
+    """Floor a unix timestamp to the minute (the precision of last.fm's text dates)."""
+    return ts - ts % 60
+
+
 def local_parts(ts: int) -> tuple[str, int, int]:
     dt = datetime.fromtimestamp(ts, config.TZ)
     return dt.strftime("%Y-%m-%d"), dt.hour, dt.weekday()
@@ -211,9 +218,10 @@ def ingest_records(
             a = ids.artist(r.artist, r.artist_mbid)
             t = ids.track(a, r.track, r.track_mbid)
             al = ids.album(a, r.album, r.album_mbid)
-            rows.append((r.ts, a, t, al, import_id, *local_parts(r.ts)))
-            lo = r.ts if lo is None or r.ts < lo else lo
-            hi = r.ts if hi is None or r.ts > hi else hi
+            ts = minute(r.ts)
+            rows.append((ts, a, t, al, import_id, *local_parts(ts)))
+            lo = ts if lo is None or ts < lo else lo
+            hi = ts if hi is None or ts > hi else hi
         entity_changes = conn.total_changes - before
         conn.executemany(
             "INSERT OR IGNORE INTO scrobbles(ts, artist_id, track_id, album_id, import_id, lday, lhour, lwday)"

@@ -39,6 +39,12 @@ class ParseTests(unittest.TestCase):
         self.assertEqual(ingest.key("  The  Quiet ARCADE "), ingest.key("the quiet arcade"))
 
 
+class MinuteTests(unittest.TestCase):
+    def test_minute_floors(self):
+        self.assertEqual(ingest.minute(1400789483), 1400789460)
+        self.assertEqual(ingest.minute(1400789460), 1400789460)
+
+
 class ImportTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -79,6 +85,18 @@ class ImportTests(unittest.TestCase):
         self.assertEqual(r["rows_added"], 1)
         # casefolded name resolves to the existing artist
         self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM artists WHERE name_key = 'kärpäset'").fetchone()[0], 1)
+
+    def test_api_seconds_match_csv_minutes(self):
+        # The CSV only has "dd Mon yyyy, HH:MM"; the API gives exact seconds for the same listen.
+        artist, album, track, ts = self.rows[len(self.rows) // 2]
+        same_listen = ingest.Scrobble(artist=artist, track=track, album=album, ts=ts)
+        self.assertNotEqual(ts % 60, 0, "fixture should carry seconds")
+        r = ingest.ingest_records(self.conn, [same_listen], source="lastfm-api", label="test")
+        self.assertEqual(r["rows_added"], 0)
+        self.assertEqual(r["min_ts"] % 60, 0)
+
+    def test_stored_timestamps_are_whole_minutes(self):
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM scrobbles WHERE ts % 60 != 0").fetchone()[0], 0)
 
     def test_derived_tables(self):
         plays = self.conn.execute("SELECT SUM(plays) FROM artist_stats").fetchone()[0]
