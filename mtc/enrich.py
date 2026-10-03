@@ -7,6 +7,7 @@ Three phases, each resumable (every item is committed on its own, so Ctrl+C lose
 Items are refetched after config.METADATA_TTL_DAYS; failed ones on the next run.
 """
 import sqlite3
+import threading
 import time
 from collections.abc import Callable
 
@@ -21,6 +22,7 @@ ALBUM_MIN_PLAYS = 3  # skip albums you've barely touched
 MAX_TAGS = 25  # per artist/album; keeps storage far below last.fm's 100 MB cap
 
 Log = Callable[[str], None]
+Progress = Callable[[str, int, int, str, str | None], None]
 
 
 def _now() -> int:
@@ -214,23 +216,48 @@ def run(
     releases: int | None = None,
     refresh_days: float = config.METADATA_TTL_DAYS,
     log: Log = print,
+    progress: Progress | None = None,
+    stop: threading.Event | None = None,
 ) -> dict:
-    """Limits: None = everything pending, 0 = skip the phase."""
-    summary: dict[str, dict] = {}
+    """Limits: None = everything pending, 0 = skip the phase.
+
+    progress(phase, done, total, detail, status) is called when a phase starts (done=0) and
+    after every item. Setting `stop` ends the run between items; the summary then has
+    "stopped": True.
+    """
+    summary: dict = {}
 
     def phase(name, items, per_item_s, work):
         counts: dict[str, int] = {}
+        summary[name] = counts
+        if progress:
+            progress(name, 0, len(items), "", None)
         if not items:
             log(f"{name}: nothing to fetch")
-            summary[name] = counts
             return
         log(f"{name}: {len(items)} to fetch, about {_eta(len(items) * per_item_s)}")
         for i, item in enumerate(items, 1):
+            if stop is not None and stop.is_set():
+                raise _Stopped
             status, detail = work(item)
             counts[status] = counts.get(status, 0) + 1
             log(f"  [{i}/{len(items)}] {detail} — {status}")
-        summary[name] = counts
+            if progress:
+                progress(name, i, len(items), detail, status)
 
+    try:
+        _phases(conn, phase, lastfm, musicbrainz, artists, albums, releases, refresh_days)
+    except _Stopped:
+        log("stopped; everything fetched so far is saved")
+        summary["stopped"] = True
+    return summary
+
+
+class _Stopped(Exception):
+    pass
+
+
+def _phases(conn, phase, lastfm, musicbrainz, artists, albums, releases, refresh_days) -> None:
     lf_interval = lastfm.min_interval if lastfm else config.LASTFM_MIN_INTERVAL_S
     if artists != 0:
         items = pending_artists(conn, artists, refresh_days)
@@ -260,7 +287,6 @@ def run(
             date = conn.execute("SELECT release_date FROM album_info WHERE album_id = ?", (it[0],)).fetchone()[0]
             return status, f"{it[1]} – {it[2]}" + (f" · {date}" if date else "")
         phase("releases", items, 1.5 * config.MUSICBRAINZ_MIN_INTERVAL_S, do_release)
-    return summary
 
 
 def _key() -> str:
@@ -294,6 +320,7 @@ def status(conn: sqlite3.Connection) -> dict:
                                " GROUP BY album_id HAVING COUNT(*) >= ?)", ALBUM_MIN_PLAYS),
         "albums_done": one("SELECT COUNT(*) FROM album_info WHERE status IN ('ok', 'not_found')"),
         "albums_dated": one("SELECT COUNT(*) FROM album_info WHERE release_date IS NOT NULL"),
+        "albums_with_cover": one("SELECT COUNT(*) FROM album_info WHERE image_url IS NOT NULL"),
         "plays_covered": one("SELECT COUNT(*) FROM scrobbles WHERE artist_id IN (SELECT artist_id FROM artist_tags)"),
         "plays": one("SELECT COUNT(*) FROM scrobbles"),
         "last_fetch": one("SELECT MAX(fetched_at) FROM artist_info"),

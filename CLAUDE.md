@@ -6,6 +6,7 @@ Local FastAPI + SQLite app (Python 3.14, vanilla JS in `static/`). See README fo
 - Run: `.venv/bin/python app.py` (http://127.0.0.1:8765). The server does not auto-reload; restart after Python changes.
 - Import: `.venv/bin/python -m mtc import file.csv`. Rebuild derived tables or local times: `python -m mtc rebuild`
 - Metadata: `python -m mtc set-key KEY`, then `python -m mtc enrich` (last.fm tags + MusicBrainz dates; resumable)
+  - The UI's Import page does the same via `/api/metadata/key` and `/api/metadata/job` (`mtc/jobs.py`, a background thread)
 - Tests: `TZ=Europe/Helsinki .venv/bin/python -m unittest discover -s tests -t .`
 - JS syntax: `node --check static/*.js`
 
@@ -15,6 +16,7 @@ Local FastAPI + SQLite app (Python 3.14, vanilla JS in `static/`). See README fo
 - Every source (CSV, a future last.fm API updater) goes through `ingest.ingest_records`.
 - External APIs go through `webapi.JsonApi` subclasses (throttle, User-Agent, retries). Tests use fake transports only, never the network. Don't lower `LASTFM_MIN_INTERVAL_S` (0.5) or `MUSICBRAINZ_MIN_INTERVAL_S` (1.1).
 - `data/settings.json` holds the API key: never print or commit it.
+- Non-GET `/api` requests with a foreign `Origin` are refused (the server is reachable from any website via localhost); keep it that way.
 - SQL is always parameterized. In the UI, data goes through the `html` tagged template (escapes by default) or `textContent`.
 - Numbers use Finnish formatting (`Fmt.int` gives `12 345`). No locale compact notation.
 - Colours are CSS tokens in `static/style.css`, from the Friends onThe Web palette. Re-run the dataviz palette validator if you change the categorical slots.

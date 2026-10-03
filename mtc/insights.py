@@ -151,8 +151,9 @@ def top(conn: sqlite3.Connection, kind: str, start: str | None, end: str | None,
         )
     elif kind == "album":
         sql = (
-            "SELECT al.id, al.title AS name, a.id AS artist_id, a.name AS artist, COUNT(*) AS plays FROM scrobbles s"
-            " JOIN albums al ON al.id = s.album_id JOIN artists a ON a.id = s.artist_id"
+            "SELECT al.id, al.title AS name, a.id AS artist_id, a.name AS artist, COUNT(*) AS plays, i.image_url"
+            " FROM scrobbles s JOIN albums al ON al.id = s.album_id JOIN artists a ON a.id = s.artist_id"
+            " LEFT JOIN album_info i ON i.album_id = al.id"
             f" WHERE {where} GROUP BY al.id ORDER BY plays DESC, al.title LIMIT ?"
         )
     else:
@@ -262,7 +263,7 @@ def artist(conn: sqlite3.Connection, artist_id: int) -> dict | None:
         " GROUP BY t.id ORDER BY plays DESC, t.title LIMIT 50", (artist_id,)))
     info["albums"] = _rows(conn.execute(
         "SELECT al.id, al.title AS name, COUNT(*) AS plays, COUNT(DISTINCT s.track_id) AS n_tracks,"
-        " MIN(s.ts) AS first_ts, i.release_date FROM scrobbles s JOIN albums al ON al.id = s.album_id"
+        " MIN(s.ts) AS first_ts, i.release_date, i.image_url FROM scrobbles s JOIN albums al ON al.id = s.album_id"
         " LEFT JOIN album_info i ON i.album_id = al.id WHERE s.artist_id = ?"
         " GROUP BY al.id ORDER BY plays DESC LIMIT 30", (artist_id,)))
     info["led_to"] = _rows(conn.execute(
@@ -272,6 +273,10 @@ def artist(conn: sqlite3.Connection, artist_id: int) -> dict | None:
     info["hours"] = [sum(day[h] for day in clock(conn, artist_id=artist_id)) for h in range(24)]
     meta = conn.execute("SELECT * FROM artist_info WHERE artist_id = ?", (artist_id,)).fetchone()
     info["meta"] = dict(meta) if meta else None
+    # last.fm no longer serves artist photos (only a placeholder), so fall back to the cover
+    # of the artist's most-played album.
+    info["image_url"] = (info["meta"] or {}).get("image_url") or next(
+        (al["image_url"] for al in info["albums"] if al["image_url"]), None)
     info["tags"] = _tags_of(conn, "artist_tags", "artist_id", artist_id)
     return info
 

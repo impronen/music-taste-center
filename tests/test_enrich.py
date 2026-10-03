@@ -1,15 +1,19 @@
 """Metadata layer tests. All HTTP goes through a fake transport shaped like the real
 last.fm / MusicBrainz JSON (captured 2026-10), so nothing touches the network."""
 import json
+import os
 import re
 import tempfile
+import threading
+import time
 import unittest
 import urllib.parse
 from pathlib import Path
+from unittest import mock
 
 from fastapi.testclient import TestClient
 
-from mtc import db, enrich, ingest, insights, tags
+from mtc import config, db, enrich, ingest, insights, tags
 from mtc.api import create_app
 from mtc.lastfm import LastFm, tag_list
 from mtc.musicbrainz import MusicBrainz, lucene_quote
@@ -263,6 +267,119 @@ class EnrichTests(unittest.TestCase):
         self.assertEqual(detail["meta"]["status"], "ok")
         self.assertTrue(detail["tags"])
         self.assertTrue(client.get("/api/eras").json()[0]["genres"])
+
+
+class JobTests(unittest.TestCase):
+    """The UI's "Fetch" button: enrich.run in a background thread behind /api/metadata/job."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.path = Path(self.tmp.name) / "j.db"
+        conn = db.connect(self.path)
+        ingest.import_csv_text(conn, synthetic.to_csv(synthetic.generate(days=400)), label="t.csv", encoding="utf-8")
+        conn.close()
+        self.gate = threading.Event()
+        self.gate.set()
+        clk = FakeClock()
+
+        def gated(transport):
+            def t(url, headers, timeout):
+                self.assertTrue(self.gate.wait(10))
+                return transport(url, headers, timeout)
+            return t
+        self.lf = lambda: LastFm("k", gated(lastfm_transport()), min_interval=0, sleep=clk.sleep, clock=clk.clock)
+        self.mb = lambda: MusicBrainz(gated(mb_transport()), min_interval=0, sleep=clk.sleep, clock=clk.clock)
+        self.env = mock.patch.dict(os.environ, {"LASTFM_API_KEY": ""})
+        self.settings = mock.patch.object(config, "SETTINGS_PATH", Path(self.tmp.name) / "settings.json")
+        self.env.start()
+        self.settings.start()
+
+    def tearDown(self):
+        self.gate.set()
+        self.env.stop()
+        self.settings.stop()
+        self.tmp.cleanup()
+
+    def client(self, **factories):
+        return TestClient(create_app(self.path, **factories))
+
+    def wait_until_finished(self, client) -> dict:
+        deadline = time.monotonic() + 20
+        while time.monotonic() < deadline:
+            job = client.get("/api/metadata/job").json()
+            if job["state"] not in ("running", "stopping"):
+                return job
+            time.sleep(0.02)
+        self.fail("job did not finish")
+
+    def test_fetch_stop_and_resume(self):
+        with self.client(lastfm_factory=self.lf, musicbrainz_factory=self.mb) as client:
+            self.assertEqual(client.get("/api/metadata/job").json()["state"], "idle")
+            pending = client.get("/api/metadata/status").json()["pending_artists"]
+            self.assertGreater(pending, 0)
+            self.gate.clear()  # hold the first request so the job is surely still running
+            started = client.post("/api/metadata/job")
+            self.assertEqual(started.status_code, 202)
+            self.assertEqual(started.json()["phases"]["artists"]["total"], pending)
+            self.assertEqual(client.post("/api/metadata/job").status_code, 409)
+            self.assertEqual(client.post("/api/metadata/job/stop").json()["state"], "stopping")
+            self.gate.set()
+            job = self.wait_until_finished(client)
+            self.assertEqual(job["state"], "stopped")
+            self.assertEqual(job["phases"]["artists"]["done"], 1)  # the item in flight was finished and saved
+            self.assertEqual(job["phases"]["albums"]["state"], "queued")
+            self.assertEqual(client.get("/api/metadata/status").json()["pending_artists"], pending - 1)
+
+            # Fetching again continues where it stopped and runs all three phases.
+            self.assertEqual(client.post("/api/metadata/job").status_code, 202)
+            job = self.wait_until_finished(client)
+            self.assertEqual(job["state"], "done", job.get("error"))
+            self.assertEqual(job["phases"]["artists"]["done"], pending - 1)
+            self.assertTrue(all(p["state"] == "done" for p in job["phases"].values()))
+            self.assertIsNone(job["eta_s"])
+            md = client.get("/api/metadata/status").json()
+            self.assertEqual((md["pending_artists"], md["pending_albums"], md["pending_releases"]), (0, 0, 0))
+            self.assertGreater(md["albums_with_cover"], 0)
+            # covers reach the lists, and artist pages fall back to their top album's cover
+            albums = client.get("/api/top/album?limit=5").json()
+            self.assertTrue(all(a["image_url"] == "https://img/x.png" for a in albums))
+            artist = client.get(f"/api/artists/{albums[0]['artist_id']}").json()
+            self.assertIsNone(artist["meta"]["image_url"])
+            self.assertEqual(artist["image_url"], "https://img/x.png")
+
+    def test_partial_fetch(self):
+        with self.client(lastfm_factory=self.lf, musicbrainz_factory=self.mb) as client:
+            client.post("/api/metadata/job", json={"artists": 3, "albums": 0, "releases": 0})
+            job = self.wait_until_finished(client)
+            self.assertEqual(job["phases"]["artists"]["done"], 3)
+            self.assertEqual(job["phases"]["albums"]["state"], "skipped")
+            self.assertEqual(client.post("/api/metadata/job", json={"artists": -1}).status_code, 422)
+
+    def test_api_key_from_the_ui(self):
+        with self.client() as client:
+            self.assertFalse(client.get("/api/metadata/status").json()["has_key"])
+            r = client.post("/api/metadata/job")
+            self.assertEqual(r.status_code, 400)
+            self.assertIn("API key", r.json()["detail"])
+            self.assertEqual(client.put("/api/metadata/key", json={"key": "not a key!"}).status_code, 422)
+            key = "0123456789abcdef0123456789abcdef"
+            r = client.put("/api/metadata/key", json={"key": f" {key} "})
+            self.assertEqual(r.json(), {"has_key": True})
+            self.assertNotIn(key, r.text)
+            self.assertTrue(client.get("/api/metadata/status").json()["has_key"])
+            self.assertEqual(json.loads(config.SETTINGS_PATH.read_text())["lastfm_api_key"], key)
+            self.assertEqual(config.SETTINGS_PATH.stat().st_mode & 0o777, 0o600)
+
+    def test_cross_origin_writes_are_refused(self):
+        with self.client() as client:
+            evil = {"origin": "https://evil.example"}
+            self.assertEqual(client.post("/api/metadata/job", headers=evil).status_code, 403)
+            self.assertEqual(client.put("/api/metadata/key", json={"key": "a" * 32}, headers=evil).status_code, 403)
+            self.assertFalse(config.SETTINGS_PATH.exists())
+            self.assertEqual(client.post("/api/import", content=b"x", headers=evil).status_code, 403)
+            self.assertEqual(client.get("/api/overview", headers=evil).status_code, 200)  # reads are fine
+            self.assertEqual(client.put("/api/metadata/key", json={"key": "a" * 32},
+                                        headers={"origin": "http://testserver"}).status_code, 200)
 
 
 if __name__ == "__main__":

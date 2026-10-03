@@ -39,11 +39,12 @@
       ? html`<span class="chip muted">${t.name}</span>`
       : html`<a class="chip ${t.kind === "place" ? "place" : ""}" href="#/tag/${t.id}">${t.name}</a>`)}</div>` : "");
 
-  function rankList(items, { nameOf, max, extra } = {}) {
+  const thumb = (url) => (url ? html`<img class="thumb" src="${url}" alt="" loading="lazy" referrerpolicy="no-referrer">` : html`<span class="thumb"></span>`);
+  function rankList(items, { nameOf, max, extra, thumbs = false } = {}) {
     if (!items.length) return html`<p class="empty">Nothing here yet.</p>`;
     const top = max ?? Math.max(...items.map((i) => i.plays));
-    return html`<ol class="rank">${items.map((it, i) => html`
-      <li><span class="pos">${i + 1}</span>
+    return html`<ol class="rank ${thumbs ? "thumbs" : ""}">${items.map((it, i) => html`
+      <li><span class="pos">${i + 1}</span>${thumbs ? thumb(it.image_url) : ""}
         <span class="name">${nameOf(it)}</span>
         <span class="num secondary">${extra ? extra(it) : Fmt.int(it.plays)}</span>
         <span class="bar"><i style="width:${((it.plays / top) * 100).toFixed(1)}%"></i></span></li>`)}</ol>`;
@@ -118,7 +119,7 @@
         <div class="grid cols-3">
           ${card("Top artists", rankList(ta, { nameOf: artistName }), p30.label)}
           ${card("Top tracks", rankList(tt, { nameOf: trackName }), p30.label)}
-          ${card("Top albums", rankList(tal, { nameOf: albumName }), p30.label)}
+          ${card("Top albums", rankList(tal, { nameOf: albumName, thumbs: true }), p30.label)}
         </div>
         ${card("Recently played", html`<div class="table-wrap"><table><tbody>${recent.map((r) => html`
           <tr><td>${link.track(r.track_id, r.track)}</td><td>${link.artist(r.artist_id, r.artist)}</td>
@@ -197,12 +198,12 @@
             nameOf: (r) => html`<a href="#/tag/${r.id}">${r.name}</a><small>${r.artists.map((a) => a.name).join(", ")}</small>`,
             extra: (r) => Fmt.pct(r.share),
           }), `${period.label} · each artist's plays split across its top last.fm genre tags · covers ${Fmt.pct(g.coverage)} of plays`)
-        : card("Top genres", html`<p class="empty">No genre data yet. Run <code>python -m mtc enrich</code> to fetch tags from last.fm (see <a href="#/import">Import</a>).</p>`);
+        : card("Top genres", html`<p class="empty">No genre data yet. Fetch tags from last.fm on the <a href="#/import">Import</a> page.</p>`);
       mount(view, html`<div class="page-head"><div><h1>Library</h1><p>${period.label}</p></div></div>${toolbar}${body}`);
     } else {
       const items = await api(`/api/top/${kind}?` + qs({ start: period.start, end: period.end, limit: 200 }));
       const nameOf = { artist: artistName, track: trackName, album: albumName }[kind];
-      body = card(`Top ${kind}s`, rankList(items, { nameOf }), period.label);
+      body = card(`Top ${kind}s`, rankList(items, { nameOf, thumbs: kind === "album" }), period.label);
       mount(view, html`<div class="page-head"><div><h1>Library</h1><p>${period.label}</p></div></div>${toolbar}${body}`);
     }
     view.querySelectorAll("#kind button").forEach((b) => b.addEventListener("click", () => setParams({ kind: b.dataset.k })));
@@ -220,7 +221,10 @@
         : html`as the first thing in a session`;
     const meta = a.meta?.status === "ok" ? a.meta : null;
     mount(view, html`
-      <div class="hero"><div><div class="kicker">Artist · #${Fmt.int(a.rank)} all time</div><h1>${a.name}</h1>${tagChips(a.tags)}</div>
+      <div class="hero ${a.image_url ? "album-hero" : ""}">
+        ${a.image_url ? html`<img class="cover" src="${a.image_url}" alt="" loading="lazy" referrerpolicy="no-referrer"
+          title="${a.meta?.image_url ? "" : "Cover of your most-played album"}">` : ""}
+        <div><div class="kicker">Artist · #${Fmt.int(a.rank)} all time</div><h1>${a.name}</h1>${tagChips(a.tags)}</div>
         <div class="links">${meta?.listeners ? html`<span class="muted">${Fmt.compact(meta.listeners)} last.fm listeners</span>` : ""}
           <a href="${meta?.url || lastfm}" target="_blank" rel="noopener noreferrer">last.fm ↗</a><a href="${meta?.mbid ? `https://musicbrainz.org/artist/${meta.mbid}` : mb}" target="_blank" rel="noopener noreferrer">MusicBrainz ↗</a></div></div>
       <div class="tiles">
@@ -234,7 +238,7 @@
         ${card("Plays per month", html`<div class="chart" id="c-artist"></div>`, html`Discovered ${discovered}`)}
         <div class="grid cols-3">
           ${card("Top tracks", rankList(a.tracks.slice(0, 15), { nameOf: (t) => link.track(t.id, t.name) }))}
-          ${card("Albums", rankList(a.albums.slice(0, 15), { nameOf: (t) => html`${link.album(t.id, t.name)}<small>${t.release_date ? `${year(t.release_date)} · ` : ""}${t.n_tracks} tracks</small>` }))}
+          ${card("Albums", rankList(a.albums.slice(0, 15), { thumbs: true, nameOf: (t) => html`${link.album(t.id, t.name)}<small>${t.release_date ? `${year(t.release_date)} · ` : ""}${t.n_tracks} tracks</small>` }))}
           ${card("Listened alongside", a.related.length ? html`<ol class="rank">${a.related.map((r, i) => html`
               <li><span class="pos">${i + 1}</span><span class="name">${link.artist(r.id, r.name)}</span>
               <span class="num secondary" title="shared sessions">${Fmt.int(r.shared)}</span>
@@ -410,7 +414,8 @@
   }
 
   async function importView() {
-    const [log, md] = await Promise.all([api("/api/imports", { fresh: true }), api("/api/metadata/status", { fresh: true })]);
+    const [log, md, job] = await Promise.all([api("/api/imports", { fresh: true }), api("/api/metadata/status", { fresh: true }),
+      api("/api/metadata/job", { fresh: true })]);
     mount(view, html`
       <div class="page-head"><div><h1>Import</h1>
         <p>Drop a CSV from lastfm-to-csv. Re-importing a full export is safe: scrobbles already in the database are skipped.</p></div></div>
@@ -426,26 +431,15 @@
           <dt>CLI</dt><dd><code>.venv/bin/python -m mtc import export.csv</code></dd>
         </dl>`)}
       </div>
-      <div class="grid" style="margin-top:16px">${card("Tags & release dates", html`
-        <div class="tiles" style="margin-bottom:12px">
-          <div class="tile"><div class="label">Artists with tags</div><div class="value">${Fmt.int(md.artists_tagged)}</div>
-            <div class="sub">${Fmt.int(md.artists_done)} of ${Fmt.int(md.artists)} looked up</div></div>
-          <div class="tile"><div class="label">Plays with genre info</div><div class="value">${Fmt.pct(md.plays ? md.plays_covered / md.plays : 0)}</div></div>
-          <div class="tile"><div class="label">Albums with release date</div><div class="value">${Fmt.int(md.albums_dated)}</div>
-            <div class="sub">${Fmt.int(md.albums_done)} of ${Fmt.int(md.albums_eligible)} albums (3+ plays) looked up</div></div>
-        </div>
-        <dl class="kv">
-          ${md.has_key ? "" : html`<dt>1. API key</dt><dd>Create one at <a href="https://www.last.fm/api/account/create" target="_blank" rel="noopener noreferrer">last.fm/api/account/create ↗</a>, then <code>.venv/bin/python -m mtc set-key YOUR_KEY</code></dd>`}
-          <dt>${md.has_key ? "Fetch" : "2. Fetch"}</dt><dd><code>.venv/bin/python -m mtc enrich</code>: most-played first, about 1 s per artist or album at last.fm's polite pace. Stop any time with Ctrl+C, and run it again to continue or after new imports.</dd>
-          <dt>Sources</dt><dd>Tags, listener counts and album art from last.fm; release dates from MusicBrainz (year tags as a fallback)</dd>
-          ${md.last_fetch ? html`<dt>Last fetch</dt><dd>${Fmt.date(md.last_fetch)}</dd>` : ""}
-        </dl>`, "Lookups send artist and album names to last.fm and MusicBrainz; your listening history itself stays on this machine")}
+      <div class="grid" style="margin-top:16px">${card("Tags, covers & release dates", html`<div id="md"></div>`,
+          "Lookups send artist and album names to last.fm and MusicBrainz, and covers load from last.fm; your listening history itself stays on this machine")}
       ${card("Import history", log.length ? html`<div class="table-wrap"><table>
         <thead><tr><th>When</th><th>Source</th><th>File</th><th class="num">Read</th><th class="num">Added</th><th class="num">Skipped</th><th>Covers</th></tr></thead>
         <tbody>${log.map((r) => html`<tr><td>${Fmt.date(r.started_at)}</td><td>${r.source}</td><td>${r.label ?? ""} <span class="muted">${r.encoding ?? ""}</span></td>
           <td class="num">${Fmt.int(r.rows_read)}</td><td class="num">${Fmt.int(r.rows_added)}</td><td class="num">${Fmt.int(r.rows_skipped)}</td>
           <td class="muted">${r.min_ts ? html`${Fmt.date(r.min_ts)} – ${Fmt.date(r.max_ts)}` : "–"}</td></tr>`)}</tbody></table></div>`
         : html`<p class="empty">No imports yet.</p>`)}</div>`);
+    renderMetadata(md, job);
     const drop = view.querySelector("#drop");
     const input = view.querySelector("#file");
     const result = view.querySelector("#result");
@@ -471,6 +465,128 @@
       drop.classList.remove("over");
       if (e.dataTransfer.files[0]) upload(e.dataTransfer.files[0]);
     });
+  }
+
+  // ---------- metadata fetch (background job on the server) ----------
+  const PHASE_LABEL = { artists: "Artist tags", albums: "Album tags & covers", releases: "Release dates (MusicBrainz)" };
+  const duration = (s) => (s < 90 ? `${Math.max(1, Math.round(s))} s` : s < 5400 ? `${Math.round(s / 60)} min` : `${Fmt.dec(s / 3600, 1)} h`);
+  const active = (job) => job && (job.state === "running" || job.state === "stopping");
+  const jobPercent = (job) => {
+    const ph = Object.values(job.phases ?? {}).filter((p) => p.state !== "skipped");
+    const total = ph.reduce((n, p) => n + Math.max(p.total, p.done), 0);
+    return total ? ph.reduce((n, p) => n + p.done, 0) / total : 0;
+  };
+  async function postJson(path, body, method = "POST") {
+    const res = await fetch(path, { method, headers: { "content-type": "application/json" }, body: JSON.stringify(body ?? {}) });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(typeof data.detail === "string" ? data.detail : res.status === 422 ? "That doesn't look like a last.fm API key" : `HTTP ${res.status}`);
+    return data;
+  }
+
+  function renderMetadata(md, job) {
+    const box = document.getElementById("md");
+    if (!box) return;
+    const tiles = html`<div class="tiles" id="md-tiles">
+        <div class="tile"><div class="label">Artists with tags</div><div class="value">${Fmt.int(md.artists_tagged)}</div>
+          <div class="sub">${Fmt.int(md.artists_done)} of ${Fmt.int(md.artists)} looked up</div></div>
+        <div class="tile"><div class="label">Plays with genre info</div><div class="value">${Fmt.pct(md.plays ? md.plays_covered / md.plays : 0)}</div></div>
+        <div class="tile"><div class="label">Album covers</div><div class="value">${Fmt.int(md.albums_with_cover)}</div>
+          <div class="sub">${Fmt.int(md.albums_done)} of ${Fmt.int(md.albums_eligible)} albums (3+ plays) looked up</div></div>
+        <div class="tile"><div class="label">Albums with release date</div><div class="value">${Fmt.int(md.albums_dated)}</div></div>
+      </div>`;
+    const keyForm = html`<form class="key-form" id="key-form" autocomplete="off">
+        <input id="key" type="password" spellcheck="false" placeholder="Paste your last.fm API key" aria-label="last.fm API key" required>
+        <button class="${md.has_key ? "" : "primary"}" type="submit">Save key</button><span class="muted" id="key-msg"></span></form>`;
+    const keyHelp = html`Get a free key at <a href="https://www.last.fm/api/account/create" target="_blank" rel="noopener noreferrer">last.fm/api/account/create ↗</a>
+      (any app name works). It's stored only in <code>data/settings.json</code> on this machine.`;
+    mount(box, html`${tiles}
+      ${md.has_key ? "" : html`<div class="key-box"><strong>Step 1: last.fm API key</strong><p class="muted">${keyHelp}</p>${keyForm}</div>`}
+      <div id="md-job"></div>
+      <dl class="kv">
+        <dt>Sources</dt><dd>Tags, listener counts and album covers from last.fm; release dates from MusicBrainz (year tags as a fallback). Artist pages use the cover of your most-played album, because last.fm no longer serves artist photos.</dd>
+        <dt>Pace</dt><dd>Most-played first, about 1 s per artist or album and 1,5 s per release date. Stopping or closing the app loses nothing; the next fetch continues where it left off and also picks up new imports and anything older than 120 days.</dd>
+        ${md.last_fetch ? html`<dt>Last fetch</dt><dd>${Fmt.date(md.last_fetch)}</dd>` : ""}
+        <dt>CLI</dt><dd><code>.venv/bin/python -m mtc enrich</code> does the same from a terminal</dd>
+      </dl>
+      ${md.has_key ? html`<details class="key-change"><summary>Change API key</summary><p class="muted">${keyHelp}</p>${keyForm}</details>` : ""}`);
+    renderJob(md, job);
+    box.querySelector("#key-form").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const msg = box.querySelector("#key-msg");
+      try {
+        await postJson("/api/metadata/key", { key: box.querySelector("#key").value }, "PUT");
+        route();
+      } catch (err) {
+        msg.textContent = err.message;
+      }
+    });
+  }
+
+  function renderJob(md, job) {
+    const el = document.getElementById("md-job");
+    if (!el) return;
+    const waiting = md.pending_artists + md.pending_albums + md.pending_releases;
+    const estimate = (md.pending_artists + md.pending_albums) * 1.3 + (md.pending_releases + md.pending_albums) * 1.65;
+    const phases = job?.phases ? html`<div class="phases">${Object.entries(job.phases).filter(([, p]) => p.state !== "skipped" && (active(job) || p.state !== "queued")).map(([name, p]) => {
+      const total = Math.max(p.total, p.done);
+      const failed = (p.counts.error ?? 0);
+      return html`<div class="phase ${p.state}">
+        <div class="phase-head"><span>${PHASE_LABEL[name]}</span>
+          <span class="muted num">${p.state === "queued" ? (total ? `≈ ${Fmt.int(total)} waiting` : "waiting") : `${Fmt.int(p.done)} / ${Fmt.int(total)}`}${p.counts.not_found ? ` · ${Fmt.int(p.counts.not_found)} not found` : ""}${failed ? ` · ${Fmt.int(failed)} failed` : ""}</span></div>
+        <div class="progress"><i style="width:${(total ? (p.done / total) * 100 : p.state === "done" ? 100 : 0).toFixed(1)}%"></i></div></div>`;
+    })}</div>` : "";
+    let head;
+    if (active(job)) {
+      head = html`<div class="job-bar"><div><strong>${job.state === "stopping" ? "Stopping after the current item…" : `Fetching · ${Fmt.pct(jobPercent(job))}`}</strong>
+          <div class="muted">${job.current ? html`Last: ${job.current}` : "Starting…"}${job.eta_s ? ` · about ${duration(job.eta_s)} left` : ""}</div></div>
+        <button id="job-stop" type="button" ${job.state === "stopping" ? "disabled" : ""}>Stop</button></div>`;
+    } else {
+      const outcome = job?.state === "done" ? html`<div class="notice">Finished ${Fmt.date(job.finished_at)}. Views now include the new tags and covers.</div>`
+        : job?.state === "stopped" ? html`<div class="notice">Stopped. Everything fetched so far is saved; fetch again to continue.</div>`
+        : job?.state === "failed" ? html`<div class="notice err">Stopped with an error: ${job.error}</div>` : "";
+      head = html`${outcome}<div class="job-bar"><div>
+          <strong>${waiting ? `${Fmt.int(md.pending_artists)} artists and ${Fmt.int(md.pending_albums)} albums to look up` : "Everything is up to date"}</strong>
+          <div class="muted">${waiting ? `${md.pending_releases ? `plus ${Fmt.int(md.pending_releases)} release dates · ` : ""}about ${duration(estimate)}, most-played first`
+            : "All artists and albums with 3+ plays were looked up in the last 120 days"}</div></div>
+        <button class="primary" id="job-start" type="button" ${md.has_key && waiting ? "" : "disabled"}>Fetch tags &amp; covers</button></div>`;
+    }
+    mount(el, html`${head}${phases}${active(job) && job.log.length ? html`<ol class="job-log">${job.log.slice().reverse().map((l) =>
+      html`<li><span class="status ${l.status}">${l.status === "ok" ? "✓" : l.status === "not_found" ? "–" : "!"}</span>${l.item}</li>`)}</ol>` : ""}`);
+    el.querySelector("#job-stop")?.addEventListener("click", async () => { renderJob(md, await postJson("/api/metadata/job/stop")); });
+    el.querySelector("#job-start")?.addEventListener("click", async (e) => {
+      e.target.disabled = true;
+      try {
+        const started = await postJson("/api/metadata/job");
+        renderJob(md, started);
+        watchJob(started);
+      } catch (err) {
+        mount(el, html`<div class="notice err">Couldn't start: ${err.message}</div>`);
+      }
+    });
+  }
+
+  // Polls while a fetch runs (whatever page is open): updates the nav badge and the Import page.
+  let jobTimer = null, polls = 0;
+  async function watchJob(known) {
+    clearTimeout(jobTimer);
+    let job = known;
+    try { job = known ?? await api("/api/metadata/job", { fresh: true }); } catch { return; }
+    const badge = document.getElementById("job-badge");
+    badge.hidden = !active(job);
+    badge.textContent = active(job) ? Fmt.pct(jobPercent(job)) : "";
+    badge.title = active(job) ? "Fetching tags and covers" : "";
+    if (active(job)) {
+      if (!known && document.getElementById("md-job")) {
+        const refreshTiles = ++polls % 4 === 0;
+        const md = await api("/api/metadata/status", { fresh: refreshTiles || !cache.has("/api/metadata/status") });
+        if (refreshTiles) renderMetadata(md, job); else renderJob(md, job);
+      }
+      jobTimer = setTimeout(() => watchJob(), 1500);
+    } else if (!known && job.state && job.state !== "idle" && job.finished_at && job.finished_at !== watchJob.seen) {
+      watchJob.seen = job.finished_at;
+      cache.clear(); // tags, covers and genres changed
+      if (document.getElementById("md-job")) renderMetadata(await api("/api/metadata/status", { fresh: true }), job);
+    }
   }
 
   // ---------- search ----------
@@ -569,6 +685,7 @@
 
   setupTheme();
   setupSearch();
+  watchJob();
   window.addEventListener("hashchange", route);
   route();
 })();

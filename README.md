@@ -56,6 +56,7 @@ mtc/
   ingest.py      CSV parsing + ingest_records(): the single entry point for any source
   derive.py      sessions, artist stats, gateways, co-listening links (rebuilt after each import)
   enrich.py      resumable metadata fetch (artists, albums, release dates)
+  jobs.py        background fetch for the UI's button (one at a time, progress, stop)
   lastfm.py      last.fm client (read-only methods, JSON quirks)
   musicbrainz.py MusicBrainz client (release-group dates)
   webapi.py      shared throttled HTTP client with retries; transport injectable for tests
@@ -67,7 +68,11 @@ static/          vanilla JS UI (app.js router/views, charts.js SVG charts, graph
 tests/           unittest suite + synthetic history generator (fictional names only)
 ```
 
-## Tags, genres and release dates
+## Tags, covers, genres and release dates
+
+In the app: **Import → Tags, covers & release dates**. Paste your last.fm API key once (get one at https://www.last.fm/api/account/create), then press **Fetch tags & covers**. The fetch runs in the server in the background, with progress shown on the page and as a badge on the Import tab. You can browse while it runs. **Stop**, or closing the app, keeps everything fetched so far, and the next fetch continues from there.
+
+The same from a terminal:
 
 ```sh
 # once: get a key at https://www.last.fm/api/account/create
@@ -88,7 +93,8 @@ tests/           unittest suite + synthetic history generator (fictional names o
 - **Resumable.** Every item is saved as soon as it's fetched, so Ctrl+C loses nothing. Re-running fetches only what's missing, what failed, or what is older than 120 days (`METADATA_TTL_DAYS`). A failed refresh never overwrites good data.
 - **Tag hygiene.** Tags are classified as `genre`, `place` ("finnish"), `year`, `decade` or `other` ("seen live", "favorites"); see `mtc/tags.py`. A tag equal to the artist's own name is dropped, and spelling variants ("post rock" / "post-rock") merge.
 - **Genre profile.** Each artist's plays are split across its top 5 genre tags in proportion to their weights. The result appears under Library → Genres, on per-genre pages, and in Eras.
-- **What leaves your machine.** Only artist and album names, sent to last.fm and MusicBrainz. last.fm's terms allow non-commercial use and at most 100 MB of cached data; this stores a few kB per artist.
+- **Images.** Album covers come from last.fm and are loaded from its CDN. last.fm no longer serves artist photos (only a placeholder), so an artist page shows the cover of your most-played album.
+- **What leaves your machine.** Only artist and album names, sent to last.fm and MusicBrainz, plus the cover image requests. last.fm's terms allow non-commercial use and at most 100 MB of cached data; this stores a few kB per artist.
 
 ## Adding a live updater (last.fm API)
 

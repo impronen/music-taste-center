@@ -1,23 +1,47 @@
 """HTTP layer: JSON endpoints under /api and the single-page UI from static/."""
 import sqlite3
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
+from contextlib import asynccontextmanager
 from pathlib import Path
-from urllib.parse import unquote
+from urllib.parse import unquote, urlsplit
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, Field
 
-from . import config, db, derive, enrich, fsutil, ingest, insights, settings
+from . import config, db, derive, enrich, fsutil, ingest, insights, jobs, settings
+from .webapi import Fatal
 
 MAX_UPLOAD_BYTES = 300 * 1024 * 1024
 DATE = r"^\d{4}-\d{2}-\d{2}$"
 
 
-def create_app(db_path: str | Path | None = None) -> FastAPI:
-    app = FastAPI(title="Music Taste Center", docs_url="/api/docs", openapi_url="/api/openapi.json")
+class FetchRequest(BaseModel):
+    """Limits per phase: omitted = everything pending, 0 = skip."""
+    artists: int | None = Field(None, ge=0)
+    albums: int | None = Field(None, ge=0)
+    releases: int | None = Field(None, ge=0)
+
+
+class KeyRequest(BaseModel):
+    key: str = Field(..., pattern=r"^\s*[A-Za-z0-9]{16,64}\s*$")
+
+
+def create_app(db_path: str | Path | None = None, *, lastfm_factory: Callable | None = None,
+               musicbrainz_factory: Callable | None = None) -> FastAPI:
+    """The factories replace the real last.fm / MusicBrainz clients (tests pass fakes)."""
     path = Path(db_path or config.DB_PATH)
     db.connect(path).close()  # apply migrations at startup
+    job = jobs.EnrichJob(path, lastfm_factory=lastfm_factory, musicbrainz_factory=musicbrainz_factory)
+
+    @asynccontextmanager
+    async def lifespan(_app):
+        yield
+        job.shutdown()  # finish the current item, then stop
+
+    app = FastAPI(title="Music Taste Center", docs_url="/api/docs", openapi_url="/api/openapi.json", lifespan=lifespan)
+    app.state.enrich_job = job
 
     def conn() -> Iterator[sqlite3.Connection]:
         c = db.connect(path)
@@ -99,7 +123,33 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
 
     @app.get("/api/metadata/status")
     def metadata_status(c=Conn):
-        return {**enrich.status(c), "has_key": bool(settings.lastfm_api_key())}
+        return {**enrich.status(c), "has_key": bool(settings.lastfm_api_key()),
+                "pending_artists": len(enrich.pending_artists(c)), "pending_albums": len(enrich.pending_albums(c)),
+                "pending_releases": len(enrich.pending_releases(c))}
+
+    @app.get("/api/metadata/job")
+    def fetch_job():
+        return job.snapshot()
+
+    @app.post("/api/metadata/job", status_code=202)
+    def start_fetch(req: FetchRequest | None = None):
+        req = req or FetchRequest()
+        try:
+            return job.start(artists=req.artists, albums=req.albums, releases=req.releases)
+        except jobs.Busy as exc:
+            raise HTTPException(409, str(exc)) from None
+        except Fatal as exc:
+            raise HTTPException(400, str(exc)) from None
+
+    @app.post("/api/metadata/job/stop")
+    def stop_fetch():
+        return job.stop()
+
+    @app.put("/api/metadata/key")
+    def save_key(req: KeyRequest):
+        """Stores the last.fm API key in data/settings.json. The key is never sent back."""
+        settings.save({**settings.load(), "lastfm_api_key": req.key.strip()})
+        return {"has_key": True}
 
     @app.get("/api/imports")
     def import_log(c=Conn):
@@ -120,6 +170,15 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
     @app.post("/api/rebuild")
     def rebuild(c=Conn):
         return derive.rebuild(c)
+
+    @app.middleware("http")
+    async def same_origin_writes(request: Request, call_next):
+        # Any website could POST to localhost; browsers always send Origin on those requests.
+        origin = request.headers.get("origin")
+        if (request.method not in ("GET", "HEAD", "OPTIONS") and origin
+                and urlsplit(origin).netloc != request.headers.get("host")):
+            return JSONResponse({"detail": "cross-origin request refused"}, status_code=403)
+        return await call_next(request)
 
     @app.middleware("http")
     async def revalidate(request: Request, call_next):
