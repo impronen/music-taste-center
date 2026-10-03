@@ -1,4 +1,4 @@
-"""CLI: python -m mtc [serve|import|rebuild|enrich|set-key|stats]."""
+"""CLI: python -m mtc [serve|import|rebuild|enrich|set-key|set-user|stats]."""
 import argparse
 import json
 import sys
@@ -30,6 +30,8 @@ def main(argv: list[str] | None = None) -> int:
 
     k = sub.add_parser("set-key", help="store your last.fm API key in data/settings.json")
     k.add_argument("api_key")
+    u = sub.add_parser("set-user", help="store your last.fm username in data/settings.json")
+    u.add_argument("username")
     sub.add_parser("stats", help="print a short overview")
 
     args = p.parse_args(argv)
@@ -69,6 +71,12 @@ def main(argv: list[str] | None = None) -> int:
     elif cmd == "set-key":
         settings.save({**settings.load(), "lastfm_api_key": args.api_key.strip()})
         print(f"Saved to {config.SETTINGS_PATH}")
+    elif cmd == "set-user":
+        try:
+            print(f"Saved {settings.set_lastfm_username(args.username)} to {config.SETTINGS_PATH}")
+        except ValueError as exc:
+            print(exc)
+            return 1
     elif cmd == "stats":
         o = insights.overview(conn)
         print(json.dumps({k: v for k, v in o.items() if k != "recent_top"}, indent=2, default=str))

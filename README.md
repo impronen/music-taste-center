@@ -98,6 +98,8 @@ The same from a terminal:
 
 ## Adding a live updater (last.fm API)
 
+Your username and API key are saved under **Import → last.fm account**, or with `python -m mtc set-user NAME` and `set-key KEY`. Read them with `settings.lastfm_username()` and `settings.lastfm_api_key()`. Both return `None` when unset, and the env vars `LASTFM_USER` and `LASTFM_API_KEY` override the file. To run on every app start, hook into the `lifespan` in `mtc/api.py` (or the launcher), preferably in a background thread like `mtc/jobs.py` so the UI opens right away.
+
 `ingest.ingest_records(conn, records, source="lastfm-api", label=user)` accepts any iterable of `ingest.Scrobble(artist, track, ts, album, artist_mbid, track_mbid, album_mbid)`. An updater only needs to:
 
 1. read the newest timestamp: `SELECT MAX(ts) FROM scrobbles`
@@ -111,6 +113,8 @@ Duplicates are ignored, so overlapping windows are harmless. The MBIDs from the 
 | Env var | Default | |
 |---|---|---|
 | `MTC_DB` | `data/mtc.db` | database path |
+| `LASTFM_USER` / `LASTFM_API_KEY` | from `data/settings.json` | override the saved username / API key |
+| `MTC_SETTINGS` | `data/settings.json` | settings file path |
 | `MTC_TZ` | `Europe/Helsinki` | zone for local hours and days. After changing it, run `python -m mtc rebuild` |
 
 ## Tests

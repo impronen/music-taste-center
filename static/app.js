@@ -414,8 +414,8 @@
   }
 
   async function importView() {
-    const [log, md, job] = await Promise.all([api("/api/imports", { fresh: true }), api("/api/metadata/status", { fresh: true }),
-      api("/api/metadata/job", { fresh: true })]);
+    const [log, md, job, st] = await Promise.all([api("/api/imports", { fresh: true }), api("/api/metadata/status", { fresh: true }),
+      api("/api/metadata/job", { fresh: true }), api("/api/settings", { fresh: true })]);
     mount(view, html`
       <div class="page-head"><div><h1>Import</h1>
         <p>Drop a CSV from lastfm-to-csv. Re-importing a full export is safe: scrobbles already in the database are skipped.</p></div></div>
@@ -431,7 +431,7 @@
           <dt>CLI</dt><dd><code>.venv/bin/python -m mtc import export.csv</code></dd>
         </dl>`)}
       </div>
-      <div class="grid" style="margin-top:16px">${card("Tags, covers & release dates", html`<div id="md"></div>`,
+      <div class="grid" style="margin-top:16px">${accountCard(st)}${card("Tags, covers & release dates", html`<div id="md"></div>`,
           "Lookups send artist and album names to last.fm and MusicBrainz, and covers load from last.fm; your listening history itself stays on this machine")}
       ${card("Import history", log.length ? html`<div class="table-wrap"><table>
         <thead><tr><th>When</th><th>Source</th><th>File</th><th class="num">Read</th><th class="num">Added</th><th class="num">Skipped</th><th>Covers</th></tr></thead>
@@ -439,6 +439,7 @@
           <td class="num">${Fmt.int(r.rows_read)}</td><td class="num">${Fmt.int(r.rows_added)}</td><td class="num">${Fmt.int(r.rows_skipped)}</td>
           <td class="muted">${r.min_ts ? html`${Fmt.date(r.min_ts)} – ${Fmt.date(r.max_ts)}` : "–"}</td></tr>`)}</tbody></table></div>`
         : html`<p class="empty">No imports yet.</p>`)}</div>`);
+    bindAccount();
     renderMetadata(md, job);
     const drop = view.querySelector("#drop");
     const input = view.querySelector("#file");
@@ -476,10 +477,10 @@
     const total = ph.reduce((n, p) => n + Math.max(p.total, p.done), 0);
     return total ? ph.reduce((n, p) => n + p.done, 0) / total : 0;
   };
-  async function postJson(path, body, method = "POST") {
+  async function postJson(path, body, method = "POST", invalid = "Invalid input") {
     const res = await fetch(path, { method, headers: { "content-type": "application/json" }, body: JSON.stringify(body ?? {}) });
     const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(typeof data.detail === "string" ? data.detail : res.status === 422 ? "That doesn't look like a last.fm API key" : `HTTP ${res.status}`);
+    if (!res.ok) throw new Error(typeof data.detail === "string" ? data.detail : res.status === 422 ? invalid : `HTTP ${res.status}`);
     return data;
   }
 
@@ -494,31 +495,49 @@
           <div class="sub">${Fmt.int(md.albums_done)} of ${Fmt.int(md.albums_eligible)} albums (3+ plays) looked up</div></div>
         <div class="tile"><div class="label">Albums with release date</div><div class="value">${Fmt.int(md.albums_dated)}</div></div>
       </div>`;
-    const keyForm = html`<form class="key-form" id="key-form" autocomplete="off">
-        <input id="key" type="password" spellcheck="false" placeholder="Paste your last.fm API key" aria-label="last.fm API key" required>
-        <button class="${md.has_key ? "" : "primary"}" type="submit">Save key</button><span class="muted" id="key-msg"></span></form>`;
-    const keyHelp = html`Get a free key at <a href="https://www.last.fm/api/account/create" target="_blank" rel="noopener noreferrer">last.fm/api/account/create ↗</a>
-      (any app name works). It's stored only in <code>data/settings.json</code> on this machine.`;
     mount(box, html`${tiles}
-      ${md.has_key ? "" : html`<div class="key-box"><strong>Step 1: last.fm API key</strong><p class="muted">${keyHelp}</p>${keyForm}</div>`}
       <div id="md-job"></div>
       <dl class="kv">
         <dt>Sources</dt><dd>Tags, listener counts and album covers from last.fm; release dates from MusicBrainz (year tags as a fallback). Artist pages use the cover of your most-played album, because last.fm no longer serves artist photos.</dd>
         <dt>Pace</dt><dd>Most-played first, about 1 s per artist or album and 1,5 s per release date. Stopping or closing the app loses nothing; the next fetch continues where it left off and also picks up new imports and anything older than 120 days.</dd>
         ${md.last_fetch ? html`<dt>Last fetch</dt><dd>${Fmt.date(md.last_fetch)}</dd>` : ""}
         <dt>CLI</dt><dd><code>.venv/bin/python -m mtc enrich</code> does the same from a terminal</dd>
-      </dl>
-      ${md.has_key ? html`<details class="key-change"><summary>Change API key</summary><p class="muted">${keyHelp}</p>${keyForm}</details>` : ""}`);
+      </dl>`);
     renderJob(md, job);
-    box.querySelector("#key-form").addEventListener("submit", async (e) => {
+  }
+
+  // Username and API key, stored by the server in data/settings.json (the key is never sent back).
+  function accountCard(st) {
+    return card("last.fm account", html`<dl class="kv account">
+      <dt>Username</dt><dd><form class="key-form" id="user-form" autocomplete="off">
+        <input id="user" type="text" spellcheck="false" autocapitalize="off" maxlength="15" value="${st.lastfm_username ?? ""}"
+          placeholder="Your last.fm username" aria-label="last.fm username" required>
+        <button class="${st.lastfm_username ? "" : "primary"}" type="submit">Save</button><span class="muted" id="user-msg"></span></form></dd>
+      <dt>API key</dt><dd><form class="key-form" id="key-form" autocomplete="off">
+        <input id="key" type="password" spellcheck="false" aria-label="last.fm API key" required
+          placeholder="${st.has_key ? "Saved · paste a new key to replace it" : "Paste your last.fm API key"}">
+        <button class="${st.has_key ? "" : "primary"}" type="submit">Save key</button><span class="muted" id="key-msg"></span></form>
+        <p class="muted hint">${st.has_key ? "" : "Needed for tags and covers. "}Get a free key at
+          <a href="https://www.last.fm/api/account/create" target="_blank" rel="noopener noreferrer">last.fm/api/account/create ↗</a> (any app name works).</p></dd>
+    </dl>`, "The username is for fetching your newest scrobbles, the API key for that and for tags. Both are stored only in data/settings.json on this machine.");
+  }
+  function bindAccount() {
+    const form = (id, send) => view.querySelector(id).addEventListener("submit", async (e) => {
       e.preventDefault();
-      const msg = box.querySelector("#key-msg");
+      const msg = e.target.querySelector(".muted");
       try {
-        await postJson("/api/metadata/key", { key: box.querySelector("#key").value }, "PUT");
-        route();
+        await send(e.target.querySelector("input").value);
+        cache.delete("/api/settings");
+        msg.textContent = "Saved ✓";
+        e.target.querySelector("button").classList.remove("primary");
       } catch (err) {
         msg.textContent = err.message;
       }
+    });
+    form("#user-form", (username) => postJson("/api/settings/username", { username }, "PUT", "That isn't a valid last.fm username"));
+    form("#key-form", async (key) => {
+      await postJson("/api/metadata/key", { key }, "PUT", "That doesn't look like a last.fm API key");
+      route(); // enables the fetch button
     });
   }
 
@@ -546,7 +565,7 @@
         : job?.state === "failed" ? html`<div class="notice err">Stopped with an error: ${job.error}</div>` : "";
       head = html`${outcome}<div class="job-bar"><div>
           <strong>${waiting ? `${Fmt.int(md.pending_artists)} artists and ${Fmt.int(md.pending_albums)} albums to look up` : "Everything is up to date"}</strong>
-          <div class="muted">${waiting ? `${md.pending_releases ? `plus ${Fmt.int(md.pending_releases)} release dates · ` : ""}about ${duration(estimate)}, most-played first`
+          <div class="muted">${waiting && !md.has_key ? "Add your last.fm API key above to start" : waiting ? `${md.pending_releases ? `plus ${Fmt.int(md.pending_releases)} release dates · ` : ""}about ${duration(estimate)}, most-played first`
             : "All artists and albums with 3+ plays were looked up in the last 120 days"}</div></div>
         <button class="primary" id="job-start" type="button" ${md.has_key && waiting ? "" : "disabled"}>Fetch tags &amp; covers</button></div>`;
     }

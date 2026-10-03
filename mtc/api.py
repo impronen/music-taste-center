@@ -28,6 +28,10 @@ class KeyRequest(BaseModel):
     key: str = Field(..., pattern=r"^\s*[A-Za-z0-9]{16,64}\s*$")
 
 
+class UsernameRequest(BaseModel):
+    username: str = Field(..., pattern=r"^\s*[A-Za-z][A-Za-z0-9_-]{1,14}\s*$")
+
+
 def create_app(db_path: str | Path | None = None, *, lastfm_factory: Callable | None = None,
                musicbrainz_factory: Callable | None = None) -> FastAPI:
     """The factories replace the real last.fm / MusicBrainz clients (tests pass fakes)."""
@@ -150,6 +154,15 @@ def create_app(db_path: str | Path | None = None, *, lastfm_factory: Callable | 
         """Stores the last.fm API key in data/settings.json. The key is never sent back."""
         settings.save({**settings.load(), "lastfm_api_key": req.key.strip()})
         return {"has_key": True}
+
+    @app.get("/api/settings")
+    def get_settings():
+        """Non-secret settings for the UI. The API key itself is never sent back."""
+        return {"lastfm_username": settings.lastfm_username(), "has_key": bool(settings.lastfm_api_key())}
+
+    @app.put("/api/settings/username")
+    def save_username(req: UsernameRequest):
+        return {"lastfm_username": settings.set_lastfm_username(req.username)}
 
     @app.get("/api/imports")
     def import_log(c=Conn):

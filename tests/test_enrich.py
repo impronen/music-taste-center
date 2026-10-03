@@ -370,6 +370,27 @@ class JobTests(unittest.TestCase):
             self.assertEqual(json.loads(config.SETTINGS_PATH.read_text())["lastfm_api_key"], key)
             self.assertEqual(config.SETTINGS_PATH.stat().st_mode & 0o777, 0o600)
 
+    def test_username_setting(self):
+        from mtc import settings
+        from mtc.__main__ import main
+        with self.client() as client:
+            self.assertEqual(client.get("/api/settings").json(), {"lastfm_username": None, "has_key": False})
+            for bad in ("", "1abc", "a", "has space", "x" * 16, "ä-user"):
+                self.assertEqual(client.put("/api/settings/username", json={"username": bad}).status_code, 422, bad)
+            r = client.put("/api/settings/username", json={"username": " Some_User-1 "})
+            self.assertEqual(r.json(), {"lastfm_username": "Some_User-1"})
+            self.assertEqual(client.get("/api/settings").json()["lastfm_username"], "Some_User-1")
+            # saving the key keeps the username, and vice versa
+            client.put("/api/metadata/key", json={"key": "a" * 32})
+            self.assertEqual(settings.load(), {"lastfm_username": "Some_User-1", "lastfm_api_key": "a" * 32})
+            self.assertEqual(client.put("/api/settings/username", json={"username": "x"},
+                                        headers={"origin": "https://evil.example"}).status_code, 403)
+        self.assertEqual(main(["--db", str(self.path), "set-user", "bad name"]), 1)
+        self.assertEqual(main(["--db", str(self.path), "set-user", "Other"]), 0)
+        self.assertEqual(settings.lastfm_username(), "Other")
+        with mock.patch.dict(os.environ, {"LASTFM_USER": "FromEnv"}):
+            self.assertEqual(settings.lastfm_username(), "FromEnv")
+
     def test_cross_origin_writes_are_refused(self):
         with self.client() as client:
             evil = {"origin": "https://evil.example"}
