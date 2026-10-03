@@ -6,6 +6,7 @@ import tempfile
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
+from unittest import mock
 
 from fastapi.testclient import TestClient
 
@@ -86,6 +87,39 @@ class ConcurrencyTests(Base):
             # a failed merge neither rebuilds nor changes the version
             self.assertEqual(client.post("/api/maintenance/merge", json={"source_ids": [999], "target_id": 1}).status_code, 404)
             self.assertEqual(client.get("/api/overview").headers["x-data-version"], v1)
+
+    def test_version_header_is_read_before_the_handler_so_a_racing_write_cannot_make_old_data_look_new(self):
+        real = insights.overview
+
+        def overview_then_write(c):
+            out = real(c)
+            with self.conn:  # a write commits after the body was computed, before the response leaves
+                db.bump(self.conn, "scrobbles_version")
+            return out
+        with TestClient(create_app(self.path)) as client:
+            v0 = client.get("/api/overview").headers["x-data-version"]
+            with mock.patch.object(insights, "overview", overview_then_write):
+                stale = client.get("/api/overview").headers["x-data-version"]
+            self.assertEqual(stale, v0)  # the old version, so the UI refetches instead of caching old data as new
+            self.assertNotEqual(client.get("/api/overview").headers["x-data-version"], v0)
+
+    def test_merge_reports_its_own_error_when_the_rebuild_also_fails(self):
+        ingest.ingest_records(self.conn, [Scrobble("A", "x", T0), Scrobble("B", "y", T0 + 60)], source="t")
+        derive.rebuild(self.conn)
+        a, b = self.artist_id("A"), self.artist_id("B")
+        calls = []
+
+        def merge(c, source, target, rebuild=True):
+            calls.append(source)
+            if len(calls) == 2:
+                raise RuntimeError("merge broke")
+            return {"source_id": source}
+        with TestClient(create_app(self.path)) as client, \
+                mock.patch.object(maintenance, "merge_artists", merge), \
+                mock.patch.object(derive, "rebuild", side_effect=ValueError("rebuild broke")):
+            with self.assertRaisesRegex(RuntimeError, "merge broke"):  # not the rebuild's ValueError
+                client.post("/api/maintenance/merge", json={"source_ids": [a, b], "target_id": 999})
+        self.assertEqual(calls, [a, b])
 
 
 class ConsistencyTests(Base):

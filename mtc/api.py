@@ -248,14 +248,22 @@ def create_app(db_path: str | Path | None = None, *, lastfm_factory: Callable | 
         if req.target_id in req.source_ids:
             raise HTTPException(400, "the target can't also be a source")
         results = []
+        failure: Exception | None = None
         try:
             for s in dict.fromkeys(req.source_ids):
                 results.append(maintenance.merge_artists(c, s, req.target_id, rebuild=False))
-        except LookupError as exc:
-            raise HTTPException(404, str(exc)) from None
-        finally:
-            if results:  # rebuild only when something was merged
+        except Exception as exc:
+            failure = exc
+        if results:  # rebuild only when something was merged
+            try:
                 derive.rebuild(c)
+            except Exception:
+                if failure is None:  # otherwise the merge's own error is the one worth reporting
+                    raise
+        if isinstance(failure, LookupError):
+            raise HTTPException(404, str(failure)) from None
+        if failure:
+            raise failure
         return {"target_id": req.target_id, "merged": results}
 
     @app.post("/api/maintenance/merge/preview")
@@ -324,10 +332,14 @@ def create_app(db_path: str | Path | None = None, *, lastfm_factory: Callable | 
     @app.middleware("http")
     async def revalidate(request: Request, call_next):
         # Local app: always revalidate UI files (ETag) so code updates show up without a hard reload.
+        is_api = request.url.path.startswith("/api/")
+        # Read the version before the handler runs: a write that commits meanwhile then leaves the
+        # header older than the body, so the UI refetches, rather than caching old data as new.
+        v = await run_in_threadpool(data_version) if is_api else None
         response = await call_next(request)
-        if not request.url.path.startswith("/api/"):
+        if not is_api:
             response.headers["Cache-Control"] = "no-cache"
-        elif (v := await run_in_threadpool(data_version)) is not None:
+        elif v is not None:
             response.headers["X-Data-Version"] = v  # the UI drops its cache when this changes
         return response
 
