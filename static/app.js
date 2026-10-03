@@ -565,15 +565,15 @@
   async function rhythmsView(params) {
     const kind = params.get("kind") === "place" ? "place" : "genre";
     const [r, sa] = await Promise.all([api(`/api/rhythms?kind=${kind}`), api("/api/rhythms/artists")]);
-    const tabs = html`<div class="seg" role="tablist" aria-label="Show">${[["genre", "Genres"], ["place", "Places"]].map(([k, l]) =>
-      html`<button type="button" role="tab" data-k="${k}" aria-selected="${String(k === kind)}">${l}</button>`)}</div>`;
+    const tabs = html`<div class="seg" role="group" aria-label="Show">${[["genre", "Genres"], ["place", "Places"]].map(([k, l]) =>
+      html`<button type="button" data-k="${k}" aria-pressed="${String(k === kind)}">${l}</button>`)}</div>`;
     const head = html`<div class="page-head"><div><h1>Rhythms</h1>
       <p class="lead">How your listening moves through the year, the week and the day.</p>
       <div class="head-chips"><span class="pill sage">Based on ${Fmt.pct(r.coverage)} of your plays</span>
         ${r.coverage < 0.5 ? html`<a class="pill accent" href="#/import">Fetch more tags</a>` : ""}
         <a class="pill" href="#how" id="how-link">How is this measured?</a></div></div>${tabs}</div>`;
     const bindTabs = () => {
-      view.querySelectorAll("[role=tab]").forEach((b) => b.addEventListener("click", () => {
+      view.querySelectorAll("[data-k]").forEach((b) => b.addEventListener("click", () => {
         location.hash = "#/rhythms" + (b.dataset.k === "place" ? "?kind=place" : "");
       }));
       view.querySelector("#how-link")?.addEventListener("click", (e) => { e.preventDefault(); const d = document.getElementById("how"); d.open = true; scrollToId("how"); });
