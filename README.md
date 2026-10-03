@@ -55,12 +55,40 @@ All tunables live in `mtc/config.py`.
 mtc/
   ingest.py      CSV parsing + ingest_records(): the single entry point for any source
   derive.py      sessions, artist stats, gateways, co-listening links (rebuilt after each import)
+  enrich.py      resumable metadata fetch (artists, albums, release dates)
+  lastfm.py      last.fm client (read-only methods, JSON quirks)
+  musicbrainz.py MusicBrainz client (release-group dates)
+  webapi.py      shared throttled HTTP client with retries; transport injectable for tests
+  tags.py        tag normalization and classification
   insights.py    all read queries
   api.py         FastAPI JSON endpoints (/api/docs) + static UI
   migrations/    numbered SQL migrations (PRAGMA user_version)
 static/          vanilla JS UI (app.js router/views, charts.js SVG charts, graph.js force graph)
 tests/           unittest suite + synthetic history generator (fictional names only)
 ```
+
+## Tags, genres and release dates
+
+```sh
+# once: get a key at https://www.last.fm/api/account/create
+.venv/bin/python -m mtc set-key YOUR_KEY        # stored in data/settings.json (gitignored), or set LASTFM_API_KEY
+.venv/bin/python -m mtc enrich                  # everything pending, most-played first
+.venv/bin/python -m mtc enrich --artists 200 --albums 0 --releases 0   # a smaller batch
+.venv/bin/python -m mtc enrich --status         # coverage only
+```
+
+| Phase | Source | Calls | What it stores |
+|---|---|---|---|
+| artists | last.fm `artist.getInfo` + `artist.getTopTags` | 2 per artist | tags with weights (0–100), corrected name, MBID, global listeners and plays, bio summary |
+| albums | last.fm `album.getInfo` + `album.getTopTags` | 2 per album with 3+ plays | tags, MBID, cover art URL, track count, plus a provisional release year from year tags |
+| releases | MusicBrainz release lookup by MBID, or a search by name | 1–2 per album | original release date (release-group `first-release-date`) and type (Album/EP/Single) |
+
+- **Why two sources.** last.fm's `album.getInfo` no longer returns a release date, even though its docs still show one. MusicBrainz is the source of truth for dates. A name search only counts as a match if the title matches exactly and the artist matches too.
+- **Pacing.** last.fm runs at 2 requests/s, because it warns against "several calls per second". MusicBrainz runs at 1 request/s, its published limit. Both send an identifying User-Agent and retry with backoff on rate-limit or 5xx errors. A bad API key stops the run.
+- **Resumable.** Every item is saved as soon as it's fetched, so Ctrl+C loses nothing. Re-running fetches only what's missing, what failed, or what is older than 120 days (`METADATA_TTL_DAYS`). A failed refresh never overwrites good data.
+- **Tag hygiene.** Tags are classified as `genre`, `place` ("finnish"), `year`, `decade` or `other` ("seen live", "favorites"); see `mtc/tags.py`. A tag equal to the artist's own name is dropped, and spelling variants ("post rock" / "post-rock") merge.
+- **Genre profile.** Each artist's plays are split across its top 5 genre tags in proportion to their weights. The result appears under Library → Genres, on per-genre pages, and in Eras.
+- **What leaves your machine.** Only artist and album names, sent to last.fm and MusicBrainz. last.fm's terms allow non-commercial use and at most 100 MB of cached data; this stores a few kB per artist.
 
 ## Adding a live updater (last.fm API)
 

@@ -8,7 +8,7 @@ from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import config, db, derive, fsutil, ingest, insights
+from . import config, db, derive, enrich, fsutil, ingest, insights, settings
 
 MAX_UPLOAD_BYTES = 300 * 1024 * 1024
 DATE = r"^\d{4}-\d{2}-\d{2}$"
@@ -87,6 +87,19 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
     @app.get("/api/graph")
     def graph(n: int = Query(120, ge=10, le=400), per_node: int = Query(6, ge=1, le=20), c=Conn):
         return insights.graph(c, n, per_node)
+
+    @app.get("/api/genres")
+    def genre_profile(start: str | None = Query(None, pattern=DATE), end: str | None = Query(None, pattern=DATE),
+                      limit: int = Query(40, ge=1, le=200), c=Conn):
+        return insights.genres(c, start, end, limit)
+
+    @app.get("/api/tags/{tag_id}")
+    def tag(tag_id: int, c=Conn):
+        return found(insights.tag(c, tag_id))
+
+    @app.get("/api/metadata/status")
+    def metadata_status(c=Conn):
+        return {**enrich.status(c), "has_key": bool(settings.lastfm_api_key())}
 
     @app.get("/api/imports")
     def import_log(c=Conn):

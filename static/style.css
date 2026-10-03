@@ -200,6 +200,15 @@ tbody tr:hover td { background: var(--surface-2); }
   padding: 3px 10px; border-radius: 999px; background: var(--surface-2); font-size: 12.5px;
 }
 .chip .dot { width: 8px; height: 8px; border-radius: 50%; }
+.chips.tags { margin-top: 10px; }
+a.chip:hover { color: inherit; background: var(--accent-wash); }
+.chip.place { box-shadow: inset 0 0 0 1px var(--border); background: transparent; }
+.hero.album-hero { justify-content: flex-start; align-items: flex-end; flex-wrap: nowrap; }
+.hero.album-hero > div:not(.links) { min-width: 0; }
+@media (max-width: 700px) { .hero.album-hero { flex-wrap: wrap; } .cover { width: 96px; height: 96px; } }
+.hero.album-hero .links { margin-left: auto; flex: none; white-space: nowrap; }
+.cover { width: 132px; height: 132px; border-radius: 10px; object-fit: cover; background: var(--surface-2); box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18); }
+.kv dd.chips { display: flex; }
 .kv { display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; margin: 0; }
 .kv dt { color: var(--text-muted); }
 .kv dd { margin: 0; }

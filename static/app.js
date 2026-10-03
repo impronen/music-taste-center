@@ -32,6 +32,12 @@
     album: (id, name) => html`<a href="#/album/${id}">${name}</a>`,
   };
   const clusterColor = (i) => (i < 8 ? `var(--series-${i + 1})` : "var(--series-other)");
+  const year = (d) => (d ? String(d).slice(0, 4) : "");
+  // Genre and place tags link to their tag page; years and decades are shown plain.
+  const tagChips = (tags) => (tags?.length ? html`<div class="chips tags">${tags.map((t) =>
+    t.kind === "year" || t.kind === "decade"
+      ? html`<span class="chip muted">${t.name}</span>`
+      : html`<a class="chip ${t.kind === "place" ? "place" : ""}" href="#/tag/${t.id}">${t.name}</a>`)}</div>` : "");
 
   function rankList(items, { nameOf, max, extra } = {}) {
     if (!items.length) return html`<p class="empty">Nothing here yet.</p>`;
@@ -147,7 +153,7 @@
   async function libraryView(params) {
     const ov = await api("/api/overview");
     if (ov.empty) return emptyState();
-    const kind = ["artist", "track", "album"].includes(params.get("kind")) ? params.get("kind") : "artist";
+    const kind = ["artist", "track", "album", "genre"].includes(params.get("kind")) ? params.get("kind") : "artist";
     const period = parseRange(params.get("period") || "all", ov);
     const q = params.get("q") || "";
     const sort = params.get("sort") || "plays";
@@ -158,7 +164,7 @@
     };
     const presets = periods(ov);
     const toolbar = html`<div class="toolbar">
-      <div class="seg" id="kind">${["artist", "track", "album"].map((k) => html`<button data-k="${k}" class="${k === kind ? "on" : ""}">${k[0].toUpperCase() + k.slice(1)}s</button>`)}</div>
+      <div class="seg" id="kind">${["artist", "track", "album", "genre"].map((k) => html`<button data-k="${k}" class="${k === kind ? "on" : ""}">${k[0].toUpperCase() + k.slice(1)}s</button>`)}</div>
       <select id="period" aria-label="Period">${presets.map((p) => html`<option value="${p.key}" ${p.key === period.key ? raw("selected") : ""}>${p.label}</option>`)}
         ${presets.some((p) => p.key === period.key) ? "" : html`<option value="${period.key}" selected>${period.label}</option>`}</select>
       ${kind === "artist" && period.key === "all" ? html`<input id="q" type="search" placeholder="Filter artists" value="${q}">` : ""}
@@ -184,6 +190,15 @@
       let t;
       qi?.addEventListener("input", () => { clearTimeout(t); t = setTimeout(() => setParams({ q: qi.value.trim() }), 300); });
       if (q && qi) { qi.focus(); qi.setSelectionRange(q.length, q.length); }
+    } else if (kind === "genre") {
+      const g = await api("/api/genres?" + qs({ start: period.start, end: period.end, limit: 60 }));
+      body = g.items.length
+        ? card("Top genres", rankList(g.items, {
+            nameOf: (r) => html`<a href="#/tag/${r.id}">${r.name}</a><small>${r.artists.map((a) => a.name).join(", ")}</small>`,
+            extra: (r) => Fmt.pct(r.share),
+          }), `${period.label} · each artist's plays split across its top last.fm genre tags · covers ${Fmt.pct(g.coverage)} of plays`)
+        : card("Top genres", html`<p class="empty">No genre data yet. Run <code>python -m mtc enrich</code> to fetch tags from last.fm (see <a href="#/import">Import</a>).</p>`);
+      mount(view, html`<div class="page-head"><div><h1>Library</h1><p>${period.label}</p></div></div>${toolbar}${body}`);
     } else {
       const items = await api(`/api/top/${kind}?` + qs({ start: period.start, end: period.end, limit: 200 }));
       const nameOf = { artist: artistName, track: trackName, album: albumName }[kind];
@@ -203,9 +218,11 @@
       : a.gateway_id
         ? html`right after ${link.artist(a.gateway_id, a.gateway_name)}`
         : html`as the first thing in a session`;
+    const meta = a.meta?.status === "ok" ? a.meta : null;
     mount(view, html`
-      <div class="hero"><div><div class="kicker">Artist · #${Fmt.int(a.rank)} all time</div><h1>${a.name}</h1></div>
-        <div class="links"><a href="${lastfm}" target="_blank" rel="noopener noreferrer">last.fm ↗</a><a href="${mb}" target="_blank" rel="noopener noreferrer">MusicBrainz ↗</a></div></div>
+      <div class="hero"><div><div class="kicker">Artist · #${Fmt.int(a.rank)} all time</div><h1>${a.name}</h1>${tagChips(a.tags)}</div>
+        <div class="links">${meta?.listeners ? html`<span class="muted">${Fmt.compact(meta.listeners)} last.fm listeners</span>` : ""}
+          <a href="${meta?.url || lastfm}" target="_blank" rel="noopener noreferrer">last.fm ↗</a><a href="${meta?.mbid ? `https://musicbrainz.org/artist/${meta.mbid}` : mb}" target="_blank" rel="noopener noreferrer">MusicBrainz ↗</a></div></div>
       <div class="tiles">
         <div class="tile"><div class="label">Plays</div><div class="value">${Fmt.int(a.plays)}</div><div class="sub">${Fmt.pct(a.share)} of everything</div></div>
         <div class="tile"><div class="label">Tracks heard</div><div class="value">${Fmt.int(a.n_tracks)}</div><div class="sub">on ${Fmt.int(a.n_days)} different days</div></div>
@@ -217,7 +234,7 @@
         ${card("Plays per month", html`<div class="chart" id="c-artist"></div>`, html`Discovered ${discovered}`)}
         <div class="grid cols-3">
           ${card("Top tracks", rankList(a.tracks.slice(0, 15), { nameOf: (t) => link.track(t.id, t.name) }))}
-          ${card("Albums", rankList(a.albums.slice(0, 15), { nameOf: (t) => html`${link.album(t.id, t.name)}<small>${t.n_tracks} tracks</small>` }))}
+          ${card("Albums", rankList(a.albums.slice(0, 15), { nameOf: (t) => html`${link.album(t.id, t.name)}<small>${t.release_date ? `${year(t.release_date)} · ` : ""}${t.n_tracks} tracks</small>` }))}
           ${card("Listened alongside", a.related.length ? html`<ol class="rank">${a.related.map((r, i) => html`
               <li><span class="pos">${i + 1}</span><span class="name">${link.artist(r.id, r.name)}</span>
               <span class="num secondary" title="shared sessions">${Fmt.int(r.shared)}</span>
@@ -242,9 +259,18 @@
 
   async function albumView(id) {
     const al = await api(`/api/albums/${id}`);
-    mount(view, html`<div class="hero"><div><div class="kicker">Album · ${link.artist(al.artist_id, al.artist)}</div><h1>${al.name}</h1></div></div>
+    const meta = al.meta?.status === "ok" ? al.meta : null;
+    const released = meta?.release_date
+      ? html`<div class="tile"><div class="label">Released</div><div class="value">${Fmt.release(meta.release_date)}</div>
+          <div class="sub">${meta.release_type ?? ""}${meta.release_date_source === "tag" ? " · from tags" : ""}</div></div>` : "";
+    mount(view, html`<div class="hero album-hero">
+        ${meta?.image_url ? html`<img class="cover" src="${meta.image_url}" alt="" loading="lazy" referrerpolicy="no-referrer">` : ""}
+        <div><div class="kicker">Album · ${link.artist(al.artist_id, al.artist)}</div><h1>${al.name}</h1>${tagChips(al.tags)}</div>
+        ${meta?.url ? html`<div class="links"><a href="${meta.url}" target="_blank" rel="noopener noreferrer">last.fm ↗</a>
+          ${meta.release_group_mbid ? html`<a href="https://musicbrainz.org/release-group/${meta.release_group_mbid}" target="_blank" rel="noopener noreferrer">MusicBrainz ↗</a>` : ""}</div>` : ""}</div>
       <div class="tiles"><div class="tile"><div class="label">Plays</div><div class="value">${Fmt.int(al.plays)}</div></div>
-      <div class="tile"><div class="label">Tracks heard</div><div class="value">${Fmt.int(al.tracks.length)}</div></div></div>
+      <div class="tile"><div class="label">Tracks heard</div><div class="value">${Fmt.int(al.tracks.length)}</div>
+        <div class="sub">${meta?.n_tracks ? `of ${meta.n_tracks} on the album` : ""}</div></div>${released}</div>
       ${card("Tracks", rankList(al.tracks, { nameOf: (t) => html`${link.track(t.id, t.name)}<small>last ${Fmt.date(t.last_ts)}</small>` }))}`);
   }
 
@@ -262,6 +288,31 @@
       value: (d) => d.plays, height: 180, xLabel: (d) => d.year, label: "Plays per year",
       tip: (d) => ({ title: d.year, rows: [{ value: Fmt.int(d.plays), label: "plays" }] }),
     });
+  }
+
+  async function tagView(id) {
+    const t = await api(`/api/tags/${id}`);
+    const kind = { genre: "Genre", place: "Place", year: "Year", decade: "Decade", other: "Tag" }[t.kind] ?? "Tag";
+    const plays = t.monthly.reduce((s, m) => s + m.plays, 0);
+    mount(view, html`
+      <div class="hero"><div><div class="kicker">${kind}</div><h1>${t.name}</h1></div>
+        <div class="links"><a href="https://www.last.fm/tag/${encodeURIComponent(t.name)}" target="_blank" rel="noopener noreferrer">last.fm ↗</a></div></div>
+      <div class="grid">
+        ${t.kind === "genre" ? card("Plays per month", html`<div class="chart" id="c-tag"></div>`,
+          `About ${Fmt.int(plays)} plays: each artist's plays are split across its top genre tags`) : ""}
+        <div class="grid cols-2">
+          ${card("Your artists", rankList(t.artists, { nameOf: (r) => html`${link.artist(r.id, r.name)}<small>tag weight ${r.weight}</small>` }),
+            "Artists last.fm tags with this, by your plays")}
+          ${card("Albums", t.albums.length ? rankList(t.albums, { nameOf: (r) => html`${link.album(r.id, r.name)}<small>${r.artist}${r.release_date ? ` · ${year(r.release_date)}` : ""}</small>` })
+            : html`<p class="empty">No albums with this tag yet.</p>`)}
+        </div>
+      </div>`);
+    if (t.kind === "genre") {
+      Charts.columns(document.getElementById("c-tag"), t.monthly, {
+        value: (d) => d.plays, xLabel: (d) => (d.month.endsWith("-01") ? d.month.slice(0, 4) : null), label: `${t.name} plays per month`,
+        tip: (d) => ({ title: Fmt.month(d.month), rows: [{ value: Fmt.int(d.plays), label: "plays" }] }),
+      });
+    }
   }
 
   async function connectionsView(params) {
@@ -310,6 +361,7 @@
             <dt>Scrobbles</dt><dd>${Fmt.int(e.plays)} · ${Fmt.int(e.artists)} artists · ${Fmt.int(e.new_artists)} new</dd>
             ${e.signature ? html`<dt>Signature</dt><dd>${link.artist(e.signature.id, e.signature.name)} <span class="badge">${Fmt.dec(e.signature.lift)}× its usual share</span></dd>` : ""}
             ${e.best_new ? html`<dt>Big discovery</dt><dd>${link.artist(e.best_new.id, e.best_new.name)} <span class="muted">${Fmt.int(e.best_new.plays)} plays</span></dd>` : ""}
+            ${e.genres?.length ? html`<dt>Genres</dt><dd class="chips">${e.genres.map((g) => html`<a class="chip" href="#/tag/${g.id}">${g.name} <span class="muted">${Fmt.pct(g.share)}</span></a>`)}</dd>` : ""}
           </dl>${rankList(e.top, { nameOf: artistName })}`))}</div>
       </div>`);
     Charts.columns(document.getElementById("c-new"), timeline, {
@@ -358,7 +410,7 @@
   }
 
   async function importView() {
-    const log = await api("/api/imports", { fresh: true });
+    const [log, md] = await Promise.all([api("/api/imports", { fresh: true }), api("/api/metadata/status", { fresh: true })]);
     mount(view, html`
       <div class="page-head"><div><h1>Import</h1>
         <p>Drop a CSV from lastfm-to-csv. Re-importing a full export is safe: scrobbles already in the database are skipped.</p></div></div>
@@ -374,7 +426,21 @@
           <dt>CLI</dt><dd><code>.venv/bin/python -m mtc import export.csv</code></dd>
         </dl>`)}
       </div>
-      <div class="grid" style="margin-top:16px">${card("Import history", log.length ? html`<div class="table-wrap"><table>
+      <div class="grid" style="margin-top:16px">${card("Tags & release dates", html`
+        <div class="tiles" style="margin-bottom:12px">
+          <div class="tile"><div class="label">Artists with tags</div><div class="value">${Fmt.int(md.artists_tagged)}</div>
+            <div class="sub">${Fmt.int(md.artists_done)} of ${Fmt.int(md.artists)} looked up</div></div>
+          <div class="tile"><div class="label">Plays with genre info</div><div class="value">${Fmt.pct(md.plays ? md.plays_covered / md.plays : 0)}</div></div>
+          <div class="tile"><div class="label">Albums with release date</div><div class="value">${Fmt.int(md.albums_dated)}</div>
+            <div class="sub">${Fmt.int(md.albums_done)} of ${Fmt.int(md.albums_eligible)} albums (3+ plays) looked up</div></div>
+        </div>
+        <dl class="kv">
+          ${md.has_key ? "" : html`<dt>1. API key</dt><dd>Create one at <a href="https://www.last.fm/api/account/create" target="_blank" rel="noopener noreferrer">last.fm/api/account/create ↗</a>, then <code>.venv/bin/python -m mtc set-key YOUR_KEY</code></dd>`}
+          <dt>${md.has_key ? "Fetch" : "2. Fetch"}</dt><dd><code>.venv/bin/python -m mtc enrich</code>: most-played first, about 1 s per artist or album at last.fm's polite pace. Stop any time with Ctrl+C, and run it again to continue or after new imports.</dd>
+          <dt>Sources</dt><dd>Tags, listener counts and album art from last.fm; release dates from MusicBrainz (year tags as a fallback)</dd>
+          ${md.last_fetch ? html`<dt>Last fetch</dt><dd>${Fmt.date(md.last_fetch)}</dd>` : ""}
+        </dl>`, "Lookups send artist and album names to last.fm and MusicBrainz; your listening history itself stays on this machine")}
+      ${card("Import history", log.length ? html`<div class="table-wrap"><table>
         <thead><tr><th>When</th><th>Source</th><th>File</th><th class="num">Read</th><th class="num">Added</th><th class="num">Skipped</th><th>Covers</th></tr></thead>
         <tbody>${log.map((r) => html`<tr><td>${Fmt.date(r.started_at)}</td><td>${r.source}</td><td>${r.label ?? ""} <span class="muted">${r.encoding ?? ""}</span></td>
           <td class="num">${Fmt.int(r.rows_read)}</td><td class="num">${Fmt.int(r.rows_added)}</td><td class="num">${Fmt.int(r.rows_skipped)}</td>
@@ -465,6 +531,7 @@
     [/^\/artist\/(\d+)$/, artistView],
     [/^\/album\/(\d+)$/, albumView],
     [/^\/track\/(\d+)$/, trackView],
+    [/^\/tag\/(\d+)$/, tagView],
     [/^\/connections$/, connectionsView],
     [/^\/eras$/, erasView],
     [/^\/insights$/, insightsView],

@@ -1,9 +1,9 @@
-"""CLI: python -m mtc [serve|import|rebuild|stats]."""
+"""CLI: python -m mtc [serve|import|rebuild|enrich|set-key|stats]."""
 import argparse
 import json
 import sys
 
-from . import config, db, derive, ingest, insights
+from . import config, db, derive, enrich, ingest, insights, settings
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -19,6 +19,17 @@ def main(argv: list[str] | None = None) -> int:
     i.add_argument("files", nargs="+")
 
     sub.add_parser("rebuild", help="recompute local times and derived tables (after changing MTC_TZ)")
+
+    e = sub.add_parser("enrich", help="fetch tags (last.fm) and release dates (MusicBrainz), most-played first")
+    e.add_argument("--artists", type=int, default=None, metavar="N", help="max artists (default all pending, 0 = skip)")
+    e.add_argument("--albums", type=int, default=None, metavar="N", help="max albums (default all pending, 0 = skip)")
+    e.add_argument("--releases", type=int, default=None, metavar="N", help="max release-date lookups (0 = skip)")
+    e.add_argument("--refresh-days", type=float, default=config.METADATA_TTL_DAYS,
+                   help=f"refetch items older than this (default {config.METADATA_TTL_DAYS})")
+    e.add_argument("--status", action="store_true", help="only print coverage")
+
+    k = sub.add_parser("set-key", help="store your last.fm API key in data/settings.json")
+    k.add_argument("api_key")
     sub.add_parser("stats", help="print a short overview")
 
     args = p.parse_args(argv)
@@ -41,6 +52,23 @@ def main(argv: list[str] | None = None) -> int:
     elif cmd == "rebuild":
         ingest.recompute_local_time(conn)
         print(json.dumps(derive.rebuild(conn)))
+    elif cmd == "enrich":
+        if not args.status:
+            from .webapi import Fatal
+
+            try:
+                summary = enrich.run(conn, artists=args.artists, albums=args.albums, releases=args.releases,
+                                     refresh_days=args.refresh_days)
+                print(json.dumps(summary))
+            except KeyboardInterrupt:
+                print("\nStopped. Everything fetched so far is saved; run again to continue.")
+            except Fatal as exc:
+                print(f"Stopped: {exc}")
+                return 1
+        print(json.dumps(enrich.status(conn), indent=2))
+    elif cmd == "set-key":
+        settings.save({**settings.load(), "lastfm_api_key": args.api_key.strip()})
+        print(f"Saved to {config.SETTINGS_PATH}")
     elif cmd == "stats":
         o = insights.overview(conn)
         print(json.dumps({k: v for k, v in o.items() if k != "recent_top"}, indent=2, default=str))

@@ -19,6 +19,8 @@
     date: (ts) => (ts ? dateFmt.format(new Date(ts * 1000)) : "–"),
     day: (iso) => (iso ? dateFmt.format(new Date(iso + "T12:00:00")) : "–"),
     month: (ym) => monthFmt.format(new Date(Date.UTC(+ym.slice(0, 4), +ym.slice(5, 7) - 1, 1))),
+    // release dates come as YYYY, YYYY-MM or YYYY-MM-DD
+    release: (d) => (!d ? "–" : d.length === 4 ? d : d.length === 7 ? Fmt.month(d) : Fmt.day(d)),
     // explicit thresholds instead of locale compact notation
     compact: (n) => {
       const a = Math.abs(n);

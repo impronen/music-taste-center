@@ -262,13 +262,17 @@ def artist(conn: sqlite3.Connection, artist_id: int) -> dict | None:
         " GROUP BY t.id ORDER BY plays DESC, t.title LIMIT 50", (artist_id,)))
     info["albums"] = _rows(conn.execute(
         "SELECT al.id, al.title AS name, COUNT(*) AS plays, COUNT(DISTINCT s.track_id) AS n_tracks,"
-        " MIN(s.ts) AS first_ts FROM scrobbles s JOIN albums al ON al.id = s.album_id WHERE s.artist_id = ?"
+        " MIN(s.ts) AS first_ts, i.release_date FROM scrobbles s JOIN albums al ON al.id = s.album_id"
+        " LEFT JOIN album_info i ON i.album_id = al.id WHERE s.artist_id = ?"
         " GROUP BY al.id ORDER BY plays DESC LIMIT 30", (artist_id,)))
     info["led_to"] = _rows(conn.execute(
         "SELECT a.id, a.name, st.plays, st.first_ts FROM artist_stats st JOIN artists a ON a.id = st.artist_id"
         " WHERE st.gateway_id = ? ORDER BY st.plays DESC LIMIT 20", (artist_id,)))
     info["related"] = related(conn, artist_id)
     info["hours"] = [sum(day[h] for day in clock(conn, artist_id=artist_id)) for h in range(24)]
+    meta = conn.execute("SELECT * FROM artist_info WHERE artist_id = ?", (artist_id,)).fetchone()
+    info["meta"] = dict(meta) if meta else None
+    info["tags"] = _tags_of(conn, "artist_tags", "artist_id", artist_id)
     return info
 
 
@@ -284,6 +288,9 @@ def album(conn: sqlite3.Connection, album_id: int) -> dict | None:
         " FROM scrobbles s JOIN tracks t ON t.id = s.track_id WHERE s.album_id = ?"
         " GROUP BY t.id ORDER BY plays DESC", (album_id,)))
     info["plays"] = sum(t["plays"] for t in info["tracks"])
+    meta = conn.execute("SELECT * FROM album_info WHERE album_id = ?", (album_id,)).fetchone()
+    info["meta"] = dict(meta) if meta else None
+    info["tags"] = _tags_of(conn, "album_tags", "album_id", album_id)
     return info
 
 
@@ -327,6 +334,7 @@ def eras(conn: sqlite3.Connection) -> list[dict]:
     for y, a, n in conn.execute("SELECT substr(lday, 1, 4), artist_id, COUNT(*) FROM scrobbles GROUP BY 1, 2"):
         by_year[y][a] = n
     first_year = {a: y for a, y in conn.execute("SELECT artist_id, substr(first_lday, 1, 4) FROM artist_stats WHERE prehistory = 0")}
+    has_tags = conn.execute("SELECT 1 FROM artist_tags LIMIT 1").fetchone() is not None
     out = []
     for y in sorted(by_year):
         c = by_year[y]
@@ -336,8 +344,10 @@ def eras(conn: sqlite3.Connection) -> list[dict]:
         signature = max(lift, key=lambda a: (lift[a], c[a]), default=None)
         new = [a for a in c if first_year.get(a) == y]
         best_new = max(new, key=lambda a: c[a], default=None)
+        g = genres(conn, f"{y}-01-01", f"{y}-12-31", limit=5) if has_tags else None
         out.append({
             "year": y, "plays": year_total, "artists": len(c), "new_artists": len(new),
+            "genres": [{"id": x["id"], "name": x["name"], "share": x["share"]} for x in g["items"]] if g else [],
             "top": [{"id": a, "name": names[a], "plays": n} for a, n in c.most_common(8)],
             "signature": {"id": signature, "name": names[signature], "plays": c[signature],
                           "lift": lift[signature]} if signature else None,
@@ -508,3 +518,82 @@ def _label_propagation(node_ids: list[int], edges: list[dict], rounds: int = 30)
 
 def imports(conn: sqlite3.Connection) -> list[dict]:
     return _rows(conn.execute("SELECT * FROM imports ORDER BY id DESC LIMIT 50"))
+
+
+# ---------------------------------------------------------------- genres (needs `mtc enrich`)
+
+GENRE_TAGS_PER_ARTIST = 5
+
+
+def _artist_genre_shares(conn: sqlite3.Connection) -> dict[int, list[tuple[int, float]]]:
+    """Each artist's top genre tags as shares summing to 1 (by last.fm tag weight)."""
+    out: defaultdict[int, list] = defaultdict(list)
+    for artist_id, tag_id, weight in conn.execute(
+        "SELECT x.artist_id, x.tag_id, x.weight FROM artist_tags x JOIN tags t ON t.id = x.tag_id"
+        " WHERE t.kind = 'genre' AND x.weight > 0 ORDER BY x.artist_id, x.weight DESC"
+    ):
+        if len(out[artist_id]) < GENRE_TAGS_PER_ARTIST:
+            out[artist_id].append((tag_id, weight))
+    return {a: [(t, w / sum(x for _, x in tw)) for t, w in tw] for a, tw in out.items()}
+
+
+def genres(conn: sqlite3.Connection, start: str | None = None, end: str | None = None, limit: int = 40) -> dict:
+    """Play-weighted genre profile: an artist's plays are split across its top genre tags."""
+    where, args = _range_sql(start, end)
+    plays = dict(conn.execute(f"SELECT s.artist_id, COUNT(*) FROM scrobbles s WHERE {where} GROUP BY 1", args))
+    shares = _artist_genre_shares(conn)
+    score: Counter = Counter()
+    contrib: defaultdict[int, Counter] = defaultdict(Counter)
+    covered = 0
+    for artist_id, n in plays.items():
+        if artist_id not in shares:
+            continue
+        covered += n
+        for tag_id, share in shares[artist_id]:
+            score[tag_id] += n * share
+            contrib[tag_id][artist_id] += n * share
+    names = dict(conn.execute("SELECT id, name FROM tags WHERE kind = 'genre'"))
+    artist_names = dict(conn.execute("SELECT id, name FROM artists"))
+    total = sum(plays.values())
+    items = [
+        {"id": t, "name": names[t], "plays": round(s, 1), "share": s / covered if covered else 0,
+         "artists": [{"id": a, "name": artist_names[a]} for a, _ in contrib[t].most_common(3)]}
+        for t, s in score.most_common(limit)
+    ]
+    return {"items": items, "plays": total, "covered": covered, "coverage": covered / total if total else 0}
+
+
+def tag(conn: sqlite3.Connection, tag_id: int) -> dict | None:
+    row = conn.execute("SELECT id, name, kind FROM tags WHERE id = ?", (tag_id,)).fetchone()
+    if row is None:
+        return None
+    info = dict(row)
+    info["artists"] = _rows(conn.execute(
+        "SELECT a.id, a.name, x.weight, st.plays FROM artist_tags x JOIN artists a ON a.id = x.artist_id"
+        " JOIN artist_stats st ON st.artist_id = a.id WHERE x.tag_id = ? ORDER BY st.plays DESC LIMIT 100",
+        (tag_id,)))
+    info["albums"] = _rows(conn.execute(
+        "SELECT al.id, al.title AS name, a.id AS artist_id, a.name AS artist, x.weight, i.release_date,"
+        " (SELECT COUNT(*) FROM scrobbles s WHERE s.album_id = al.id) AS plays"
+        " FROM album_tags x JOIN albums al ON al.id = x.album_id JOIN artists a ON a.id = al.artist_id"
+        " LEFT JOIN album_info i ON i.album_id = al.id WHERE x.tag_id = ? ORDER BY plays DESC LIMIT 50",
+        (tag_id,)))
+    # Monthly plays attributed to this genre (same split as `genres`).
+    shares = {a: dict(s).get(tag_id) for a, s in _artist_genre_shares(conn).items()}
+    shares = {a: s for a, s in shares.items() if s}
+    monthly: Counter = Counter()
+    if shares:
+        marks = ",".join("?" * len(shares))
+        for m, a, n in conn.execute(
+            f"SELECT substr(lday, 1, 7), artist_id, COUNT(*) FROM scrobbles WHERE artist_id IN ({marks}) GROUP BY 1, 2",
+            tuple(shares)):
+            monthly[m] += n * shares[a]
+    lo, hi = conn.execute("SELECT MIN(lday), MAX(lday) FROM scrobbles").fetchone()
+    info["monthly"] = [{"month": m, "plays": round(monthly.get(m, 0), 1)} for m in _months(lo[:7], hi[:7])] if lo else []
+    return info
+
+
+def _tags_of(conn, table: str, id_col: str, item_id: int, limit: int = 12) -> list[dict]:
+    return _rows(conn.execute(
+        f"SELECT t.id, t.name, t.kind, x.weight FROM {table} x JOIN tags t ON t.id = x.tag_id"
+        f" WHERE x.{id_col} = ? AND t.kind != 'other' ORDER BY x.weight DESC, t.name LIMIT ?", (item_id, limit)))
