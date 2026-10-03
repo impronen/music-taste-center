@@ -47,8 +47,15 @@ def _catalog(rng: random.Random) -> dict[str, dict]:
     return catalog
 
 
-def generate(start: str = "2019-01-01", days: int = 2800, seed: int = 7) -> list[tuple[str, str, str, int]]:
-    """Return (artist, album, track, unix_ts) tuples, oldest first."""
+SEASONAL_ARTIST = "Tonttu Orchestra"  # only ever played in December
+
+
+def generate(start: str = "2019-01-01", days: int = 2800, seed: int = 7,
+             rhythms: bool = False) -> list[tuple[str, str, str, int]]:
+    """Return (artist, album, track, unix_ts) tuples, oldest first.
+
+    rhythms=True layers cyclical habits on top of the same base history (separate RNG):
+    metal in winter, jazz in the morning, indie at weekends, and a December-only artist."""
     rng = random.Random(seed)
     catalog = _catalog(rng)
     t0 = datetime.fromisoformat(start).replace(tzinfo=timezone.utc)
@@ -80,7 +87,43 @@ def generate(start: str = "2019-01-01", days: int = 2800, seed: int = 7) -> list
                 track, album = info["tracks"][idx]
                 out.append((artist, album, track, int(ts.timestamp())))
                 ts += timedelta(seconds=rng.randint(150, 330))
+    if rhythms:
+        out = sorted(out + _rhythms(out, t0, days, seed), key=lambda r: r[3])
     return out
+
+
+def _rhythms(base: list, t0: datetime, days: int, seed: int) -> list:
+    rng = random.Random(seed * 1000 + 1)
+    seen: dict[str, list] = {}
+    for artist, album, track, _ in base:
+        seen.setdefault(artist, []).append((album, track))
+    pick = {c: [a for a in CLUSTERS[c][:3] if a in seen] for c in ("metal", "jazz", "indie")}
+    extra = []
+
+    def session(day, hour_utc, cluster, n):
+        ts = day + timedelta(hours=hour_utc, minutes=rng.randint(0, 50))
+        for _ in range(n):
+            artist = rng.choice(pick[cluster])
+            album, track = rng.choice(seen[artist])
+            extra.append((artist, album, track, int(ts.timestamp())))
+            ts += timedelta(seconds=rng.randint(150, 330))
+
+    xmas = [(f"{w} {n}", "Joulun Kaiku") for w in ("Kuusen", "Lumen", "Tähden") for n in ("Laulu", "Valssi", "Kello")]
+    for d in range(days):
+        day = t0 + timedelta(days=d)
+        if day.month in (12, 1, 2) and rng.random() < 0.55:
+            session(day, 19, "metal", rng.randint(6, 14))       # dark evenings
+        if rng.random() < 0.3:
+            session(day, 5, "jazz", rng.randint(4, 9))          # 07-08 local time
+        if day.weekday() >= 5 and rng.random() < 0.6:
+            session(day, 11, "indie", rng.randint(6, 14))       # weekend middays
+        if day.month == 12 and day.day <= 26 and rng.random() < 0.7:
+            ts = day + timedelta(hours=16, minutes=rng.randint(0, 50))
+            for _ in range(rng.randint(2, 6)):
+                album_track = rng.choice(xmas)
+                extra.append((SEASONAL_ARTIST, album_track[1], album_track[0], int(ts.timestamp())))
+                ts += timedelta(seconds=rng.randint(150, 330))
+    return extra
 
 
 def to_csv(rows: list[tuple[str, str, str, int]], now_playing: bool = True) -> str:
@@ -98,4 +141,4 @@ def to_csv(rows: list[tuple[str, str, str, int]], now_playing: bool = True) -> s
 if __name__ == "__main__":
     import sys
 
-    sys.stdout.write(to_csv(generate()))
+    sys.stdout.write(to_csv(generate(rhythms="--rhythms" in sys.argv)))

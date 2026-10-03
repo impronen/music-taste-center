@@ -28,6 +28,11 @@
   /* Sequential lime -> teal -> deep green (monotone lightness); near-zero recedes to the surface */
   --seq-1: #f0fad6; --seq-2: #ccf277; --seq-3: #8fd07a; --seq-4: #56a973;
   --seq-5: #149095; --seq-6: #18715d; --seq-7: #0e4a44;
+  /* Diverging (lift vs your usual share): orange below, gray = as usual, teal above.
+     Arms validated with the dataviz validator (--ordinal) in both themes. */
+  --div-neg-3: #a8430c; --div-neg-2: #d8672c; --div-neg-1: #ec9466;
+  --div-mid: #f0efec;
+  --div-pos-1: #6bbcc0; --div-pos-2: #2f9a9f; --div-pos-3: #0c6a6e;
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
@@ -51,6 +56,9 @@
     --series-other: #5a5955;
     --seq-1: #12332f; --seq-2: #0e4a44; --seq-3: #18715d; --seq-4: #149095;
     --seq-5: #56a973; --seq-6: #8fd07a; --seq-7: #ccf277;
+    --div-neg-3: #f7a477; --div-neg-2: #c9622a; --div-neg-1: #8a4320;
+    --div-mid: #383835;
+    --div-pos-1: #1e6466; --div-pos-2: #1c9a9f; --div-pos-3: #74d6d9;
   }
 }
 :root[data-theme="dark"] {
@@ -74,6 +82,9 @@
   --series-other: #5a5955;
   --seq-1: #12332f; --seq-2: #0e4a44; --seq-3: #18715d; --seq-4: #149095;
   --seq-5: #56a973; --seq-6: #8fd07a; --seq-7: #ccf277;
+  --div-neg-3: #f7a477; --div-neg-2: #c9622a; --div-neg-1: #8a4320;
+  --div-mid: #383835;
+  --div-pos-1: #1e6466; --div-pos-2: #1c9a9f; --div-pos-3: #74d6d9;
 }
 
 /* Sizes: one type scale, one spacing rhythm, three radii. */
@@ -268,6 +279,13 @@ a.chip:hover { color: inherit; background: var(--accent-wash); }
 .chart .cell:hover { stroke: var(--text-primary); stroke-width: 1.5; }
 .legend-seq { display: flex; align-items: center; gap: 6px; color: var(--text-muted); font-size: var(--fs-xs); margin-top: 8px; }
 .legend-seq i { width: 14px; height: 10px; border-radius: 2px; display: inline-block; }
+.legend-seq i.nodata, .chart .cell.nodata { fill: transparent; background: transparent; stroke: var(--border); box-shadow: inset 0 0 0 1px var(--border); }
+.legend-seq i.nodata { margin-left: 12px; }
+.legend-cat { display: flex; flex-wrap: wrap; gap: 4px 14px; color: var(--text-secondary); font-size: var(--fs-sm); margin-top: 10px; }
+.legend-cat span { display: inline-flex; align-items: center; gap: 6px; }
+.legend-cat i { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
+.chart a .row-label { fill: var(--text-secondary); }
+.chart a:hover .row-label { fill: var(--accent); }
 
 .tooltip {
   position: fixed; z-index: 50; pointer-events: none;
@@ -373,3 +391,8 @@ button.armed { background: var(--bad); border-color: transparent; color: #fff; }
 .dupe-name { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
 .dupe-name input { accent-color: var(--accent); margin: 0; }
 .dupe-actions { display: flex; gap: 6px; flex: none; }
+
+/* ---------- rhythms ---------- */
+.coverage { margin: -8px 0 var(--gap); font-size: var(--fs-sm); }
+.season-artists { margin: 12px 0 0; font-size: var(--fs-sm); }
+.pill { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: var(--fs-xs); background: var(--accent-wash); color: var(--text-primary); white-space: nowrap; }

@@ -305,5 +305,119 @@
     el.after(legend);
   }
 
-  window.Charts = { columns, line, heatmap, cleanup, showTip, moveTip, hideTip, Fmt };
+  // ---------- lift matrix (rows × columns, diverging around "as usual") ----------
+  /* data: { cols: [label], rows: [{ name, href?, cells: [{ lift|null, plays, expected, up, years }] }] }
+     opts: { label, yearsLabel ("years" / "winters"...) } — lift 1 is gray, teal above, orange below. */
+  const liftFmt = new Intl.NumberFormat("fi-FI", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  function liftStep(lift) {
+    const a = Math.abs(Math.log2(lift));
+    const step = a < 0.15 ? 0 : a < 0.38 ? 1 : a < 0.7 ? 2 : 3; // within ±11 % reads as "as usual"; then ±30 %, ±62 %
+    return step === 0 ? "var(--div-mid)" : `var(--div-${lift > 1 ? "pos" : "neg"}-${step})`;
+  }
+  function matrix(el, data, opts = {}) {
+    const { cols, rows } = data;
+    responsive(el, (width) => {
+      el.replaceChildren();
+      const longest = Math.max(4, ...rows.map((r) => r.name.length));
+      const left = Math.min(150, Math.max(60, longest * 6.8 + 12));
+      const maxChars = Math.floor((left - 12) / 6.8);
+      const top = 2, bottom = 22, gap = 2;
+      const cw = (width - left) / cols.length;
+      const ch = Math.min(28, Math.max(18, cw * 0.6));
+      const height = top + rows.length * ch + bottom;
+      const svg = svgEl("svg", { width, height, viewBox: `0 0 ${width} ${height}`, role: "img", "aria-label": opts.label ?? "" }, el);
+      rows.forEach((row, ri) => {
+        const y = top + ri * ch;
+        const name = row.name.length > maxChars ? row.name.slice(0, maxChars - 1) + "…" : row.name;
+        const holder = row.href ? svgEl("a", { href: row.href }, svg) : svg;
+        const t = text(holder, left - 10, y + ch / 2 + 4, name, { "text-anchor": "end", class: "tick row-label" });
+        if (name !== row.name) svgEl("title", {}, t).textContent = row.name;
+        row.cells.forEach((c, ci) => {
+          const cell = svgEl("rect", {
+            x: left + ci * cw + gap / 2, y: y + gap / 2, width: Math.max(1, cw - gap), height: ch - gap, rx: 3, class: "cell",
+          }, svg);
+          if (c.lift == null) {
+            cell.classList.add("nodata");
+          } else {
+            cell.style.fill = liftStep(c.lift);
+          }
+          cell.addEventListener("pointerenter", (e) => {
+            const rowsOut = c.lift == null
+              ? [{ value: "Not enough plays", label: "" }]
+              : [
+                  { value: liftFmt.format(c.lift) + "×", label: "your usual share" },
+                  { value: Fmt.int(c.plays), label: `plays · ${Fmt.int(c.expected)} expected` },
+                  ...(c.years ? [{ value: `${c.up} of ${c.years}`, label: `${opts.yearsLabel ?? "years"} above usual` }] : []),
+                ];
+            showTip(e, rowsOut, `${row.name} · ${cols[ci]}`);
+          });
+          cell.addEventListener("pointermove", moveTip);
+          cell.addEventListener("pointerleave", hideTip);
+        });
+      });
+      const every = cw < 30 ? 2 : 1;
+      cols.forEach((c, ci) => {
+        if (ci % every === 0) text(svg, left + ci * cw + cw / 2, height - 6, c, { "text-anchor": "middle" });
+      });
+    });
+    const legend = document.createElement("div");
+    legend.className = "legend-seq";
+    const sw = (v) => { const i = document.createElement("i"); i.style.background = v; legend.append(i); };
+    legend.append("less than usual");
+    ["var(--div-neg-3)", "var(--div-neg-2)", "var(--div-neg-1)", "var(--div-mid)", "var(--div-pos-1)", "var(--div-pos-2)", "var(--div-pos-3)"].forEach(sw);
+    legend.append("more than usual");
+    const none = document.createElement("i");
+    none.className = "nodata";
+    legend.append(none, "too few plays");
+    el.after(legend);
+  }
+
+  // ---------- 100 % stacked columns ----------
+  /* data: [{...}], opts: { series: [{name}], shares(d) -> [0..1], other(d), xLabel(d), title(d), label }
+     Colours follow the series order (--series-1..8), the rest is "Other". */
+  function stacked(el, data, opts) {
+    const height = opts.height ?? 240;
+    const colors = opts.series.map((_, i) => (i < 8 ? `var(--series-${i + 1})` : "var(--series-other)"));
+    responsive(el, (width) => {
+      el.replaceChildren();
+      const top = 8, bottom = 24, right = 4, left = 42;
+      const innerW = width - left - right, innerH = height - top - bottom;
+      const y = (v) => top + innerH - v * innerH;
+      const svg = svgEl("svg", { width, height, viewBox: `0 0 ${width} ${height}`, role: "img", "aria-label": opts.label ?? "" }, el);
+      yAxis(svg, [0, 0.25, 0.5, 0.75, 1], y, left, width - right, (v) => Fmt.pct(v));
+      const band = innerW / Math.max(1, data.length);
+      const bw = Math.max(4, Math.min(56, band - 8));
+      data.forEach((d) => {
+        const x = left + data.indexOf(d) * band + (band - bw) / 2;
+        const parts = [...opts.shares(d).map((v, i) => ({ v, color: colors[i], name: opts.series[i].name })),
+          { v: opts.other(d), color: "var(--series-other)", name: "Other" }].filter((p) => p.v > 0);
+        let acc = 0;
+        parts.forEach((p, i) => {
+          const y0 = y(acc), y1 = y(acc + p.v);
+          acc += p.v;
+          const isTop = i === parts.length - 1;
+          const h = Math.max(0, y0 - y1 - (isTop ? 0 : 2)); // 2px surface gap between segments
+          const seg = svgEl("path", { d: isTop ? barPath(x, y0 - h, bw, h) : `M${x},${y0}V${y0 - h}H${x + bw}V${y0}Z`, class: "seg" }, svg);
+          seg.style.fill = p.color;
+          seg.addEventListener("pointerenter", (e) => showTip(e, parts.slice().reverse().map((q) =>
+            ({ color: q.color, value: Fmt.pct(q.v), label: q.name })), opts.title(d)));
+          seg.addEventListener("pointermove", moveTip);
+          seg.addEventListener("pointerleave", hideTip);
+        });
+        text(svg, x + bw / 2, height - 6, opts.xLabel(d), { "text-anchor": "middle" });
+      });
+    });
+    const legend = document.createElement("div");
+    legend.className = "legend-cat";
+    [...opts.series.map((s, i) => ({ name: s.name, color: colors[i] })), { name: "Other", color: "var(--series-other)" }].forEach((s) => {
+      const item = document.createElement("span");
+      const i = document.createElement("i");
+      i.style.background = s.color;
+      item.append(i, s.name);
+      legend.append(item);
+    });
+    el.after(legend);
+  }
+
+  window.Charts = { columns, line, heatmap, matrix, stacked, cleanup, showTip, moveTip, hideTip, Fmt };
 })();

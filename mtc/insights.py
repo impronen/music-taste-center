@@ -631,12 +631,12 @@ def imports(conn: sqlite3.Connection) -> list[dict]:
 GENRE_TAGS_PER_ARTIST = 5
 
 
-def _artist_genre_shares(conn: sqlite3.Connection) -> dict[int, list[tuple[int, float]]]:
-    """Each artist's top genre tags as shares summing to 1 (by last.fm tag weight)."""
+def _artist_genre_shares(conn: sqlite3.Connection, kind: str = "genre") -> dict[int, list[tuple[int, float]]]:
+    """Each artist's top tags of one kind (genre or place) as shares summing to 1 (by last.fm tag weight)."""
     out: defaultdict[int, list] = defaultdict(list)
     for artist_id, tag_id, weight in conn.execute(
         "SELECT x.artist_id, x.tag_id, x.weight FROM artist_tags x JOIN tags t ON t.id = x.tag_id"
-        " WHERE t.kind = 'genre' AND x.weight > 0 ORDER BY x.artist_id, x.weight DESC"
+        " WHERE t.kind = ? AND x.weight > 0 ORDER BY x.artist_id, x.weight DESC", (kind,)
     ):
         if len(out[artist_id]) < GENRE_TAGS_PER_ARTIST:
             out[artist_id].append((tag_id, weight))

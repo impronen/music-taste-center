@@ -10,7 +10,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import config, db, derive, enrich, fsutil, ingest, insights, jobs, maintenance, settings
+from . import config, db, derive, enrich, fsutil, ingest, insights, jobs, maintenance, rhythms, settings
 from .webapi import Fatal
 
 MAX_UPLOAD_BYTES = 300 * 1024 * 1024
@@ -145,7 +145,15 @@ def create_app(db_path: str | Path | None = None, *, lastfm_factory: Callable | 
 
     @app.get("/api/tags/{tag_id}")
     def tag(tag_id: int, c=Conn):
-        return found(insights.tag(c, tag_id))
+        return {**found(insights.tag(c, tag_id)), "months": rhythms.tag_months(c, tag_id)}
+
+    @app.get("/api/rhythms")
+    def rhythm_overview(kind: str = Query("genre", pattern="^(genre|place)$"), c=Conn):
+        return rhythms.overview(c, kind)
+
+    @app.get("/api/rhythms/artists")
+    def seasonal_artists(c=Conn):
+        return rhythms.seasonal_artists(c)
 
     @app.get("/api/metadata/status")
     def metadata_status(c=Conn):
