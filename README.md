@@ -16,6 +16,8 @@ python3 -m venv .venv
 .venv/bin/python app.py          # http://127.0.0.1:8765
 ```
 
+Or double-click **`Taste Center.command`** in Finder. It sets up `.venv` on first run, starts the server and opens the browser. If the server is already running, it just opens the browser. Close the Terminal window to stop it. You can drag the file to the Dock for one-click access.
+
 Re-importing a newer full export is safe. A scrobble is identified by (time, artist, track), so rows already in the database are skipped.
 
 Try it without your own data:
