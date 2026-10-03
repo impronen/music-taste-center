@@ -136,6 +136,7 @@ def _months(first: str, last: str) -> list[str]:
 # ---------------------------------------------------------------- any period
 
 DAILY_MAX_DAYS = 120  # activity is per day up to this span, per month beyond
+DISCOVERY_RECENT_DAYS = 365  # "New to you" window when no period is chosen (all time)
 
 
 def _clip(conn, start: str | None, end: str | None) -> tuple[str, str] | None:
@@ -182,7 +183,8 @@ def summary(conn: sqlite3.Connection, start: str | None = None, end: str | None 
     if s > e:
         return {"empty": False, "start": s, "end": e, "plays": 0, "artists": 0, "tracks": 0, "albums": 0,
                 "listening_days": 0, "new_artists": 0, "calendar_days": 0, "per_day": 0, "top10_share": 0,
-                "longest_streak": 0, "longest_streak_end": None, "previous": None, "discoveries": []}
+                "longest_streak": 0, "longest_streak_end": None, "previous": None, "discoveries": [],
+                "discoveries_new": 0, "discoveries_start": s, "discoveries_end": e}
     out = {"empty": False, "start": s, "end": e, **_period_numbers(conn, s, e)}
     out["calendar_days"] = _days_between(s, e)
     out["per_day"] = out["plays"] / out["calendar_days"]
@@ -197,13 +199,19 @@ def summary(conn: sqlite3.Connection, start: str | None = None, end: str | None 
     if start and s > lo:  # an explicit range with history before it
         ps, pe = _previous(s, e)
         out["previous"] = {"start": ps, "end": pe, "partial": ps < lo, **_period_numbers(conn, ps, pe)}
+    # "New to you" over all history is just the whole catalogue, so for an unbounded range
+    # it covers the last year of it instead; any chosen period is used as it is.
+    ds = s if start else max(s, (date.fromisoformat(e) - timedelta(days=DISCOVERY_RECENT_DAYS - 1)).isoformat())
+    out["discoveries_start"], out["discoveries_end"] = ds, e
+    out["discoveries_new"] = conn.execute(
+        "SELECT COUNT(*) FROM artist_stats WHERE prehistory = 0 AND first_lday BETWEEN ? AND ?", (ds, e)).fetchone()[0]
     out["discoveries"] = _rows(conn.execute(
         "SELECT a.id, a.name, COUNT(*) AS plays, st.first_ts, g.id AS gateway_id, g.name AS gateway_name"
         " FROM artist_stats st JOIN artists a ON a.id = st.artist_id"
         " JOIN scrobbles s ON s.artist_id = st.artist_id AND s.lday BETWEEN ? AND ?"
         " LEFT JOIN artists g ON g.id = st.gateway_id"
         " WHERE st.prehistory = 0 AND st.first_lday BETWEEN ? AND ?"
-        " GROUP BY a.id ORDER BY plays DESC, a.name LIMIT 10", (s, e, s, e)))
+        " GROUP BY a.id ORDER BY plays DESC, a.name LIMIT 10", (ds, e, ds, e)))
     return out
 
 

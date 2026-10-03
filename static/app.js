@@ -238,6 +238,7 @@
     const prev = sum.previous;
     const ref = prevRef(period, prev);
     const unitDay = act.unit === "day";
+    const newWhen = period.key === "all" ? "in the past year" : "this period";  // All time shows only the last 12 months of discoveries
     // headline: "Your last 30 days of listening", "Your 2024 in listening", "All your listening"
     const title = period.key === "all" ? "All your listening" : period.days ? `Your last ${period.days === 365 ? "12 months" : `${period.days} days`} of listening`
       : /^\d{4}$/.test(period.key) ? `Your ${period.key} in listening` : period.month ? `Your ${period.label} in listening` : "Your listening, these dates";
@@ -307,8 +308,8 @@
         ${card("New to you", sum.discoveries.length ? html`<ul class="rows">${sum.discoveries.slice(0, 6).map((r) => html`<li class="link-row"><a href="#/artist/${r.id}">
             <span class="grow"><b>${r.name}</b> ${r.gateway_name ? html`<span class="chip" style="padding:0;background:none"><span class="via">via ${r.gateway_name}</span></span>` : ""}</span>
             <span class="key">${Fmt.int(r.plays)} plays</span></a></li>`)}</ul>`
-          : html`<p class="empty box">No new artists in this period.</p>`,
-          { cls: "accent-soft", sub: sum.new_artists ? `${Fmt.int(sum.new_artists)} artists first heard this period, and what led you there.` : "" })}
+          : html`<p class="empty box">No new artists ${newWhen}.</p>`,
+          { cls: "accent-soft", sub: sum.discoveries_new ? `${Fmt.int(sum.discoveries_new)} artists first heard ${newWhen}, and what led you there.` : "" })}
         ${card("Just played", html`<ul class="rows">${recentRows}</ul>`)}
       </div>`);
     bindPeriodControls((key) => {
