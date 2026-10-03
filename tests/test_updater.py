@@ -2,6 +2,7 @@
 All HTTP goes through a fake user.getRecentTracks; nothing touches the network."""
 import json
 import tempfile
+import threading
 import unittest
 import urllib.parse
 from pathlib import Path
@@ -10,6 +11,7 @@ from unittest import mock
 from fastapi.testclient import TestClient
 
 from mtc import db, derive, ingest, settings, updater
+from mtc.__main__ import main
 from mtc.api import create_app
 from mtc.ingest import Scrobble
 from mtc.lastfm import LastFm
@@ -23,7 +25,7 @@ def track(ts, artist, title, album="", mbid=""):
             "date": {"uts": str(ts), "#text": "x"}}
 
 
-def fake_recent(scrobbles, queries=None, fail_page=None, now_playing=True):
+def fake_recent(scrobbles, queries=None, fail_page=None, now_playing=True, bare=False):
     """scrobbles: [(ts, artist, title)]. Answers like user.getRecentTracks: newest first, paged,
     `from` honoured, a dateless "now playing" entry first on page 1."""
     def transport(url, headers, timeout):
@@ -32,6 +34,8 @@ def fake_recent(scrobbles, queries=None, fail_page=None, now_playing=True):
         if queries is not None:
             queries.append(q)
         page, limit = int(q["page"]), int(q["limit"])
+        if bare:
+            return 200, b"{}"
         if fail_page == page:
             return 500, b""
         rows = sorted((s for s in scrobbles if s[0] > int(q.get("from", 0))), reverse=True)
@@ -111,6 +115,59 @@ class FetchTests(Base):
         self.assertEqual(again["since"], r["since"])
 
 
+class RobustnessTests(Base):
+    def test_an_answer_without_a_recenttracks_block_is_a_failure_not_nothing_new(self):
+        self.seed(1)
+        r = updater.run_once(self.conn, client([], bare=True), "me", now=T0 + DAY)
+        self.assertEqual(r["state"], "failed")
+        self.assertIn("recenttracks", r["error"])
+
+    def test_nothing_new_writes_no_import_row(self):
+        self.seed(1)
+        before = self.conn.execute("SELECT COUNT(*) FROM imports").fetchone()[0]
+        r = updater.run_once(self.conn, client([]), "me", now=T0 + DAY)
+        self.assertEqual((r["state"], r["read"], r["added"]), ("done", 0, 0))
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM imports").fetchone()[0], before)
+
+    def test_a_run_repairs_derived_tables_left_stale_by_an_earlier_run_that_died_in_rebuild(self):
+        self.seed(2)
+        ingest.ingest_records(self.conn, [Scrobble("Late", "x", T0 + 9 * 3600)], source="lastfm-api")  # stored, never rebuilt
+        self.assertIsNone(self.conn.execute("SELECT session_id FROM scrobbles ORDER BY ts DESC").fetchone()[0])
+        r = updater.run_once(self.conn, client([]), "me", now=T0 + DAY)  # nothing new to add
+        self.assertEqual(r["added"], 0)
+        self.assertIsNotNone(self.conn.execute("SELECT session_id FROM scrobbles ORDER BY ts DESC").fetchone()[0])
+
+    def test_a_stopped_run_does_not_use_up_one_of_the_days_runs(self):
+        self.seed(1)
+        stop = threading.Event()
+        stop.set()
+        self.assertEqual(updater.run_once(self.conn, client([]), "me", now=T0 + DAY, stop=stop)["state"], "stopped")
+        self.assertEqual(updater.status(self.conn, T0 + DAY)["runs_in_window"], 0)
+
+    def test_the_cli_and_the_server_cannot_both_slip_under_the_limit(self):
+        self.seed(1)
+        states = []
+
+        def attempt():
+            conn = db.connect(self.path)
+            try:
+                states.append(updater.run_once(conn, client([]), "me", now=T0 + DAY)["state"])
+            finally:
+                conn.close()
+        threads = [threading.Thread(target=attempt) for _ in range(8)]
+        for th in threads:
+            th.start()
+        for th in threads:
+            th.join()
+        self.assertEqual((states.count("done"), states.count("skipped")), (3, 5))
+        self.assertEqual(updater.status(self.conn, T0 + DAY)["runs_in_window"], 3)
+
+    def test_serve_without_a_subcommand_starts(self):
+        with mock.patch("uvicorn.run") as run:
+            self.assertEqual(main(["--db", str(self.path)]), 0)
+        self.assertEqual(run.call_args.kwargs["port"], 8765)
+
+
 class GateTests(Base):
     def test_three_runs_in_24_hours_then_wait_for_the_oldest_to_age_out(self):
         self.seed(1)
@@ -164,6 +221,11 @@ class StartupTests(Base):
         with TestClient(create_app(self.path, lastfm_factory=self.factory())) as c:
             self.assertEqual(c.get("/api/updater").json()["runs_in_window"], 0)
         self.assertEqual(self.calls, [])
+
+    def test_a_broken_settings_file_does_not_stop_the_server_starting(self):
+        with mock.patch.object(settings, "lastfm_username", side_effect=OSError("unreadable")):
+            with TestClient(create_app(self.path, lastfm_factory=self.factory(), auto_update=True)) as c:
+                self.assertEqual(c.get("/api/updater").status_code, 200)
 
     def test_without_a_username_it_says_why_and_does_not_count_a_run(self):
         with mock.patch.object(settings, "lastfm_username", return_value=None):

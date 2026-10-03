@@ -52,7 +52,7 @@ def main(argv: list[str] | None = None) -> int:
 
         from .api import create_app
 
-        auto = not args.no_update and os.environ.get("MTC_AUTO_UPDATE", "1") != "0"
+        auto = not getattr(args, "no_update", False) and os.environ.get("MTC_AUTO_UPDATE", "1") != "0"
         uvicorn.run(create_app(args.db, auto_update=auto), host=getattr(args, "host", "127.0.0.1"), port=getattr(args, "port", 8765))
         return 0
 

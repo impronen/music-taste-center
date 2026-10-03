@@ -1,8 +1,8 @@
 """Turn scrobbles into rows.
 
 `ingest_records` is the single entry point every source goes through: the CSV importer here,
-and later a last.fm API updater (user.getrecenttracks with `from=<latest ts>`), which only has
-to yield `Scrobble` objects. Re-importing overlapping data is safe: a scrobble is identified
+and the last.fm API updater (updater.py: user.getrecenttracks with `from=<latest ts>`), which only
+has to yield `Scrobble` objects. Re-importing overlapping data is safe: a scrobble is identified
 by (ts, artist, track) and duplicates are ignored. Timestamps are stored at minute precision,
 because lastfm-to-csv dates have no seconds; flooring every source to the minute makes the same
 listen from the CSV (20:11) and the API (20:11:23) collide instead of counting twice.

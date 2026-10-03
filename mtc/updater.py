@@ -15,7 +15,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from . import config, db, derive, ingest, settings
-from .webapi import ApiError, Fatal
+from .webapi import ApiError
 
 MAX_RUNS_PER_DAY = 3
 WINDOW_S = 24 * 3600
@@ -67,29 +67,50 @@ def fetch_new(client, user: str, since: int | None, stop: threading.Event | None
             raise ApiError(f"more than {MAX_PAGES} pages; stopping")
 
 
+def _claim(conn, now: int, force: bool) -> dict | None:
+    """Check the gate and record this attempt in one write transaction, so the CLI and the server
+    can't both slip under the limit. Returns the gate when the run isn't allowed, else None."""
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        gate = status(conn, now)
+        if not gate["due"] and not force:
+            conn.rollback()
+            return gate
+        db.set_meta(conn, ATTEMPTS_KEY, json.dumps([*_attempts(conn, now), now]))
+        conn.commit()
+        return None
+    except BaseException:
+        conn.rollback()
+        raise
+
+
+def _refund(conn, now: int) -> None:
+    """A run that was stopped before it fetched anything shouldn't use up one of the day's runs."""
+    with conn:
+        db.set_meta(conn, ATTEMPTS_KEY, json.dumps([t for t in _attempts(conn, now) if t != now]))
+
+
 def run_once(conn, client, user: str, *, now: float | None = None, force: bool = False,
              stop: threading.Event | None = None) -> dict:
     """One gated update. Returns {"state": "skipped" | "done" | "failed" | "stopped", ...}."""
     now = int(time.time() if now is None else now)
-    gate = status(conn, now)
-    if not gate["due"] and not force:
-        return {"state": "skipped", "reason": "limit", "next_at": gate["next_at"]}
+    blocked = _claim(conn, now, force)  # counted before the first request, so a crash mid-run still counts
+    if blocked:
+        return {"state": "skipped", "reason": "limit", "next_at": blocked["next_at"]}
     newest = conn.execute("SELECT MAX(ts) FROM scrobbles").fetchone()[0]
     since = max(0, min(newest, now) - OVERLAP_S) if newest else None  # a bogus future scrobble must not stall updates
-    with conn:  # recorded before the first request, so a crash mid-run still counts
-        db.set_meta(conn, ATTEMPTS_KEY, json.dumps([*_attempts(conn, now), now]))
     result: dict = {"at": now, "since": since}
     try:
         records = fetch_new(client, user, since, stop)
-        r = ingest.ingest_records(conn, records, source="lastfm-api", label=user)
-        if r["rows_added"]:
+        added = ingest.ingest_records(conn, records, source="lastfm-api", label=user)["rows_added"] if records else 0
+        # Also repairs a rebuild that an earlier run died in, after its scrobbles were already stored.
+        if added or conn.execute("SELECT 1 FROM scrobbles WHERE session_id IS NULL LIMIT 1").fetchone():
             derive.rebuild(conn)
-        result.update(state="done", read=r["rows_read"], added=r["rows_added"])
+        result.update(state="done", read=len(records), added=added)
     except Stopped:
         result.update(state="stopped")
-    except Fatal as exc:
-        result.update(state="failed", error=str(exc))
-    except ApiError as exc:
+        _refund(conn, now)
+    except ApiError as exc:  # includes Fatal: a bad or revoked key, which retrying can't fix
         result.update(state="failed", error=str(exc))
     except Exception as exc:  # leave a trace in the status instead of dying silently in a thread
         result.update(state="failed", error=f"{type(exc).__name__}: {exc}")

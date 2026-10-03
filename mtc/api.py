@@ -1,4 +1,5 @@
 """HTTP layer: JSON endpoints under /api and the single-page UI from static/."""
+import logging
 import sqlite3
 from collections.abc import Callable, Iterator
 from contextlib import asynccontextmanager, closing
@@ -60,9 +61,12 @@ def create_app(db_path: str | Path | None = None, *, lastfm_factory: Callable | 
     @asynccontextmanager
     async def lifespan(_app):
         if auto_update:
-            auto.start_if_due()
+            try:  # the updater is optional: a bad settings file must not stop the server starting
+                await run_in_threadpool(auto.start_if_due)
+            except Exception:
+                logging.getLogger("uvicorn.error").exception("couldn't start the last.fm updater")
         yield
-        auto.shutdown()
+        await run_in_threadpool(auto.shutdown)
         job.shutdown()  # finish the current item, then stop
 
     app = FastAPI(title="Music Taste Center", docs_url="/api/docs", openapi_url="/api/openapi.json", lifespan=lifespan)

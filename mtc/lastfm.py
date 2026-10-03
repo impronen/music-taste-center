@@ -118,7 +118,8 @@ class LastFm(JsonApi):
         if since:
             params["from"] = str(since)
         rt = self.call("user.getRecentTracks", **params).get("recenttracks")
-        rt = rt if isinstance(rt, dict) else {}
+        if not isinstance(rt, dict):  # not an empty page: an odd answer must not look like "nothing new"
+            raise ApiError("last.fm answered without a recenttracks block")
         out = []
         for t in as_list(rt.get("track")):
             ts = to_int((t.get("date") or {}).get("uts")) if isinstance(t, dict) else None
