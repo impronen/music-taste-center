@@ -73,6 +73,7 @@ class ApiTests(unittest.TestCase):
         first = everything["start"]
         early = c.get("/api/summary", params={"start": first, "end": (date.fromisoformat(first) + timedelta(days=89)).isoformat()}).json()
         self.assertTrue(all(d["plays"] > 0 for d in early["discoveries"]))
+        self.assertEqual((early["discoveries_start"], early["discoveries_end"]), (early["start"], early["end"]))
         # activity: zero-filled days up to 120 days, months beyond
         act = c.get("/api/activity", params={"start": start, "end": end}).json()
         self.assertEqual((act["unit"], len(act["items"])), ("day", 30))
@@ -123,3 +124,18 @@ class ApiTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DiscoveryWindowTests(unittest.TestCase):
+    def test_all_time_new_to_you_covers_only_the_last_year(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            c = TestClient(create_app(Path(tmp) / "d.db"))
+            c.post("/api/import", content=synthetic.to_csv(synthetic.generate(days=900)).encode(), headers={"x-filename": "a.csv"})
+            allt = c.get("/api/summary").json()
+            cutoff = (date.fromisoformat(allt["end"]) - timedelta(days=364)).isoformat()
+            self.assertEqual((allt["discoveries_start"], allt["discoveries_end"]), (cutoff, allt["end"]))
+            self.assertLess(allt["discoveries_new"], allt["new_artists"])  # the rest were found before the window
+            # an explicit range is used as given, even when it is the whole history
+            whole = c.get("/api/summary", params={"start": allt["start"], "end": allt["end"]}).json()
+            self.assertEqual((whole["discoveries_start"], whole["discoveries_new"]), (allt["start"], whole["new_artists"]))
+            self.assertGreater(whole["discoveries_new"], allt["discoveries_new"])
