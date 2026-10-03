@@ -23,7 +23,7 @@ Re-importing a newer full export is safe. A scrobble is identified by (time, art
 Try it without your own data:
 
 ```sh
-.venv/bin/python -m tests.synthetic > /tmp/demo.csv
+.venv/bin/python -m tests.synthetic --rhythms > /tmp/demo.csv   # --rhythms adds seasonal habits
 MTC_DB=/tmp/demo.db .venv/bin/python -m mtc import /tmp/demo.csv
 MTC_DB=/tmp/demo.db .venv/bin/python app.py
 ```
@@ -38,6 +38,7 @@ MTC_DB=/tmp/demo.db .venv/bin/python app.py
 | **Connections** | Force graph of your top artists, linked by co-listening, with taste clusters found automatically |
 | **Eras** | Per year: top artists, the *signature* artist (most over-represented compared with all time), and the biggest new discovery |
 | **Cleanup** | Merge artists that are spelled in more than one way, with suggested duplicates and name rules that fix future imports |
+| **Rhythms** | How genres (or places) move through the year, the week and the day: a genre × month heatmap, what stands out each season, time of day, weekdays vs weekends, seasonal artists (with "coming up"), genre drift per year, and how varied your mix is |
 | **Insights** | Rediscover (recommendations from your own past), on the rise, forgotten favourites, obsessions, staying power, gateways, binges, one-track artists, deep dives |
 
 ### How the connections work
@@ -64,6 +65,7 @@ mtc/
   webapi.py      shared throttled HTTP client with retries; transport injectable for tests
   tags.py        tag normalization and classification
   maintenance.py artist merges, name rules (artist_aliases) and duplicate suggestions
+  rhythms.py     cyclical patterns: seasons, time of day/week, seasonal artists, drift, diversity
   insights.py    all read queries
   api.py         FastAPI JSON endpoints (/api/docs) + static UI
   migrations/    numbered SQL migrations (PRAGMA user_version)
@@ -98,6 +100,17 @@ The same from a terminal:
 - **Genre profile.** Each artist's plays are split across its top 5 genre tags in proportion to their weights. The result appears under Library → Genres, on per-genre pages, and in Eras.
 - **Images.** Album covers come from last.fm and are loaded from its CDN. last.fm no longer serves artist photos (only a placeholder), so an artist page shows the cover of your most-played album.
 - **What leaves your machine.** Only artist and album names, sent to last.fm and MusicBrainz, plus the cover image requests. last.fm's terms allow non-commercial use and at most 100 MB of cached data; this stores a few kB per artist.
+
+## How the rhythms work
+
+Rhythms need genre tags (Import → Fetch tags & covers). Every view shows what share of your plays it is based on.
+
+- **Genre-weighted plays.** As in the genre profile, an artist's plays are split across its top 5 genre tags. For places ("finnish"), artists that were looked up but have no place tag count as "elsewhere".
+- **Lift.** A bucket (a month, a season, a part of the day) is compared with *that same year's* mix: lift = plays / expected plays. 1,5× means half as much again as usual. A genre that simply grew over the years therefore doesn't look seasonal, and partial first and last years don't skew anything. Small buckets are pulled towards 1 (20 pseudo-plays), and cells with fewer than 30 expected plays are left blank.
+- **Recurrence.** "In 5 of 6 winters" counts the years in which the bucket was above that year's own expectation. A season lists a genre only if it is at least 1,2× and held in at least half of those years. Winter is December–February, and December counts towards the next year's winter.
+- **Seasonal artists.** Each play becomes a point on a yearly circle (day of the year), with every year weighted equally. An artist is seasonal when the plays cluster tightly enough (mean resultant length ≥ 0,5), in at least 3 years, with each year's peak within 30 days of the overall peak in at least 60 % of the years. *Coming up* means the season starts within 4 weeks of your newest scrobble.
+- **Diversity** is the "effective number of genres", exp(Shannon entropy) of each month's genre mix: 4,0 is as varied as four equally played genres.
+- **Speed.** One grouped pass over the scrobbles feeds every view. Results are cached until the next import, rebuild, merge or tag fetch: about 0,3 s at 260k scrobbles, then instant.
 
 ## Cleaning up duplicate artists
 

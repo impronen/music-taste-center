@@ -133,6 +133,7 @@
       api("/api/top/album?" + qs({ ...range, limit: 10 })),
       api("/api/recent?limit=8"),
     ]);
+    const seasonal = await api("/api/rhythms/artists").catch(() => null);
     const prev = sum.previous;
     // Change against the previous period of the same length; text stays in text colours, the arrow carries direction.
     const delta = (key) => {
@@ -163,6 +164,9 @@
       <div class="grid">
         ${card(unitDay ? "Scrobbles per day" : "Scrobbles per month", html`<div class="chart" id="c-timeline"></div>`,
           `${period.label} · hover for the top artist · click to open ${unitDay ? "that day" : "that month"} in the library`)}
+        ${seasonal?.coming_up.length ? card("Your season", html`<div class="chips">${seasonal.coming_up.map((a) =>
+            html`<a class="chip" href="#/artist/${a.id}">${a.name} <span class="muted">${a.status === "now" ? "in season" : `from ~${peakLabel(a.start)}`}</span></a>`)}</div>`,
+          html`Artists you return to around this time every year · <a href="#/rhythms">Rhythms</a>`) : ""}
         <div class="grid cols-3">
           ${card("Top artists", rankList(ta, { nameOf: artistName }), period.label)}
           ${card("Top tracks", rankList(tt, { nameOf: trackName }), period.label)}
@@ -369,6 +373,7 @@
       <div class="hero"><div><div class="kicker">${kind}</div><h1>${t.name}</h1></div>
         <div class="links"><a href="https://www.last.fm/tag/${encodeURIComponent(t.name)}" target="_blank" rel="noopener noreferrer">last.fm ↗</a></div></div>
       <div class="grid">
+        ${t.months ? card("Through the year", html`<div class="chart" id="c-tag-year"></div>`, strongestMonths(t.months)) : ""}
         ${t.kind === "genre" ? card("Plays per month", html`<div class="chart" id="c-tag"></div>`,
           `About ${Fmt.int(plays)} plays: each artist's plays are split across its top genre tags`) : ""}
         <div class="grid cols-2">
@@ -378,11 +383,92 @@
             : html`<p class="empty">No albums with this tag yet.</p>`)}
         </div>
       </div>`);
+    if (t.months) {
+      Charts.matrix(document.getElementById("c-tag-year"), { cols: t.months.map((m) => m.month), rows: [{ name: t.name, cells: t.months }] },
+        { label: `${t.name} through the year` });
+    }
     if (t.kind === "genre") {
       Charts.columns(document.getElementById("c-tag"), t.monthly, {
         value: (d) => d.plays, xLabel: (d) => (d.month.endsWith("-01") ? d.month.slice(0, 4) : null), label: `${t.name} plays per month`,
         tip: (d) => ({ title: Fmt.month(d.month), rows: [{ value: Fmt.int(d.plays), label: "plays" }] }),
       });
+    }
+  }
+
+  // ---------- rhythms ----------
+  const SEASON_LABEL = { winter: "Winter", spring: "Spring", summer: "Summer", autumn: "Autumn" };
+  const liftText = (x) => `${Fmt.dec(x)}×`;
+  const peakLabel = (mmdd) => Fmt.day(`2001-${mmdd}`).replace(/ \d{4}$/, "");
+  function strongestMonths(cells) {
+    const top = cells.filter((c) => c.lift != null && c.lift >= 1.1).sort((a, b) => b.lift - a.lift).slice(0, 3);
+    return top.length ? `Strongest in ${top.map((c) => `${c.month} (${liftText(c.lift)})`).join(", ")} · compared with your usual share, year by year`
+      : "No month stands out: about your usual share all year";
+  }
+  const seasonStatus = (a) => (a.status === "now" ? html`<span class="pill">In season</span>` : a.status === "soon" ? html`<span class="pill">Coming up</span>` : "");
+
+  async function rhythmsView(params) {
+    const kind = params.get("kind") === "place" ? "place" : "genre";
+    const [r, sa] = await Promise.all([api(`/api/rhythms?kind=${kind}`), api("/api/rhythms/artists")]);
+    const toggle = html`<div class="seg" id="kind">${[["genre", "Genres"], ["place", "Places"]].map(([k, l]) =>
+      html`<button type="button" data-k="${k}" class="${k === kind ? "on" : ""}">${l}</button>`)}</div>`;
+    const coverage = html`Based on ${Fmt.pct(r.coverage)} of your plays (artists with ${kind} tags)${r.coverage < 0.5
+      ? html` · <a href="#/import">fetch more tags</a>` : ""}`;
+    const head = html`<div class="page-head"><div><h1>Rhythms</h1>
+      <p>How your listening moves through the year, the week and the day. Each year is compared with itself, so a genre that simply grew over time doesn't count as seasonal.</p></div>${toggle}</div>`;
+    if (!r.covered) {
+      mount(view, html`${head}${card("No tags yet", html`<p>Rhythms need ${kind} tags from last.fm. Fetch them on the Import page; the views fill in as tags arrive.</p>
+        <p><a class="cta" href="#/import">Go to Import →</a></p>`)}`);
+      bindKind();
+      return;
+    }
+    const tagHref = (row) => `#/tag/${row.id}`;
+    const seasonCard = (sc) => card(`${SEASON_LABEL[sc.key]}`, html`
+      ${sc.genres.length ? html`<ul class="insight-list">${sc.genres.map((g) => html`<li><a href="#/tag/${g.id}">${g.name}</a>
+        <span class="num"><strong>${liftText(g.lift)}</strong> <span class="muted">in ${g.up} of ${g.years} ${sc.key === "winter" ? "winters" : sc.key + "s"}</span></span></li>`)}</ul>`
+        : html`<p class="empty">No ${kind} stands out: about your usual mix.</p>`}
+      ${sc.artists.length ? html`<p class="season-artists"><span class="muted">More than usual:</span> ${sc.artists.map((a, i) => html`${i ? ", " : ""}${link.artist(a.id, a.name)}`)}</p>` : ""}`,
+      sc.months.join(" · "));
+    mount(view, html`${head}
+      <p class="coverage muted">${coverage}</p>
+      <div class="grid">
+        ${card(kind === "genre" ? "Genres through the year" : "Places through the year", html`<div class="chart" id="c-months"></div>`,
+          "Share of each month's plays compared with your usual share that year; hover a cell for the numbers")}
+        <div class="grid cols-2">${r.seasons.map(seasonCard)}</div>
+        <div class="grid cols-2">
+          ${card("Time of day", html`<div class="chart" id="c-day"></div>`, "Night 0–6, morning 6–12, afternoon 12–18, evening 18–24 (local time)")}
+          ${card("Weekdays and weekends", html`<div class="chart" id="c-week"></div>`, "Monday–Friday vs Saturday–Sunday")}
+        </div>
+        ${card("Seasonal artists", sa.artists.length ? html`<ol class="rank nobar">${sa.artists.map((a, i) => html`
+            <li><span class="pos">${i + 1}</span><span class="name">${link.artist(a.id, a.name)}<small>${peakLabel(a.start)} – peak ~${peakLabel(a.peak)} · ${a.years_agree} of ${a.years} years</small></span>
+            <span class="num">${seasonStatus(a)}</span><span class="bar"></span></li>`)}</ol>`
+          : html`<p class="empty">No artist returns at the same time every year (yet). It takes at least three years of history.</p>`,
+          "Artists you come back to around the same date every year · “coming up” = their season starts within four weeks")}
+        ${r.drift ? card(kind === "genre" ? "Genre drift" : "Place drift", html`<div class="chart" id="c-drift"></div>`, "Each year's mix of your top tags") : ""}
+        ${r.diversity ? card("Diversity", html`<div class="chart" id="c-div"></div>`,
+          `Effective number of genres in each month's mix (higher = more varied)${r.diversity.most ? ` · on average most varied in ${r.diversity.most}, least in ${r.diversity.least}` : ""}`) : ""}
+      </div>`);
+    bindKind();
+    const rows = (m) => ({ cols: m.cols, rows: m.rows.map((row) => ({ ...row, href: tagHref(row) })) });
+    Charts.matrix(document.getElementById("c-months"), rows(r.months), { label: "Genres through the year" });
+    Charts.matrix(document.getElementById("c-day"), rows(r.dayparts), { label: "Genres by time of day" });
+    Charts.matrix(document.getElementById("c-week"), rows(r.weekparts), { label: "Genres on weekdays and weekends" });
+    if (r.drift) {
+      Charts.stacked(document.getElementById("c-drift"), r.drift.years, {
+        series: r.drift.series, shares: (d) => d.shares, other: (d) => d.other, xLabel: (d) => d.year,
+        title: (d) => `${d.year} · ${Fmt.int(d.plays)} tagged plays`, label: "Genre mix per year",
+      });
+    }
+    if (r.diversity) {
+      Charts.line(document.getElementById("c-div"), r.diversity.monthly, {
+        value: (d) => d.effective, yFormat: (v) => Fmt.dec(v), label: "Effective number of genres per month",
+        xLabel: (d) => (d.month.endsWith("-01") ? d.month.slice(0, 4) : null),
+        tip: (d) => ({ title: Fmt.month(d.month), rows: [{ value: Fmt.dec(d.effective), label: "effective genres" }, { value: Fmt.int(d.plays), label: "tagged plays" }] }),
+      });
+    }
+    function bindKind() {
+      view.querySelectorAll("#kind button").forEach((b) => b.addEventListener("click", () => {
+        location.hash = "#/rhythms" + (b.dataset.k === "place" ? "?kind=place" : "");
+      }));
     }
   }
 
@@ -896,6 +982,7 @@
     [/^\/tag\/(\d+)$/, tagView],
     [/^\/connections$/, connectionsView],
     [/^\/eras$/, erasView],
+    [/^\/rhythms$/, rhythmsView],
     [/^\/insights$/, insightsView],
     [/^\/import$/, importView],
     [/^\/cleanup$/, cleanupView],
