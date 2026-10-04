@@ -3,6 +3,7 @@
 The details behind the pages: what is measured, how, and what is sent to the internet. For installing and using the app, see the [README](../README.md).
 
 - [The pages in detail](#the-pages-in-detail)
+- [Artist velocity](#artist-velocity)
 - [Connections](#connections)
 - [Tags, covers, genres and release dates](#tags-covers-genres-and-release-dates)
 - [Rhythms](#rhythms)
@@ -16,7 +17,7 @@ The details behind the pages: what is measured, how, and what is sent to the int
 |---|---|
 | **Overview** | Any period: last 7/30/90 days, last year, all time, a calendar year or month, or a custom date range. Totals with the change vs the previous period, scrobbles per day (up to 120 days) or per month, top artists, tracks and albums, new discoveries, and a listening clock. Also all-time *novelty* (share of plays going to artists discovered in the previous 12 months) and recent plays |
 | **Library** | Every artist, sortable and filterable, plus top artists, tracks, albums or genres for any period (the same period bar, or a day or month clicked on a chart) |
-| **Artist** | Plays per month, top tracks and albums, *how you discovered them* (the artist you were playing right before), who they *led you to*, artists *listened alongside*, and time of day |
+| **Artist** | Plays per month, a *velocity* chart (cumulative plays, comparable across up to six artists), top tracks and albums, *how you discovered them* (the artist you were playing right before), who they *led you to*, artists *listened alongside*, and time of day |
 | **Connections** | Force graph of your top artists, linked by co-listening, with taste clusters found automatically |
 | **Eras** | Per year: top artists, the *signature* artist (most over-represented compared with all time), and the biggest new discovery |
 | **Cleanup** | Merge artists that are spelled in more than one way, with suggested duplicates and name rules that fix future imports |
@@ -24,6 +25,16 @@ The details behind the pages: what is measured, how, and what is sent to the int
 | **Decades** | Release decades, the age of the music you play, how long you took to find albums, and older records (see [Decades](#decades)) |
 | **Insights** | Rediscover (recommendations from your own past), on the rise, forgotten favourites, obsessions, staying power, gateways, binges, one-track artists, deep dives |
 | **Import** | Add a CSV (a scrobble is identified by time, artist and track, so rows already stored are skipped), connect your last.fm account, and fetch tags, covers and release dates |
+
+## Artist velocity
+
+The **Velocity** card on every artist page shows the artist's *cumulative* plays over time: a steeper line is a faster pace. You can add up to five more artists (your top artists, the ones you play alongside it, or anyone found by search) to see how fast you got through each of them. The selection and the view live in the page address (`#/artist/12?vs=5,9&view=relative`), so a comparison can be bookmarked.
+
+- **Two views.** *Calendar* puts every curve on the real date axis. *Since first play* starts each curve at zero on that artist's first play, so artists you found years apart become comparable.
+- **Weekly curve.** The curve is the cumulative play count at the end of each week (Monday to Sunday, in your time zone), the same weeks for every artist.
+- **Already in rotation.** An artist first played in the first 30 days of your history was probably known before tracking began, and plays from before then aren't counted. Its first stretch is drawn dashed, and the artist is marked "known before", because that early pace isn't a discovery pace.
+- **Pace facts** under the chart: the time from the first play to the 100th, 500th and 1 000th play (a dash when it hasn't got there), the **fastest 30 days** (the most plays in any 30 consecutive days, and when that stretch began), and plays per month over the **last year** against **overall** (since the first play). "Now" means your newest scrobble. The last-year figure needs an artist older than a year, and the overall one at least 30 days, so a short burst isn't mistaken for a pace.
+- **Data.** `GET /api/velocity?ids=1,2,3` (up to six ids). Unknown ids are ignored. The per-artist day counts are cached until the next import or merge.
 
 ## Connections
 

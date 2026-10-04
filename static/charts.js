@@ -135,9 +135,12 @@
         draw(w);
       }
     };
+    el._resizeObserver?.disconnect(); // a chart redrawn in place (new data) must not keep drawing the old one on resize
+    observers.delete(el._resizeObserver);
     const ro = new ResizeObserver(() => requestAnimationFrame(run));
     ro.observe(el);
     observers.add(ro);
+    el._resizeObserver = ro;
     run();
   }
   function cleanup() {
@@ -329,6 +332,111 @@
     });
   }
 
+  // ---------- several curves on one axis (cumulative plays per artist) ----------
+  /* series: [{ name, color, values: [number|null per step], dashedTo?: step }]: one value per x step,
+     null = nothing to draw there; dashedTo draws the curve up to that step dashed.
+     opts: { xLabel(i) -> label|null, title(i) -> tooltip title, height, label, yFormat, endLabels }
+     Hover or the arrow keys move a crosshair; the tooltip lists every curve at that step. */
+  function lines(el, series, opts) {
+    const height = opts.height ?? 280;
+    const fmt = opts.yFormat ?? Fmt.compact;
+    const steps = Math.max(0, ...series.map((s) => s.values.length));
+    responsive(el, (width) => {
+      el.replaceChildren();
+      const max = Math.max(0, ...series.flatMap((s) => s.values.filter((v) => v != null)));
+      const ticks = niceTicks(max);
+      const yMax = ticks[ticks.length - 1];
+      const top = 10, bottom = 26;
+      const left = Math.max(...ticks.map((t) => fmt(t).length)) * 7.2 + 14;
+      const labelled = (opts.endLabels ?? true) && width >= 560;
+      const maxChars = labelled ? Math.min(20, Math.max(...series.map((s) => s.name.length))) : 0;
+      const right = labelled ? maxChars * 6.8 + 26 : 12;
+      const innerW = width - left - right, innerH = height - top - bottom;
+      const x = (i) => left + (steps <= 1 ? 0 : (i / (steps - 1)) * innerW);
+      const y = (v) => top + innerH - (v / yMax) * innerH;
+      const svg = svgEl("svg", { width, height, viewBox: `0 0 ${width} ${height}`, "aria-label": opts.label ?? "" }, el);
+      for (const t of ticks) {
+        svgEl("line", { x1: left, x2: width - right, y1: y(t), y2: y(t), class: "gridline" }, svg);
+        if (t > 0) text(svg, left - 8, y(t) + 4, fmt(t), { "text-anchor": "end" });
+      }
+      xLabels(svg, Array.from({ length: steps }, (_, i) => ({ label: opts.xLabel?.(i), cx: x(i) })), height - 6);
+      const path = (s, from, to) => {
+        let d = "", pen = false;
+        for (let i = from; i <= to; i++) {
+          const v = s.values[i];
+          if (v == null) { pen = false; continue; }
+          d += `${pen ? "L" : "M"}${x(i).toFixed(1)},${y(v).toFixed(1)}`;
+          pen = true;
+        }
+        return d;
+      };
+      const ends = [];
+      series.forEach((s) => {
+        const last = s.values.reduce((a, v, i) => (v == null ? a : i), -1);
+        if (last < 0) return;
+        const cut = s.dashedTo != null ? Math.min(s.dashedTo, last) : -1;
+        if (cut > 0) {
+          const dashed = svgEl("path", { d: path(s, 0, cut), class: "vline dashed" }, svg);
+          dashed.style.stroke = s.color;
+        }
+        const solid = svgEl("path", { d: path(s, Math.max(0, cut), last), class: "vline" }, svg);
+        solid.style.stroke = s.color;
+        ends.push({ s, y: y(s.values[last]), x: x(last) });
+      });
+      if (labelled) { // end-of-line labels, nudged apart so neighbours stay readable
+        const gap = 16;
+        const placed = ends.slice().sort((a, b) => a.y - b.y);
+        placed.forEach((e, k) => { e.ly = k && e.y < placed[k - 1].ly + gap ? placed[k - 1].ly + gap : e.y; });
+        for (let k = placed.length - 1; k >= 0; k--) {
+          const limit = k === placed.length - 1 ? top + innerH : placed[k + 1].ly - gap;
+          if (placed[k].ly > limit) placed[k].ly = limit;
+        }
+        placed.forEach((e) => {
+          const name = e.s.name.length > maxChars ? e.s.name.slice(0, maxChars - 1) + "…" : e.s.name;
+          const dot = svgEl("circle", { cx: e.x + 8, cy: e.ly, r: 4 }, svg);
+          dot.style.fill = e.s.color;
+          text(svg, e.x + 16, e.ly + 4.5, name, { class: "tick vlabel" });
+        });
+      }
+      const cross = svgEl("line", { y1: top, y2: top + innerH, class: "cross", visibility: "hidden" }, svg);
+      const marks = series.map((s) => {
+        const m = svgEl("circle", { r: 4.5, class: "marker", visibility: "hidden" }, svg);
+        m.style.fill = s.color;
+        return m;
+      });
+      const point = (i) => {
+        cross.setAttribute("x1", x(i));
+        cross.setAttribute("x2", x(i));
+        cross.setAttribute("visibility", "visible");
+        series.forEach((s, k) => {
+          const v = s.values[i];
+          marks[k].setAttribute("visibility", v == null ? "hidden" : "visible");
+          if (v != null) { marks[k].setAttribute("cx", x(i)); marks[k].setAttribute("cy", y(v)); }
+        });
+      };
+      const hidePoint = () => { cross.setAttribute("visibility", "hidden"); marks.forEach((m) => m.setAttribute("visibility", "hidden")); };
+      const tipAt = (i) => ({
+        title: opts.title(i),
+        rows: series.filter((s) => s.values[i] != null).sort((a, b) => b.values[i] - a.values[i])
+          .map((s) => ({ color: s.color, value: Fmt.int(s.values[i]), label: s.name })),
+      });
+      const overlay = svgEl("rect", { x: left, y: top, width: innerW, height: innerH, class: "hit" }, svg);
+      overlay.addEventListener("pointermove", (e) => {
+        const box = svg.getBoundingClientRect();
+        const px = ((e.clientX - box.left) / box.width) * width;
+        const i = Math.max(0, Math.min(steps - 1, Math.round(((px - left) / innerW) * (steps - 1))));
+        point(i);
+        const t = tipAt(i);
+        showTip(e, t.rows, t.title);
+      });
+      overlay.addEventListener("pointerleave", () => { hidePoint(); hideTip(); });
+      keyboard(svg, Array.from({ length: steps }, (_, i) => ({
+        node: { classList: { add: () => point(i), remove: hidePoint }, getBoundingClientRect: () => cross.getBoundingClientRect() },
+        tip: () => tipAt(i),
+      })), { label: opts.label, cols: 13 }); // up/down jump a quarter of a year
+    });
+  }
+
   // ---------- listening clock: 7 × 24 dots, bigger and darker = more plays ----------
   const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
   function clock(el, grid, opts = {}) {
@@ -489,5 +597,5 @@
     el.after(legend);
   }
 
-  window.Charts = { columns, line, clock, matrix, stacked, liftStep, cleanup, showTip, moveTip, hideTip, Fmt };
+  window.Charts = { columns, line, lines, clock, matrix, stacked, liftStep, cleanup, showTip, moveTip, hideTip, Fmt };
 })();
