@@ -83,6 +83,11 @@ class EditionTitleTests(unittest.TestCase):
         self.assertEqual(clean_title("Closer (Deluxe Edition)"), ("Closer", None))
         self.assertEqual(clean_title("Closer"), ("Closer", None))
 
+    def test_curly_apostrophes_and_dangling_dashes_are_handled(self):
+        for title, expected in [("Thriller (Collector’s Edition)", "Thriller"), ("Foo - (Deluxe)", "Foo"), ("(Deluxe) - Foo", "Foo"),
+                                ("Foo - [Remastered]", "Foo"), ("Foo (Live (Deluxe))", "Foo (Live)"), ("Foo ((Remastered))", "Foo")]:
+            self.assertEqual(edition_free_title(title), expected, title)
+
     def test_cleaning_is_idempotent_and_terminates(self):
         pieces = ["(", ")", "[", "]", " - ", "Deluxe", "Edition", "EP", "Remastered", "x", " ", "–", "Single", "2011"]
         import random
@@ -163,6 +168,35 @@ class SearchTests(unittest.TestCase):
                           group("Closer", artist="Band", secondary=["Compilation"], date="2012-01-01")])
         with self.assertRaises(NotFound):
             mb.search_release_group("Band", "Closer (Deluxe Edition)")
+
+    def test_a_single_named_like_the_album_is_not_the_album(self):
+        mb = mb_with(raw=[group("Foo", artist="Band", primary="Single", date="1990-01-01"),
+                          group("Foo", artist="Band", primary="Album", date="1992-06-01")])
+        self.assertEqual(mb.search_release_group("Band", "Foo (Deluxe Edition)")["release_date"], "1992-06-01")
+        only_single = mb_with(raw=[group("Foo", artist="Band", primary="Single", date="1990-01-01")])
+        with self.assertRaises(NotFound):
+            only_single.search_release_group("Band", "Foo (Deluxe Edition)")
+
+    def test_the_album_beats_an_ep_of_the_same_name_but_an_ep_alone_is_accepted(self):
+        both = mb_with(raw=[group("Foo", artist="Band", primary="EP", date="1989-01-01"),
+                            group("Foo", artist="Band", primary="Album", date="1992-06-01")])
+        self.assertEqual(both.search_release_group("Band", "Foo (Remastered)")["release_date"], "1992-06-01")
+        ep_only = mb_with(raw=[group("Foo", artist="Band", primary="EP", date="1989-01-01")])
+        self.assertEqual(ep_only.search_release_group("Band", "Foo (Remastered)")["release_date"], "1989-01-01")
+
+    def test_a_secondary_type_must_be_a_whole_word_of_the_title(self):
+        for title, kind in [("Alive (Deluxe Edition)", "Live"), ("Olive (Remastered)", "Live"), ("Demolition (Remastered)", "Demo"),
+                            ("Remixed (Deluxe Edition)", "Remix"), ("Deliverance (Deluxe Edition)", "Live")]:
+            mb = mb_with(raw=[group(edition_free_title(title), artist="Band", secondary=[kind])])
+            with self.assertRaises(NotFound, msg=title):
+                mb.search_release_group("Band", title)
+
+    def test_a_best_of_deluxe_edition_may_be_a_compilation_but_other_titles_may_not(self):
+        comp = lambda title: mb_with(raw=[group(title, artist="Band", secondary=["Compilation"], date="2005-01-01")])
+        for title in ("Greatest Hits (Deluxe Edition)", "The Best Of (Remastered)", "Very Best of [Expanded Edition]"):
+            self.assertEqual(comp(edition_free_title(title)).search_release_group("Band", title)["release_date"], "2005-01-01", title)
+        with self.assertRaises(NotFound):
+            comp("Closer").search_release_group("Band", "Closer (Deluxe Edition)")
 
     def test_a_secondary_type_named_in_the_title_is_fine(self):
         mb = mb_with(raw=[group("Closer (Live)", artist="Band", secondary=["Live"], date="2009-01-01")])

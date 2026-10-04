@@ -19,10 +19,14 @@ _CORE = {"deluxe", "remaster", "remastered", "edition", "expanded", "anniversary
 _FILLER = {"version", "bonus", "track", "tracks", "special", "collector's", "collectors", "limited", "standard", "super",
            "legacy", "platinum", "tour", "mix", "digital", "explicit", "clean", "digipak", "international", "and", "the", "&"}
 _YEAR_OR_ORDINAL = re.compile(r"^(?:\d{4}|\d+(?:st|nd|rd|th))$")
+# A same-artist "Greatest Hits (Deluxe Edition)" is a compilation on MusicBrainz even though its title doesn't say so.
+_BEST_OF = re.compile(r"^(?:the )?(?:very |ultimate )?(?:best of|greatest hits|hits|collection|essential|anthology)\b", re.I)
 _BRACKET_GROUP = re.compile(r"[(\[]([^()\[\]]*)[)\]]")
+_BRACKET_PADDING = re.compile(r"([(\[])\s+|\s+([)\]])")
+_EMPTY_BRACKETS = re.compile(r"\(\s*\)|\[\s*\]")
 _DASH_SUFFIX = re.compile(r"\s+-\s+([^-]*?)\s*$")
 # Dashes and brackets that streaming services also use (NFKC already turns fullwidth brackets into ASCII).
-_PUNCTUATION = str.maketrans({"–": "-", "—": "-", "‒": "-", "―": "-", "【": "[", "】": "]", "〔": "(", "〕": ")"})
+_PUNCTUATION = str.maketrans({"’": "'", "ʼ": "'", "–": "-", "—": "-", "‒": "-", "―": "-", "【": "[", "】": "]", "〔": "(", "〕": ")"})
 
 
 def _is_marker(text: str) -> bool:
@@ -41,13 +45,14 @@ def clean_title(title: str) -> tuple[str, str | None]:
     was removed (those are separate release groups from the album of the same name)."""
     cleaned, release_type = _prepared(title), None
     while True:
-        step = " ".join(_BRACKET_GROUP.sub(lambda m: "" if _is_marker(m.group(1)) else m.group(0), cleaned).split())
+        step = _BRACKET_GROUP.sub(lambda m: "" if _is_marker(m.group(1)) else m.group(0), cleaned)
+        step = " ".join(_EMPTY_BRACKETS.sub("", _BRACKET_PADDING.sub(r"\1\2", step)).split())  # "Foo (Live )" -> "Foo (Live)"
         suffix = _DASH_SUFFIX.search(step)
         if suffix and suffix.group(1).lower() in ("ep", "single"):
             release_type, step = suffix.group(1).upper() if suffix.group(1).lower() == "ep" else "Single", step[:suffix.start()]
         elif suffix and _is_marker(suffix.group(1)):
             step = step[:suffix.start()]
-        step = step.strip()
+        step = step.strip() if step == cleaned else step.strip(" -")  # no dangling " -" after a removal
         if step == cleaned or not step:
             return cleaned, release_type if cleaned != _prepared(title) else None
         cleaned = step
@@ -116,6 +121,7 @@ class MusicBrainz(JsonApi):
         })
         want_artist = key(artist)
         wanted_type = clean_title(retry_of)[1] if retry_of else None
+        found = []
         for rg in data.get("release-groups") or []:
             credit = " ".join(
                 (c.get("name") or "") + (c.get("joinphrase") or "") for c in rg.get("artist-credit") or []
@@ -123,10 +129,26 @@ class MusicBrainz(JsonApi):
             if (rg.get("score") or 0) < min_score or key(rg.get("title") or "") not in accepted_titles \
                     or want_artist not in key(credit):
                 continue
-            if retry_of is not None:
-                if wanted_type and rg.get("primary-type") != wanted_type:
-                    continue
-                if any(t.lower() not in retry_of.lower() for t in rg.get("secondary-types") or []):
-                    continue
-            return _group(rg)
+            if retry_of is not None and not self._same_release(rg, retry_of, title, wanted_type):
+                continue
+            found.append(rg)
+        if retry_of is not None and wanted_type is None:  # the album, not an EP, when the artist has both
+            found.sort(key=lambda rg: rg.get("primary-type") != "Album")
+        if found:
+            return _group(found[0])
         raise NotFound("no confident match")
+
+    @staticmethod
+    def _same_release(rg: dict, original_title: str, cleaned_title: str, wanted_type: str | None) -> bool:
+        """On the cleaned-title retry: is this group plausibly the release the user's title meant, and
+        not another release of the same artist that happens to share the cleaned name?"""
+        primary = rg.get("primary-type")
+        if wanted_type:  # "X - EP" / "X - Single" is that type, never the album of the same name
+            return primary == wanted_type
+        if primary not in ("Album", "EP"):  # a Single is the title track, not the album
+            return False
+        for kind in rg.get("secondary-types") or []:  # Live, Remix, Demo... must be named in the title
+            named = re.search(rf"(?<!\w){re.escape(kind)}(?!\w)", original_title, re.I)
+            if not named and not (kind == "Compilation" and _BEST_OF.match(cleaned_title)):
+                return False
+        return True
