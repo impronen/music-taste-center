@@ -5,7 +5,14 @@ Taste Center is a local FastAPI + SQLite app with a vanilla-JS UI (no build step
 ## Layout
 
 ```
+app.py           entry point: `python app.py` serves the UI (same as `python -m mtc serve`)
+Taste Center.command  macOS double-click launcher (sets up .venv on first run, opens the browser)
+requirements.txt / requirements-dev.txt   runtime dependencies / plus the test dependencies
 mtc/
+  __main__.py    the command line: serve, import, rebuild, enrich, update, set-key, set-user, set-birth-year, merge-artist, duplicates, stats
+  config.py      paths, time zone and every tunable constant
+  db.py          SQLite connection, migrations and the data-version counters
+  fsutil.py      file reading that survives cloud placeholders (iCloud/OneDrive) and non-UTF-8 exports
   ingest.py      CSV parsing + ingest_records(): the single entry point for any source
   derive.py      sessions, artist stats, gateways, co-listening links (rebuilt after each import)
   enrich.py      resumable metadata fetch (artists, albums, release dates)
@@ -50,14 +57,20 @@ The suite runs on Python 3.13 and 3.14. It never touches the network: the last.f
 MTC_DB=demo.db .venv/bin/python app.py serve --no-update
 ```
 
-`--demo-db` refuses to write over an existing file. Use `--no-update` with a demo database so the live updater doesn't pull your real scrobbles into it. The README screenshots were taken from such a demo library.
+On Windows use `.venv\Scripts\python`, and set the variable first: `$env:MTC_DB = "demo.db"` in PowerShell, or `set MTC_DB=demo.db` in `cmd`. Stop the demo with Ctrl+C. Starting the app normally afterwards shows your own data again, because the demo is a separate file.
+
+- `--demo-db` refuses to write over an existing file (delete the old `demo.db` first, or pick another name).
+- `--no-update` stops the live updater, so a real username or key in your environment can't pull real scrobbles into the demo.
+- With `MTC_DB` set, the settings file defaults to `settings.json` next to the database (here `./settings.json`, which is gitignored). Saving an API key or birth year in the demo UI writes it there.
+
+The README screenshots were taken from such a demo library.
 
 ## Configuration
 
 | Env var | Default | |
 |---|---|---|
 | `MTC_DB` | `data/mtc.db` | database path |
-| `MTC_SETTINGS` | `data/settings.json` | settings file path |
+| `MTC_SETTINGS` | `settings.json` next to the database (`data/settings.json` by default) | settings file path |
 | `MTC_TZ` | `Europe/Helsinki` | zone for local hours and days. After changing it, run `python -m mtc rebuild` |
 | `MTC_PORT` | `8765` | port used by `Taste Center.command` (or `serve --port`) |
 | `MTC_AUTO_UPDATE` | on | `0` turns off the startup scrobble update |
@@ -79,7 +92,7 @@ The full list is in `CLAUDE.md`; the ones that matter most:
 
 The UI uses the "Organic" design system: a cream background, terracotta (#C67139) for data and primary actions, sage (#7A8A5E) for discovery, time and "more than usual", with Caprasimo headings over Figtree text. Both fonts are self-hosted in `static/fonts/` (SIL Open Font License, see the `OFL-*.txt` files there), so the app loads nothing from the internet at runtime.
 
-- **One theme definition.** Every colour is a token on `:root`, defined once for light and dark with `light-dark()`. The ◐ button overrides the system setting.
+- **One theme definition.** Every colour is a token on `:root`, defined once for light and dark with `light-dark()`. The moon button in the top right overrides the system setting.
 - **Data colours are validated.** The cluster colours (terracotta, blue, sage, plum, ochre) and the lift scale (terracotta = less, sand = as usual, sage = more) keep the design's hues. Their lightness and chroma were adjusted until they passed the dataviz palette validator in both themes: colour-blind separation between neighbouring clusters, and visible steps that clear the background. The graph also dims every cluster except the selected one, so it doesn't rely on colour alone.
 - **Accessible by default.**
   - Charts are focusable: arrow keys read values, and Enter opens the day or month.

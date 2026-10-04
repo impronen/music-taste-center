@@ -219,7 +219,7 @@
   // ---------- views ----------
   function emptyState(seq) {
     paint(seq, html`<div class="page-head"><div><h1>No scrobbles yet</h1>
-      <p class="lead">Export your history with lastfm-to-csv, then import the file.</p>
+      <p class="lead">Connect your last.fm account, or import a file of your scrobbles (your listening history), to get started.</p>
       <p style="margin-top:20px"><a class="btn primary" href="#/import">${icon("upload")} Go to Import</a></p></div></div>`);
   }
 
@@ -1170,9 +1170,9 @@
           <span class="secondary">or <span class="choose">choose a file</span>. Re-importing a full export is safe; known scrobbles are skipped.</span></label>
           <div id="result" role="status" aria-live="polite"></div></div>
         ${card("What works", html`<dl class="kv">
-          <div><dt>Format</dt><dd>artist, album, track, date without a header (lastfm-to-csv), or any CSV with artist / track / date columns</dd></div>
+          <div><dt>Format</dt><dd>artist, album, track, date without a header, or any CSV whose columns are named artist, track and date (album is optional)</dd></div>
           <div><dt>Encoding</dt><dd>UTF-8, Windows-1252 and Latin-1 are detected automatically</dd></div>
-          <div><dt>Time</dt><dd>last.fm dates are UTC; days and hours use your configured time zone (MTC_TZ)</dd></div>
+          <div><dt>Time</dt><dd>dates without a time zone are read as UTC (last.fm's are); days and hours use your configured time zone (MTC_TZ)</dd></div>
           <div><dt>From a terminal</dt><dd><code>python -m mtc import export.csv</code></dd></div>
         </dl>`)}
       </div>
@@ -1198,7 +1198,8 @@
         const r = await res.json();
         cache.clear();
         mount(result, html`<div class="notice">Added <strong>${Fmt.int(r.rows_added)}</strong> new scrobbles from ${Fmt.int(r.rows_read)} rows
-          (${Fmt.int(r.duplicates)} already known, ${Fmt.int(r.rows_skipped)} skipped, ${r.encoding}).</div>`);
+          (${Fmt.int(r.duplicates)} already known, ${Fmt.int(r.rows_skipped)} skipped, ${r.encoding}).
+          ${r.rows_read === 0 && r.rows_skipped ? "Nothing could be read: the file needs columns for artist, track and date (album is optional)." : ""}</div>`);
         setTimeout(() => route(), 1500);
       } catch (err) {
         mount(result, html`<div class="notice err">Import failed: ${err.message}</div>`);
@@ -1294,7 +1295,7 @@
           placeholder="${st.has_key ? "Saved · paste a new key to replace it" : "Paste your last.fm API key"}">
           ${st.key_works ? html`<span class="pill sage works">${icon("check", 14)} works</span>` : st.has_key ? html`<button type="button" class="btn secondary small" id="key-test">Test</button>` : ""}
           <button class="btn ${st.has_key ? "secondary" : "primary"} small" type="submit">Save</button></div>
-        <p class="secondary small" id="key-msg" role="status">${st.has_key ? "" : html`Needed for tags and covers. Get a free key at <a class="text-link" href="https://www.last.fm/api/account/create" target="_blank" rel="noopener noreferrer">last.fm/api/account/create</a>.`}</p></form>
+        <p class="secondary small" id="key-msg" role="status">${st.has_key ? "" : html`Needed to download your history, and for tags and covers. Get a free key at <a class="text-link" href="https://www.last.fm/api/account/create" target="_blank" rel="noopener noreferrer">last.fm/api/account/create</a>.`}</p></form>
     </div>`, { sub: "Your username is for fetching new scrobbles, the key for that and for tags. Both stay in data/settings.json." });
   }
   function bindAccount() {

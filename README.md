@@ -1,39 +1,46 @@
 # Taste Center
 
-**Your last.fm listening history, on your own computer.** Browse it, search it, and see how your taste connects and changes over time. No ads, no account to create, nothing uploaded: everything lives in one file on your machine.
+**Your last.fm listening history, on your own computer.** Every play you've logged on last.fm (a "scrobble") becomes something you can browse, search and explore: how your taste connects, how it changes through the year, and where your music comes from. No ads, no extra account, nothing uploaded. Everything lives in one file on your machine.
 
-![The Overview page: a month of listening at a glance](docs/images/overview.jpg)
+![The Overview page: a month of listening with totals, a day-by-day chart and your top artists](docs/images/overview.jpg)
 
 <sub>All screenshots show a fictional listening history.</sub>
 
+Ready to try it? Jump to [Install and start](#install-and-start).
+
 ## What you can do with it
 
-- **See your listening at a glance.** Any period (last week, a year, a date range of your choice), with totals, your top artists, tracks and albums, new discoveries and a listening clock.
-- **Follow how your taste connects.** Artists you play in the same sessions are linked, and the app finds your taste clusters on its own.
-- **Spot your rhythms.** Which genres belong to which season, time of day or day of the week, and which artists come back every year.
-- **Look at the decades.** Which release decades you listen to, how old the music is when you play it, how long you took to find albums after they came out, and which older records you dug up when.
-- **Rediscover things.** Forgotten favourites, artists on the rise, obsessions, and recommendations from your own past.
+- **See your listening at a glance** for any period: totals, top artists, tracks and albums, new discoveries.
+- **See how your taste connects.** Artists you play in the same sessions are linked into taste clusters.
+- **Spot your rhythms.** Which genres belong to which season, time of day or weekday.
+- **Look at the decades.** Where your music comes from, and how long you took to find it.
+- **Rediscover things.** Forgotten favourites, artists on the rise, recommendations from your own past.
 - **Keep your library tidy.** Merge artists that last.fm spells in more than one way.
 
-| | |
-|---|---|
-| ![Connections: taste clusters](docs/images/connections.jpg) | ![Rhythms: genres through the year](docs/images/rhythms.jpg) |
-| *Connections*: your top artists, linked by listening together | *Rhythms*: what you play in which season |
-| ![Decades](docs/images/decades.jpg) | |
-| *Decades*: when the music you play was released | |
+![Connections: a network of top artists, linked and coloured by taste cluster](docs/images/connections.jpg)
+*Connections: your top artists, linked when you play them together.*
+
+![Rhythms: a heatmap of which genres are played in which month](docs/images/rhythms.jpg)
+*Rhythms: which genres you play in which season.*
+
+![Decades: a bar chart of the release years of the music played](docs/images/decades.jpg)
+*Decades: when the music you play was released.*
 
 ## What you need
 
-- A computer with **Python 3.13 or newer**. Check with `python3 --version`; if it's older or missing, install it from [python.org](https://www.python.org/downloads/).
-- A free **last.fm account** with some scrobbles, and (to download your history and to fetch genres and release dates) a free **last.fm API key**. You can get one in a minute at <https://www.last.fm/api/account/create>. Without an account you can still [try the app with fictional data](#try-it-with-fictional-data).
-- A web browser. The app runs on your own computer and opens in your browser; it isn't a website and isn't reachable from other computers.
+- **Python 3.13 or newer.** It's free and runs the app behind the scenes. To check whether you have it, open a terminal (see below) and type `python3 --version`. If it's missing or older, install it from [python.org](https://www.python.org/downloads/): download the installer and click through it. On Windows, tick **Add python.exe to PATH** in the installer's first window.
+- **A last.fm account with some listening history,** and a free **API key** (explained below, in step 1 of "Get your listening history in"). You can try the app without either: see [the fictional demo library](docs/developer-guide.md#a-fictional-demo-library) (this one needs a terminal).
+- **An internet connection** to install, to download your history and to fetch genres and release dates. After that you can browse offline, except that album covers load from last.fm.
+- **Little disk space.** A library with a couple of hundred thousand scrobbles, with all its genres and release dates, takes under 100 MB.
+
+The app runs on your own computer and opens in your web browser. It isn't a website, and other computers can't reach it.
 
 ## Install and start
 
-1. **Download the code.** On this page, click the green **Code** button and choose **Download ZIP**, then unzip it. (Or use `git clone` if you know git.)
-2. **Start it.**
-   - **On a Mac:** double-click **`Taste Center.command`**. The first time it sets everything up (this needs an internet connection and takes a minute), starts the app and opens your browser. If macOS refuses to open it because it was downloaded, right-click the file and choose **Open**. Close the Terminal window to stop the app. You can drag the file to the Dock for one-click access.
-   - **On Linux, or any Mac if you prefer the Terminal:** open a terminal in the unzipped folder and run
+1. **Download the code.** On this page, click the green **Code** button, then **Download ZIP**. Double-click the downloaded file to unpack it (on Windows: right-click it, **Extract All**). You get a folder named something like `music-taste-center-main`. Put it somewhere permanent, for example in Documents: **your listening history will be stored inside this folder.**
+2. **Start the app.**
+   - **On a Mac:** open the folder and double-click **`Taste Center.command`**. The first time, it sets everything up (about a minute, with internet) and then opens the app in your browser. If macOS says it can't open the file because it was downloaded, right-click the file, choose **Open**, then **Open** again. A black Terminal window stays open while the app runs: **closing that window stops the app.** You can drag the file to the Dock for one-click access.
+   - **On Linux, or on a Mac if you prefer typing:** open a terminal in the folder (a terminal is a window where you type commands; on a Mac open the **Terminal** app, type `cd ` with a space after it, drag the folder into the window and press Enter) and run these three lines. The first two only the first time (they set up a private folder with the app's helper software):
 
      ```sh
      python3 -m venv .venv
@@ -41,55 +48,44 @@
      .venv/bin/python app.py
      ```
 
-     Then open <http://127.0.0.1:8765> in your browser. Press Ctrl+C to stop the app.
-   - **On Windows:** the same steps should work with `py -m venv .venv`, `.venv\Scripts\pip install -r requirements.txt` and `.venv\Scripts\python app.py`. This hasn't been tested on Windows.
+     Then open <http://127.0.0.1:8765> in your browser (that address points at your own computer). Press **Ctrl+C** in the terminal to stop the app.
+   - **On Windows:** this should work but hasn't been tested there. Open the folder in File Explorer, click the address bar, type `cmd` and press Enter. Then run, one at a time, `py -m venv .venv` and `.venv\Scripts\pip install -r requirements.txt` (only the first time), and then `.venv\Scripts\python app.py`. Open <http://127.0.0.1:8765> in your browser, and press **Ctrl+C** in the window to stop.
 
 The app starts empty. Next, bring in your history.
 
 ## Get your listening history in
 
-Pick whichever suits you. You can also use both: the app skips scrobbles it already has.
+Choose whichever suits you. You can use both: the app skips scrobbles it already has.
 
-### Option A: connect your last.fm account (recommended)
+### Option A: connect your last.fm account (easiest)
 
-1. Open the **Import** page in the app.
-2. In the **last.fm account** card, save your last.fm **username** and your **API key**.
-3. **Restart the app** (close it and start it again). It now downloads your whole scrobble history in the background, while you browse. A big library can take a few minutes.
+1. **Get your free API key.** An API key works like a password that lets this app read your history from last.fm. Open [the last.fm API sign-up page](https://www.last.fm/api/account/create) (sign in if asked), fill in the short form (an application name such as "Taste Center" and a description is enough), and submit. The page then shows your **API key**, a long string of letters and numbers. Keep it open to copy from.
+2. **Save your details in the app.** Open the **Import** page. In the **last.fm account** card, type your last.fm **username** and press **Save**, then paste your **API key** and press **Save**. A green "works" badge appears next to the key.
+3. **Restart the app.** On a Mac: close the Terminal window, then double-click `Taste Center.command` again. On Windows or Linux: press Ctrl+C in the terminal, then run the last command again (the one ending in `app.py`; the Up arrow key brings it back). Then reload the page in your browser.
 
-From then on, every time you start the app it fetches the scrobbles you've added since. It does this at most three times a day, so restarting it a few times in a row is harmless.
+The app now downloads your history in the background. **It shows no progress and nothing appears until the whole download is finished**; for a large library that takes a few minutes. Reload the page after a while. Libraries of up to about 400,000 scrobbles download this way; for a bigger one, use Option B.
 
-### Option B: import a CSV file
+From then on, every time you start the app it fetches the scrobbles you've added since. It does this at most three times a day, at least four hours apart. If you restart the app sooner than that, it just skips the update. To force one, run `.venv/bin/python -m mtc update --force` in a terminal (on Windows, `.venv\Scripts\python -m mtc update --force`).
 
-If you already have your scrobbles in a CSV file, for example from one of the many free "export last.fm scrobbles to CSV" tools, drag it onto the **Import** page. Re-importing a newer, bigger export later is safe, because scrobbles you already have are skipped.
+### Option B: import a file you already have
 
-The file needs the artist, track and date of each play, and optionally the album. Either of these layouts works:
+If you have your scrobbles in a CSV file, for example from one of the free "export last.fm scrobbles" tools, drag the file onto the **Import** page. Importing a newer, bigger file later is safe: scrobbles you already have (same time, artist and track) are skipped.
 
-- no header row, with the columns in the order **artist, album, track, date**; or
-- a header row naming the columns (`artist`, `album`, `track`, `date`, and a few common alternatives).
-
-Dates can be in last.fm's text format (`04 Oct 2026, 16:42`), as unix time, or as ISO 8601. The text encoding (UTF-8, Windows-1252, Latin-1) is detected automatically. From a terminal you can also run `.venv/bin/python -m mtc import yourfile.csv`.
+The file needs the artist, track and date of each play, and the album if possible. Any comma-separated file with columns named `artist`, `album`, `track` and `date` works, with or without a header row; without one, the columns are read in the order artist, album, track, date. Dates without a time zone are read as UTC, which is what last.fm uses. Rows the app can't read are skipped and counted on the Import page.
 
 ## Add genres, covers and release dates
 
-Your scrobbles only say *what* you played and *when*. To unlock **genres**, **Rhythms**, **Decades** and album covers, the app needs to look your artists and albums up:
+Your scrobbles only say *what* you played and *when*. To unlock **genres**, **Rhythms**, **Decades** and album covers, the app looks your artists and albums up:
 
-1. Save your API key on the **Import** page (if you haven't yet).
+1. Save your API key on the **Import** page if you haven't yet.
 2. In the **Tags, covers & release dates** card, press **Fetch tags & covers**.
 
-It works through your most-played artists and albums first, in the background, with progress on the page. You can browse while it runs, press **Stop** at any time, or close the app: everything fetched so far is kept, and the next fetch carries on where it stopped. A large library takes a while because the app is polite to last.fm and MusicBrainz (the free music database that supplies release dates) and sends them only a couple of requests per second.
-
-## Try it with fictional data
-
-Want to look around before using your own history? Create a demo library of invented artists. Run these in the app's folder (use `.venv\Scripts\python` on Windows):
-
-```sh
-.venv/bin/python -m tests.synthetic --demo-db demo.db
-MTC_DB=demo.db .venv/bin/python app.py serve --no-update
-```
-
-(On Windows PowerShell, set the variable first with `$env:MTC_DB = "demo.db"`.) The demo has several years of listening, genres and release dates, so every page has something to show. `--no-update` keeps the app from fetching your real scrobbles into the demo file. Your real data is never touched: it lives in `data/`, and the demo is a separate file.
+It works through your most-played artists and albums first, in the background, with progress on the page. You can browse while it runs. For a big library it can take hours, because the app is polite to last.fm and MusicBrainz (the free music database that supplies release dates) and sends only a couple of requests per second. Press **Stop** at any time, or close the app: everything fetched so far is kept, and the next fetch carries on where it stopped.
 
 ## The pages
+
+<details>
+<summary>What each page shows</summary>
 
 | Page | What it shows |
 |---|---|
@@ -101,28 +97,32 @@ MTC_DB=demo.db .venv/bin/python app.py serve --no-update
 | **Rhythms** | Genres (or places) through the year, the week and the day, seasonal artists, and how varied your taste is |
 | **Decades** | Release decades, the age of the music you play, how long you took to find albums, and older records |
 | **Insights** | Rediscover, on the rise, forgotten favourites, obsessions, staying power, gateways, binges and more |
-| **Cleanup** | Merge duplicate spellings of an artist; the fix sticks for future imports |
+| **Cleanup** (broom icon) | Merge duplicate spellings of an artist; the fix sticks for future imports |
 | **Import** | Add scrobbles, connect your account, and fetch genres, covers and release dates |
 
-Press **/** anywhere to search. The ◐ button switches between light and dark. For what each page measures and how, see [How it works](docs/how-it-works.md).
+</details>
+
+Press **/** anywhere to search. The moon button in the top right switches between light and dark. For what each page measures and how, see [How it works](docs/how-it-works.md).
 
 ## Your data and privacy
 
 - **Everything stays on your computer.** Your history lives in `data/mtc.db`, and your username and API key in `data/settings.json`, both inside the app's folder and both kept out of git. The app listens only on your own machine.
-- **What is sent out.** Only when you fetch or update: your last.fm username and API key to last.fm; artist and album names to last.fm and MusicBrainz; and your browser loads album covers from last.fm's servers. The fonts are bundled, so nothing else is loaded from the internet.
-- **Back up** by copying the `data` folder while the app is stopped. **Start over** by deleting `data/mtc.db`.
-- **Update** by downloading the new version and copying your old `data` folder into it. The app upgrades the database on its own.
+- **What is sent out.** Only when you download or fetch: your last.fm username and API key to last.fm; artist and album names to last.fm and MusicBrainz; and your browser loads album covers from last.fm's servers. The fonts are bundled, so nothing else is loaded from the internet.
+- **Back up** by closing the app and copying the whole `data` folder.
+- **Update** by closing the app, downloading the new ZIP, unpacking it and copying your old `data` folder into the new folder. Don't copy the hidden `.venv` folder; the new version sets itself up again the first time you start it. Delete the old folder only after you've checked that your history shows up.
+- **Move or rename the app's folder?** Delete the hidden `.venv` folder inside it first; it is rebuilt on the next start.
+- **Start over** by closing the app and deleting the file `mtc.db` in the `data` folder (and `mtc.db-wal` and `mtc.db-shm` if they are there). **This erases your imported history for good**, so back it up first if you're unsure. Your saved username and API key stay in `settings.json`; delete that file too if you want those gone.
 
 Taste Center is an independent hobby project. It isn't made by or affiliated with Last.fm or MusicBrainz; it uses their public APIs.
 
 ## Troubleshooting
 
-- **"No scrobbles yet" after connecting your account.** The history download starts when the app starts. Make sure the username and API key are saved on the Import page, then restart the app. Checking the Terminal window for error messages helps.
-- **Times of day are off by some hours.** The app works out days and hours in a time zone, and it assumes Finnish time (`Europe/Helsinki`) unless you say otherwise. Start it with your own zone, for example `MTC_TZ=America/New_York .venv/bin/python app.py` (on a Mac you can run `MTC_TZ=America/New_York "./Taste Center.command"` in Terminal), and then recalculate once with `MTC_TZ=America/New_York .venv/bin/python -m mtc rebuild`. Zone names look like `Europe/London` or `Asia/Tokyo`.
-- **The page says it can't connect.** The app isn't running (start it again), or another program uses port 8765. Start it on another port with `.venv/bin/python app.py serve --port 8800`, or for the Mac launcher `MTC_PORT=8800 "./Taste Center.command"`.
+- **"No scrobbles yet" after connecting your account.** The download starts when the app starts, at most three times a day and four hours apart. Check that your username and API key are saved on the Import page (the key shows a green "works" badge), restart the app, and wait a few minutes. If it still shows nothing, look in the Terminal window for a line with "error" in it; that is what to quote if you ask for help.
+- **The page says it can't connect.** The app isn't running: start it again. If it still fails, another program may be using the same address. Advanced: start the app on a different port with `.venv/bin/python app.py serve --port 8800` and open <http://127.0.0.1:8800> (Mac launcher: `MTC_PORT=8800 "./Taste Center.command"` in Terminal).
+- **Times of day look shifted** (you listen at night but the app says afternoon). The app works out days and hours in Finnish time (`Europe/Helsinki`) unless told otherwise, and there is no setting for this inside the app yet. Look up your zone name in [the list of time zones](https://en.wikipedia.org/wiki/List_of_tz_database_time_zones) (examples: `Europe/London`, `America/New_York`, `Asia/Tokyo`) and start the app from a terminal with it: `MTC_TZ=America/New_York .venv/bin/python app.py` (on a Mac, `MTC_TZ=America/New_York "./Taste Center.command"`; in Windows PowerShell, first `$env:MTC_TZ = "America/New_York"`). Once, recalculate your history with the same variable set: `MTC_TZ=America/New_York .venv/bin/python -m mtc rebuild`. Use the same zone every time you start the app. A wrong zone name gives a clear error.
 - **Decades or Rhythms look empty.** They need genres and release dates: run **Fetch tags & covers** on the Import page and let it work through your library. Each page says what share of your plays it is based on.
-- **Some artists appear twice.** Use the **Cleanup** page to merge them.
+- **Some artists appear twice.** Merge them on the **Cleanup** page.
 
 ## For developers
 
-How the code is organised, how to run the tests, and the house rules are in the [developer guide](docs/developer-guide.md). The measures behind each page are in [How it works](docs/how-it-works.md).
+How the code is organised, how to run the tests and build a fictional demo library, and the house rules are in the [developer guide](docs/developer-guide.md). The measures behind each page are in [How it works](docs/how-it-works.md).

@@ -1,14 +1,22 @@
 """Runtime settings, overridable with environment variables."""
 import os
+import sys
 from pathlib import Path
-from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 ROOT = Path(__file__).resolve().parent.parent
 DB_PATH = Path(os.environ.get("MTC_DB", ROOT / "data" / "mtc.db"))
 STATIC_DIR = ROOT / "static"
 
 # last.fm timestamps are UTC; local-time views (listening clock, days, streaks) use this zone.
-TZ = ZoneInfo(os.environ.get("MTC_TZ", "Europe/Helsinki"))
+def _zone(name: str) -> ZoneInfo:
+    try:
+        return ZoneInfo(name)
+    except (ZoneInfoNotFoundError, ValueError):
+        sys.exit(f"MTC_TZ={name!r} is not a known time zone name. Use a name like Europe/London or America/New_York.")
+
+
+TZ = _zone(os.environ.get("MTC_TZ", "Europe/Helsinki"))
 
 # Gap between two scrobbles that starts a new listening session.
 SESSION_GAP_S = 30 * 60

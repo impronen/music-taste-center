@@ -14,7 +14,19 @@ def slug(heading: str) -> str:
 
 
 def anchors(path: Path) -> set[str]:
-    return {slug(m.group(1)) for m in re.finditer(r"^#{1,6}\s+(.+?)\s*$", path.read_text(encoding="utf-8"), re.M)}
+    """GitHub's heading anchors, ignoring `# comment` lines inside code fences and numbering repeats (-1, -2)."""
+    found: dict[str, int] = {}
+    fenced = False
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if line.lstrip().startswith("```"):
+            fenced = not fenced
+        elif not fenced and (m := re.match(r"^#{1,6}\s+(.+?)\s*$", line)):
+            base = slug(m.group(1))
+            n = found.get(base, -1) + 1
+            found[base] = n
+            if n:
+                found[f"{base}-{n}"] = 0
+    return set(found)
 
 
 class DocsTests(unittest.TestCase):
@@ -31,6 +43,19 @@ class DocsTests(unittest.TestCase):
                 elif fragment and dest.suffix == ".md" and fragment not in anchors(dest):
                     problems.append(f"{doc.name}: {target} has no such heading")
         self.assertEqual(problems, [])
+
+    def test_a_comment_inside_a_code_fence_is_not_a_heading(self):
+        text = "# Real\n\n```sh\n# once: do this\n```\n"
+        with __import__("tempfile").TemporaryDirectory() as tmp:
+            path = Path(tmp) / "x.md"
+            path.write_text(text, encoding="utf-8")
+            self.assertEqual(anchors(path), {"real"})
+
+    def test_repeated_headings_get_github_numbering(self):
+        with __import__("tempfile").TemporaryDirectory() as tmp:
+            path = Path(tmp) / "x.md"
+            path.write_text("# Notes\n\n## Notes\n", encoding="utf-8")
+            self.assertEqual(anchors(path), {"notes", "notes-1"})
 
     def test_the_readme_does_not_name_a_person_or_a_private_data_path(self):
         text = (ROOT / "README.md").read_text(encoding="utf-8")
