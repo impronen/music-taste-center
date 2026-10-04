@@ -679,6 +679,12 @@
   async function decadesView() {
     const seq = rendering;
     const [d, age, lag, rh] = await Promise.all([api("/api/decades"), api("/api/decades/age"), api("/api/decades/lag"), api("/api/decades/rhythms")]);
+    // A heatmap where every cell is "as usual" says nothing: state that instead of drawing a blank grid.
+    const lifts = (m) => m.rows.flatMap((r) => r.cells).filter((c) => c.lift != null).map((c) => c.lift);
+    const isFlat = (m) => { const l = lifts(m); return l.length > 0 && l.every((x) => Charts.liftStep(x) === 0); };
+    const liftCard = (title, id, m, o) => isFlat(m)
+      ? card(title, html`<p class="empty">Nothing stands out: every decade stays within ${Fmt.pct(Math.ceil(Math.max(...lifts(m).map((l) => Math.abs(l - 1))) * 100 - 1e-9) / 100)} of its usual share.</p>`, o)
+      : card(title, html`<div class="chart" id="${id}"></div>`, o);
     const head = (extra = "") => html`<div class="page-head"><div><h1>Decades</h1>
       <p class="lead">Which release decades you listen to, and how that has moved over the years.</p>${extra}</div></div>`;
     if (!d.covered) {
@@ -700,13 +706,10 @@
         : "There aren't enough dated plays in the last 12 months to say what is in vogue yet."}
         Overall, the <strong>${peakDecade.label}</strong> lead with ${Fmt.pct(peakDecade.share)} of dated plays.</p></section>
       ${card("Plays by release year", html`<div class="chart" id="c-years"></div>`, { cls: "canvas", sub: "Every release year of the albums you play; the busiest decade is darkest." })}
-      <div class="grid cols-7-5">
-        ${card("Decades over the years", html`<div class="chart" id="c-drift"></div>`, { sub: "Share of each listening year's dated plays" })}
-        ${card("In vogue lately", v.enough ? html`<ol class="rank sage compact">${v.decades.map((x, i) => html`<li><span class="row">
-            <span class="pos">${i + 1}</span><span class="name">${x.label}<small>${Fmt.pct(x.recent_share)} lately · ${Fmt.pct(x.before_share)} before</small></span>
-            <span class="num">${liftText(x.lift)}</span></span></li>`)}</ol>` : html`<p class="empty">Needs ${Fmt.int(v.min_plays)} dated plays in the last 12 months.</p>`,
-          { cls: "sage-soft", sub: "Past 12 months against everything before" })}
-      </div>
+      ${card("Decades over the years", html`<div class="chart" id="c-drift"></div>`, { cls: "canvas", sub: "Share of each listening year's dated plays" })}
+      ${card("In vogue lately", v.enough ? html`<div class="grid cols-4">${v.decades.map((x) => tile(x.label, liftText(x.lift),
+          `${Fmt.pct(x.recent_share)} lately · ${Fmt.pct(x.before_share)} before`))}</div>` : html`<p class="empty">Needs ${Fmt.int(v.min_plays)} dated plays in the last 12 months.</p>`,
+        { cls: "sage-soft", sub: "Past 12 months against everything before, most in vogue first" })}
       ${card("Decade by listening year", html`<div class="chart" id="c-matrix"></div>`, { cls: "canvas", sub: "Each decade's share in a year compared with its share of all your plays." })}
       ${age.covered ? html`${card("How old is the music you play?", html`<div class="grid cols-3">
           ${tile("Typical age", `${Fmt.dec(age.median_years)} years`, "Half of your plays are of albums younger than this")}
@@ -718,11 +721,10 @@
             : card("Typical age over the years", html`<p class="empty">Needs ${Fmt.int(age.min_year_plays)} dated plays in a listening year.</p>`)}
           ${card("Age mix per year", html`<div class="chart" id="c-age-mix"></div>`, { sub: "Share of each listening year's dated plays, by how old the album was" })}
         </div>` : ""}
-      ${rh.covered ? html`${card("Decades through the year", html`<div class="chart" id="c-dec-season"></div>`, { cls: "canvas",
-          sub: "Each season's share of a decade compared with your usual share that same year." })}
+      ${rh.covered ? html`${liftCard("Decades through the year", "c-dec-season", rh.seasons, { cls: "canvas", sub: "Each season's share of a decade compared with your usual share that same year." })}
         <div class="grid cols-7-5">
-          ${card("Decades through the day", html`<div class="chart" id="c-dec-day"></div>`, { sub: "Night 0–6 · morning 6–12 · afternoon 12–18 · evening 18–24" })}
-          ${card("Weekdays vs weekends", html`<div class="chart" id="c-dec-week"></div>`, { sub: "Monday–Friday against Saturday–Sunday" })}
+          ${liftCard("Decades through the day", "c-dec-day", rh.dayparts, { sub: "Night 0–6 · morning 6–12 · afternoon 12–18 · evening 18–24" })}
+          ${liftCard("Weekdays vs weekends", "c-dec-week", rh.weekparts, { sub: "Monday–Friday against Saturday–Sunday" })}
         </div>
         ${rh.genres ? html`${card("What each decade sounds like", html`<div class="chart" id="c-dec-genre"></div>`, { cls: "canvas",
             sub: html`Your top genres inside each release decade, against their share of all your plays. Based on ${Fmt.pct(rh.genres.coverage)} of dated plays.` })}
@@ -732,9 +734,10 @@
           ${tile("Typical wait", `${Fmt.dec(lag.median_years)} years`, "From an album's release to your first play of it")}
           ${tile("Found in its first year", Fmt.pct(lag.first_year_share), "Albums you played within a year of release")}
           ${tile("Found 20+ years late", Fmt.int(lag.late_count), "Albums you only met two decades after release")}
-        </div>`, { cls: "accent-soft", sub: html`Based on ${Fmt.int(lag.covered)} albums${lag.excluded ? html`; ${Fmt.int(lag.excluded)} dated albums were left out: released before tracking began by artists you already played, so their first play says nothing` : ""}` })}
-        <div class="grid cols-3">
-          ${card("Wait before the first play", html`<div class="chart" id="c-lag"></div>`, { sub: "Albums by time from release to first play" })}
+        </div>
+        <p class="secondary small" style="margin:var(--gap) 0 4px">Albums by time from release to first play</p>
+        <div class="chart" id="c-lag"></div>`, { cls: "accent-soft", sub: html`Based on ${Fmt.int(lag.covered)} albums${lag.excluded ? html`; ${Fmt.int(lag.excluded)} dated albums were left out: released before tracking began by artists you already played, so their first play says nothing` : ""}` })}
+        <div class="grid cols-2">
           ${card("Found late", rankList(lag.late, { href: albumHref, sub: (a) => `${a.artist} · ${a.release_date.slice(0, 4)}`, nobar: true,
             value: (a) => a.lag_days, valueText: (a) => `${Fmt.dec(a.lag_years)} yrs`, compact: true }), { sub: `Longest waits, albums with ${lag.min_list_plays}+ plays` })}
           ${card("There on release", rankList(lag.on_release, { href: albumHref, sub: (a) => `${a.artist} · ${a.lag_days ? `+${Fmt.int(a.lag_days)} d` : "day one"}`, nobar: true,
@@ -762,9 +765,9 @@
     });
     Charts.matrix(document.getElementById("c-matrix"), d.matrix, { label: "Release decades by listening year" });
     if (rh.covered) {
-      Charts.matrix(document.getElementById("c-dec-season"), rh.seasons, { label: "Release decades through the year" });
-      Charts.matrix(document.getElementById("c-dec-day"), rh.dayparts, { label: "Release decades by time of day" });
-      Charts.matrix(document.getElementById("c-dec-week"), rh.weekparts, { label: "Release decades on weekdays and weekends" });
+      if (!isFlat(rh.seasons)) Charts.matrix(document.getElementById("c-dec-season"), rh.seasons, { label: "Release decades through the year" });
+      if (!isFlat(rh.dayparts)) Charts.matrix(document.getElementById("c-dec-day"), rh.dayparts, { label: "Release decades by time of day" });
+      if (!isFlat(rh.weekparts)) Charts.matrix(document.getElementById("c-dec-week"), rh.weekparts, { label: "Release decades on weekdays and weekends" });
       if (rh.genres) Charts.matrix(document.getElementById("c-dec-genre"), rh.genres, { label: "Genres within each release decade" });
     }
     if (lag.covered) {
