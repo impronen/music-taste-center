@@ -193,6 +193,10 @@ def create_app(db_path: str | Path | None = None, *, lastfm_factory: Callable | 
     def album_age(c=Conn):
         return decades.album_age(c)
 
+    @app.get("/api/decades/lag")
+    def discovery_lag(c=Conn):
+        return decades.discovery_lag(c)
+
     @app.get("/api/rhythms/artists")
     def seasonal_artists(c=Conn):
         return rhythms.seasonal_artists(c)

@@ -125,11 +125,11 @@ def noon(day: str) -> int:
     return int(datetime.fromisoformat(day + "T12:00:00+00:00").timestamp())
 
 
-def library(rows: list[tuple[str, str, str]], dates: dict[str, str]):
-    """(album, play day, release date by album): one artist, one track per play, as a temp DB."""
+def library(rows: list[tuple], dates: dict[str, str]):
+    """Plays as (album, day) or (album, day, artist) and release dates by album title: one track per play, as a temp DB."""
     tmp = tempfile.TemporaryDirectory()
     conn = db.connect(Path(tmp.name) / "a.db")
-    plays = [("Artist", album, f"t{i}", noon(day)) for i, (album, day) in enumerate(rows)]
+    plays = [(r[2] if len(r) > 2 else "Artist", r[0], f"t{i}", noon(r[1])) for i, r in enumerate(rows)]
     ingest.import_csv_text(conn, synthetic.to_csv(plays, now_playing=False), label="t", encoding="utf-8")
     with conn:
         for album_id, title in conn.execute("SELECT id, title FROM albums").fetchall():
@@ -207,6 +207,68 @@ class AlbumAgeTests(unittest.TestCase):
             r = c.get("/api/decades/age")
         tmp.cleanup()
         self.assertEqual((r.status_code, r.json()["covered"]), (200, 1))
+
+
+class DiscoveryLagTests(unittest.TestCase):
+    ANCHOR = [("Anchor", "2020-01-05", "Veteran")]  # the first scrobbles ever: Veteran was already in rotation
+
+    def lag(self, rows, dates):
+        tmp, conn = library(self.ANCHOR + rows, {"Anchor": "1999-01-01"} | dates)
+        self.addCleanup(tmp.cleanup)
+        self.addCleanup(conn.close)
+        return decades.discovery_lag(conn)
+
+    def test_artists_already_in_rotation_when_tracking_began_are_left_out(self):
+        a = self.lag([("B", "2022-06-01", "Newcomer")], {"B": "2022-05-20"})
+        self.assertEqual((a["covered"], a["excluded"]), (1, 1))
+
+    def test_an_album_released_after_tracking_began_counts_even_for_a_veteran_artist(self):
+        rows = [("Fresh", "2021-03-05", "Veteran"), ("Backlist", "2021-03-05", "Veteran")]
+        a = self.lag(rows, {"Fresh": "2021-03-01", "Backlist": "2005-01-01"})  # tracking began 2020-01-05
+        self.assertEqual((a["covered"], a["excluded"]), (1, 2))  # Anchor and Backlist are left out
+        self.assertEqual(a["buckets"][0]["albums"], 1)
+
+    def test_lag_is_whole_days_from_release_to_the_first_play(self):
+        a = self.lag([("B", "2022-06-10", "Newcomer"), ("B", "2022-06-01", "Newcomer")] * 3, {"B": "2022-05-20"})
+        self.assertEqual(len(a["on_release"]), 1)
+        self.assertEqual((a["on_release"][0]["lag_days"], a["on_release"][0]["plays"]), (12, 6))  # first play counts, not the last
+
+    def test_buckets_and_median(self):
+        rows = [(t, "2022-06-01", "Newcomer") for t in "ABCD"]
+        a = self.lag(rows, {"A": "2022-04-01", "B": "2020-06-01", "C": "2010-06-01", "D": "1990-06-01"})
+        self.assertEqual([b["albums"] for b in a["buckets"]], [1, 1, 1, 1])
+        self.assertEqual((a["first_year_share"], a["late_count"]), (0.25, 1))
+        self.assertAlmostEqual(a["median_years"], 12.0, delta=0.1)  # lags 0.2, 2, 12 and 32 years: the upper middle one
+
+    def test_a_play_before_the_release_date_counts_as_zero_lag(self):
+        a = self.lag([("B", "2022-01-01", "Newcomer")] * 5, {"B": "2022-03-01"})
+        self.assertEqual(a["on_release"][0]["lag_days"], 0)
+
+    def test_there_on_release_needs_a_full_date_and_enough_plays(self):
+        rows = ([("Exact", "2022-06-01", "Newcomer")] * 5 + [("YearOnly", "2022-06-01", "Newcomer")] * 5
+                + [("Rare", "2022-06-01", "Newcomer")] * 2 + [("Late", "2022-06-01", "Newcomer")] * 5)
+        a = self.lag(rows, {"Exact": "2022-05-25", "YearOnly": "2022", "Rare": "2022-05-25", "Late": "2022-01-01"})
+        self.assertEqual([x["name"] for x in a["on_release"]], ["Exact"])
+        self.assertEqual(a["covered"], 4)  # the lists are stricter than the statistics
+
+    def test_found_late_lists_the_longest_lags_first_with_enough_plays(self):
+        rows = ([("Old", "2022-06-01", "Newcomer")] * 5 + [("Older", "2022-06-01", "Newcomer")] * 5
+                + [("Oldest", "2022-06-01", "Newcomer")] * 2)
+        a = self.lag(rows, {"Old": "1990-01-01", "Older": "1970-01-01", "Oldest": "1950-01-01"})
+        self.assertEqual([x["name"] for x in a["late"]], ["Older", "Old"])  # Oldest has too few plays
+
+    def test_nothing_to_measure_is_an_empty_answer(self):
+        a = self.lag([], {})
+        self.assertEqual((a["covered"], a["excluded"]), (0, 1))
+
+    def test_api_serves_it(self):
+        tmp, conn = library(self.ANCHOR + [("B", "2022-06-01", "Newcomer")], {"B": "2022-05-20"})
+        conn.close()
+        with TestClient(create_app(Path(tmp.name) / "a.db")) as c:
+            r = c.get("/api/decades/lag")
+        tmp.cleanup()
+        self.assertEqual((r.status_code, r.json()["covered"]), (200, 1))
+
 
 
 if __name__ == "__main__":

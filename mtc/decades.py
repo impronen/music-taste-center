@@ -12,7 +12,7 @@ import sqlite3
 from collections import Counter, defaultdict
 from datetime import date, timedelta
 
-from . import rhythms
+from . import config, rhythms
 from .rhythms import PRIOR, _cached, _cell
 
 MIN_YEAR = 1900         # release years outside this range are data errors, not music
@@ -187,3 +187,51 @@ def _median(hist: Counter) -> int:
         if run >= half:
             return value
     return 0
+
+
+# ---------------------------------------------------------------- discovery lag
+
+MIN_LIST_PLAYS = 5      # an album needs this many plays to be named in the lists
+LIST_SIZE = 10
+ON_RELEASE_DAYS = 30    # "there on release": first played within this many days of a full release date
+
+
+def discovery_lag(conn: sqlite3.Connection) -> dict:
+    return _cached(conn, ("discovery_lag",), lambda: _discovery_lag(conn), tags=True)
+
+
+def _discovery_lag(conn) -> dict:
+    """How long after an album's release you first played it. An album released before tracking began
+    by an artist already in rotation then is left out: its first scrobble says nothing about when you
+    found it. An album released after tracking began is measurable whoever the artist is."""
+    start = conn.execute("SELECT MIN(lday) FROM scrobbles").fetchone()[0]
+    rows = conn.execute(
+        f"SELECT al.id, al.title, ar.id, ar.name, st.prehistory, COUNT(*), ai.release_date,"
+        f" MAX(0, CAST(julianday(MIN(s.lday)) - julianday({_RELEASE_DAY}) AS INTEGER)), {_RELEASE_DAY}"
+        f" FROM scrobbles s JOIN albums al ON al.id = s.album_id JOIN artists ar ON ar.id = al.artist_id"
+        f" JOIN artist_stats st ON st.artist_id = al.artist_id JOIN album_info ai ON ai.album_id = al.id"
+        f" WHERE ai.release_date IS NOT NULL AND CAST(substr(ai.release_date, 1, 4) AS INTEGER) BETWEEN ? AND ?"
+        f" AND julianday({_RELEASE_DAY}) IS NOT NULL GROUP BY al.id", (MIN_YEAR, MAX_YEAR)).fetchall()
+    albums = [{"id": r[0], "name": r[1], "artist_id": r[2], "artist": r[3], "plays": r[5], "release_date": r[6],
+               "lag_days": r[7], "lag_years": round(r[7] / DAYS_PER_YEAR, 2)} for r in rows if not r[4] or r[8] > start]
+    excluded = len(rows) - len(albums)
+    if not albums:
+        return {"covered": 0, "excluded": excluded, "prehistory_days": config.PREHISTORY_DAYS}
+
+    edges = [e for _, e in AGE_BUCKETS]
+    counts = [0] * len(AGE_BUCKETS)
+    for a in albums:
+        counts[next(i for i, e in enumerate(edges) if e is None or a["lag_days"] < e)] += 1
+    lags = sorted(a["lag_days"] for a in albums)
+
+    def listed(a):
+        return a["plays"] >= MIN_LIST_PLAYS
+    late = sorted((a for a in albums if listed(a)), key=lambda a: (-a["lag_days"], -a["plays"]))[:LIST_SIZE]
+    on_release = sorted((a for a in albums if listed(a) and len(a["release_date"]) == 10 and a["lag_days"] <= ON_RELEASE_DAYS),
+                        key=lambda a: -a["plays"])[:LIST_SIZE]
+    return {"covered": len(albums), "excluded": excluded, "prehistory_days": config.PREHISTORY_DAYS,
+            "median_years": round(lags[len(lags) // 2] / DAYS_PER_YEAR, 2),
+            "first_year_share": round(counts[0] / len(albums), 4), "late_count": counts[-1],
+            "buckets": [{"name": name, "albums": n} for (name, _), n in zip(AGE_BUCKETS, counts)],
+            "min_list_plays": MIN_LIST_PLAYS, "on_release_days": ON_RELEASE_DAYS,
+            "late": late, "on_release": on_release}
