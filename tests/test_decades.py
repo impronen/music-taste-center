@@ -79,6 +79,7 @@ class DecadeTests(unittest.TestCase):
     def test_vogue_compares_the_last_twelve_months_with_everything_before(self):
         v = self.o["vogue"]
         self.assertTrue(v["enough"])
+        self.assertEqual(v["min_plays"], decades.MIN_RECENT_PLAYS)
         lifts = {x["label"]: x["lift"] for x in v["decades"]}
         self.assertEqual(max(lifts, key=lifts.get), v["decades"][0]["label"])
         self.assertTrue(all(x["lift"] >= decades.VOGUE_LIFT for x in v["in_vogue"]))

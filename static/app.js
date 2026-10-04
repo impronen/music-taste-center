@@ -703,7 +703,7 @@
         ${card("Decades over the years", html`<div class="chart" id="c-drift"></div>`, { sub: "Share of each listening year's dated plays" })}
         ${card("In vogue lately", v.enough ? html`<ol class="rank sage compact">${v.decades.map((x, i) => html`<li><span class="row">
             <span class="pos">${i + 1}</span><span class="name">${x.label}<small>${Fmt.pct(x.recent_share)} lately · ${Fmt.pct(x.before_share)} before</small></span>
-            <span class="num">${liftText(x.lift)}</span></span></li>`)}</ol>` : html`<p class="empty">Needs ${Fmt.int(50)} dated plays in the last 12 months.</p>`,
+            <span class="num">${liftText(x.lift)}</span></span></li>`)}</ol>` : html`<p class="empty">Needs ${Fmt.int(v.min_plays)} dated plays in the last 12 months.</p>`,
           { cls: "sage-soft", sub: "Past 12 months against everything before" })}
       </div>
       ${card("Decade by listening year", html`<div class="chart" id="c-matrix"></div>`, { cls: "canvas", sub: "Each decade's share in a year compared with its share of all your plays." })}

@@ -109,7 +109,7 @@ def _vogue(plays: Counter, by_decade: Counter, covered: int) -> dict:
         (recent if is_recent else before)[ry // 10 * 10] += n
     r_total, b_total = sum(recent.values()), sum(before.values())
     if r_total < MIN_RECENT_PLAYS or not b_total:
-        return {"enough": False, "plays": r_total, "decades": []}
+        return {"enough": False, "plays": r_total, "min_plays": MIN_RECENT_PLAYS, "decades": []}
     out = []
     for d in sorted(set(recent) | set(before)):
         expected = r_total * before.get(d, 0) / b_total
@@ -120,5 +120,5 @@ def _vogue(plays: Counter, by_decade: Counter, covered: int) -> dict:
                     "recent_share": round(observed / r_total, 4), "before_share": round(before.get(d, 0) / b_total, 4),
                     "plays": observed})
     out.sort(key=lambda x: -x["lift"])
-    return {"enough": True, "plays": r_total, "decades": out,
+    return {"enough": True, "plays": r_total, "min_plays": MIN_RECENT_PLAYS, "decades": out,
             "in_vogue": [x for x in out if x["lift"] >= VOGUE_LIFT][:3]}
