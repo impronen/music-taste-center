@@ -91,7 +91,7 @@ It works through your most-played artists and albums first, in the background, w
 |---|---|
 | **Overview** | Totals and the change from the previous period, scrobbles per day or month, top artists, tracks and albums, new discoveries, and a listening clock |
 | **Library** | Every artist, sortable and filterable, plus top lists and genres for any period |
-| **Artist** | Plays per month, top tracks and albums, how you discovered the artist and where it led you, who you play it alongside, and time of day |
+| **Artist** | Plays per month, a velocity chart of how fast you played the artist (compare it with other artists), top tracks and albums, how you discovered the artist and where it led you, who you play it alongside, and time of day |
 | **Connections** | Your top artists as a graph, linked by listening together, with taste clusters |
 | **Eras** | Each year in review: top artists, the artist that defined it, and the biggest discovery |
 | **Rhythms** | Genres (or places) through the year, the week and the day, seasonal artists, and how varied your taste is |

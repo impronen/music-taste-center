@@ -417,6 +417,20 @@ td.strong { font-weight: 700; }
 .chart .line { fill: none; stroke: light-dark(var(--color-accent-2-700), var(--color-accent-2-400)); stroke-width: 3; stroke-linejoin: round; stroke-linecap: round; }
 .chart .area { fill: light-dark(var(--color-accent-2-300), color-mix(in srgb, #7a8a5e 40%, transparent)); }
 .chart .cross { stroke: var(--baseline); stroke-width: 1.5; }
+.chart .vline { fill: none; stroke-width: 2.5; stroke-linejoin: round; stroke-linecap: round; }
+.chart .vline.dashed { stroke-dasharray: 2 6; }
+.chart .vlabel { fill: var(--color-text); font-weight: 600; }
+.vel-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; margin-bottom: 14px; }
+.vel-chip { gap: 8px; }
+.vdot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; flex: none; }
+.vel-chip button { border: 0; background: transparent; color: inherit; font-weight: 700; padding: 0; cursor: pointer; line-height: 1; min-width: 24px; min-height: 24px; margin: -4px -6px -4px 0; display: inline-grid; place-items: center; }
+.vel-add { margin-top: 14px; }
+.vel-add > summary { cursor: pointer; display: inline-flex; }
+.vel-add[open] > summary { margin-bottom: 12px; }
+.vel-add .vel-panel { display: grid; gap: 12px; }
+.vel-add input[type="search"] { width: 100%; max-width: 360px; }
+.vel-facts { margin-top: 14px; }
+.vel-facts .dim { color: var(--color-ink-2); }
 .chart .marker { fill: var(--color-accent); stroke: var(--color-canvas); stroke-width: 3; }
 .chart .dot:hover, .chart .dot:focus-visible { stroke: var(--color-text); stroke-width: 2; }
 .chart .cell:hover, .chart .cell:focus-visible { stroke: var(--color-text); stroke-width: 2; }

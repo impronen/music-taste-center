@@ -447,7 +447,128 @@
   }
   const extLink = (href, label) => html`<a class="btn secondary small" href="${href}" target="_blank" rel="noopener noreferrer">${label} ${icon("external", 14)}</a>`;
 
-  async function artistView(id) {
+  // ---------- artist velocity: cumulative plays, compared across artists ----------
+  function initVelocity(a, params) {
+    const root = document.getElementById("velocity");
+    if (!root) return;
+    const MAX = 6;
+    const colorOf = (k) => (k < 5 ? `var(--series-${k + 1})` : "var(--series-other)");
+    const $ = (sel) => root.querySelector(sel);
+    let vs = [...new Set((params?.get("vs") ?? "").split(",").map(Number))].filter((n) => Number.isInteger(n) && n > 0 && n !== a.id).slice(0, MAX - 1);
+    let mode = params?.get("view") === "relative" ? "relative" : "absolute";
+    const names = new Map([[a.id, a.name]]);
+    let topList = null, token = 0, found = [];
+    const say = (text) => { $("#vel-msg").textContent = text; };
+    const sentence = (text) => (/[.!?]$/.test(text) ? text : `${text}.`);
+    let refocus = false; // after a chip is removed the keyboard user would otherwise land on the page top
+    const span = (days) => (days == null ? "–" : days < 60 ? `${days} d` : days < 730 ? `${Math.round(days / 30.4375)} mo` : `${Fmt.dec(days / 365.25)} y`);
+    const selected = () => [a.id, ...vs];
+
+    function suggestions() {
+      const chosen = new Set(selected());
+      const full = chosen.size >= MAX;
+      const chip = (r) => html`<button type="button" class="chip" data-vel-add="${r.id}" data-name="${r.name}" ${chosen.has(r.id) || full ? raw("disabled") : ""}>${r.name}</button>`;
+      mount($("#vel-related"), html`${a.related.slice(0, 8).map(chip)}`);
+      $("#vel-related-box").hidden = !a.related.length;
+      mount($("#vel-top"), topList ? html`${topList.map(chip)}` : html`<span class="secondary small">Loading…</span>`);
+      mount($("#vel-results"), html`${found.map(chip)}`);
+    }
+
+    async function render() {
+      const my = ++token;
+      const ids = selected();
+      let data;
+      try { data = await api(`/api/velocity?ids=${ids.join(",")}`); } catch (err) { $("#vel-note").textContent = `Couldn't load the curves: ${err.message}`; return; }
+      if (my !== token || !root.isConnected) return;
+      data.series.forEach((s) => names.set(s.id, s.name));
+      vs = vs.filter((id) => data.series.some((s) => s.id === id));
+      if (location.hash.split("?")[0] === `#/artist/${a.id}`) // not after the reader has moved to another page
+        history.replaceState(null, "", `#/artist/${a.id}${(q => (q ? `?${q}` : ""))(qs({ vs: vs.join(","), view: mode === "relative" ? "relative" : null }).replace(/%2C/g, ","))}`);
+      root.querySelectorAll("[data-vel-mode]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.velMode === mode)));
+      const startMs = Date.parse(`${data.start}T12:00:00Z`);
+      const weekMs = 7 * 86400000;
+      const weekOf = (iso) => Math.floor((Date.parse(`${iso}T12:00:00Z`) - startMs) / weekMs);
+      const series = data.series.map((s, k) => {
+        const color = colorOf(k);
+        if (mode === "relative") {
+          const values = [0, ...s.cum.slice(s.first_week)];
+          return { name: s.name, color, values, dashedTo: s.known_until ? weekOf(s.known_until) - s.first_week + 1 : null };
+        }
+        return { name: s.name, color, values: s.cum.map((c, i) => (i >= s.first_week - 1 ? c : null)), dashedTo: s.known_until ? weekOf(s.known_until) : null };
+      });
+      const weekIso = (i) => new Date(startMs + i * weekMs).toISOString().slice(0, 10);
+      const steps = Math.max(...series.map((s) => s.values.length));
+      Charts.lines(document.getElementById("c-velocity"), series, {
+        height: 300, label: `Cumulative plays: ${data.series.map((s) => s.name).join(", ")}`,
+        xLabel: mode === "relative"
+          ? (i) => (i % 52 === 0 ? `${i / 52}y` : steps <= 104 && i % 13 === 0 ? `${(i / 13) * 3} mo` : null)
+          : (i) => (i === 0 || weekIso(i).slice(0, 4) !== weekIso(i - 1).slice(0, 4) ? weekIso(i).slice(0, 4) : null),
+        title: mode === "relative"
+          ? (i) => (i === 0 ? "At the first play" : i < 52 ? `${i} week${i === 1 ? "" : "s"} in` : `${Fmt.dec(i / 52)} years in`)
+          : (i) => `Week of ${Fmt.day(weekIso(i))}`,
+      });
+      mount($("#vel-chips"), html`${data.series.map((s, k) => html`<span class="chip vel-chip"><i class="vdot" style="background:${colorOf(k)}"></i>${k === 0
+        ? html`<b>${s.name}</b>` : html`<a href="#/artist/${s.id}">${s.name}</a><button type="button" data-vel-remove="${s.id}" aria-label="Remove ${s.name} from the comparison">×</button>`}</span>`)}`);
+      if (refocus) { refocus = false; ($("[data-vel-remove]") ?? $("#vel-add > summary")).focus(); }
+      const known = data.series.some((s) => s.known_before);
+      $("#vel-note").textContent = [mode === "relative" ? "Each curve starts at that artist's first play." : "",
+        known ? "A dashed start means the artist was already in rotation when your history began, so its early pace is not a discovery pace." : ""].filter(Boolean).join(" ");
+      mount($("#vel-facts"), html`<table><thead><tr><th>Artist</th><th>Plays</th><th title="Time from the first play to the 100th">To 100</th><th>To 500</th><th>To 1 000</th>
+          <th title="The most plays in any 30 days">Fastest 30 days</th><th title="Plays per month over the last year, and over the whole time since the first play">Per month now / overall</th></tr></thead>
+        <tbody>${data.series.map((s, k) => {
+          const f = s.facts;
+          return html`<tr><td><i class="vdot" style="background:${colorOf(k)}"></i> <a href="#/artist/${s.id}">${s.name}</a>
+              ${s.known_before ? html` <span class="pill" title="Already in rotation when your history began">known before</span>` : ""}</td>
+            <td>${Fmt.int(s.plays)}</td><td>${span(f.days_to["100"])}</td><td>${span(f.days_to["500"])}</td><td>${span(f.days_to["1000"])}</td>
+            <td>${Fmt.int(f.fastest.plays)} <span class="dim">from ${Fmt.day(f.fastest.from)}</span></td>
+            <td>${f.recent_per_month == null ? "–" : Fmt.dec(f.recent_per_month)} / ${f.lifetime_per_month == null ? "–" : Fmt.dec(f.lifetime_per_month)}</td></tr>`;
+        })}</tbody></table>`);
+      suggestions();
+    }
+
+    root.addEventListener("click", (e) => {
+      const add = e.target.closest("[data-vel-add]");
+      const remove = e.target.closest("[data-vel-remove]");
+      const modeBtn = e.target.closest("[data-vel-mode]");
+      if (add && selected().length < MAX && !selected().includes(Number(add.dataset.velAdd))) {
+        const id = Number(add.dataset.velAdd);
+        names.set(id, add.dataset.name);
+        vs.push(id);
+        say(`${sentence(`Added ${add.dataset.name}`)}${selected().length >= MAX ? ` That is the most you can compare (${MAX}).` : ""}`);
+        render();
+      } else if (remove) {
+        const id = Number(remove.dataset.velRemove);
+        vs = vs.filter((x) => x !== id);
+        say(sentence(`Removed ${names.get(id) ?? "the artist"}`));
+        refocus = true;
+        render();
+      } else if (modeBtn && modeBtn.dataset.velMode !== mode) {
+        mode = modeBtn.dataset.velMode;
+        render();
+      }
+    });
+    $("#vel-add").addEventListener("toggle", async (e) => {
+      if (!e.target.open || topList) return;
+      try { topList = (await api("/api/top/artist?limit=14")).map((r) => ({ id: r.id, name: r.name })); } catch { topList = []; }
+      suggestions();
+    });
+    let timer = null, searchSeq = 0;
+    $("#vel-q").addEventListener("input", (e) => {
+      clearTimeout(timer);
+      const q = e.target.value.trim();
+      if (!q) { found = []; suggestions(); return; }
+      timer = setTimeout(async () => {
+        const my = ++searchSeq;
+        try {
+          const r = await api(`/api/search?q=${encodeURIComponent(q)}`);
+          if (my === searchSeq) { found = r.artists.slice(0, 8).map((x) => ({ id: x.id, name: x.name })); suggestions(); }
+        } catch { /* keep what is shown */ }
+      }, 180);
+    });
+    render();
+  }
+
+  async function artistView(id, params) {
     const seq = rendering;
     const [a, ov] = await Promise.all([api(`/api/artists/${id}`), api("/api/overview")]);
     const lastfm = `https://www.last.fm/music/${encodeURIComponent(a.name).replace(/%20/g, "+")}`;
@@ -485,6 +606,21 @@
       </div>
       ${card("Month by month", html`<div class="chart" id="c-artist"></div>`, { cls: "canvas",
         aside: html`<span class="callout">Peak: <b>${Fmt.month(peakMonth)}</b>, ${Fmt.int(a.peak_month.plays)} plays</span>` })}
+      ${card("Velocity", html`<div class="vel-controls"><div class="seg" role="group" aria-label="Time axis">
+            <button type="button" data-vel-mode="absolute" aria-pressed="true">Calendar</button>
+            <button type="button" data-vel-mode="relative" aria-pressed="false">Since first play</button></div>
+          <div class="chips" id="vel-chips"></div></div>
+        <div class="chart" id="c-velocity"></div>
+        <p class="secondary small" id="vel-note"></p>
+        <details class="vel-add" id="vel-add"><summary class="btn secondary small">+ Compare with…</summary>
+          <div class="vel-panel"><div><label class="field" for="vel-q">Search for an artist</label>
+              <input id="vel-q" type="search" autocomplete="off" spellcheck="false" placeholder="Any artist you've played"></div>
+            <div class="chips" id="vel-results"></div>
+            <div id="vel-related-box"><p class="secondary small">Played alongside</p><div class="chips" id="vel-related"></div></div>
+            <div><p class="secondary small">Your top artists</p><div class="chips" id="vel-top"></div></div></div></details>
+        <p class="secondary small" id="vel-msg" role="status"></p>
+        <div class="vel-facts table-wrap" id="vel-facts"></div>`, { cls: "canvas", id: "velocity",
+        sub: "Cumulative plays: a steeper line is a faster pace. Compare up to six artists." })}
       <div class="grid cols-3">
         ${card("Top tracks", rankList(a.tracks.slice(0, 6), { href: trackHref }))}
         ${card("Albums", a.albums.length ? rankList(a.albums.slice(0, 6), { href: albumHref, nobar: true, cover: (t) => ({ name: t.name, url: t.image_url }),
@@ -506,6 +642,7 @@
       tip: (d) => ({ title: Fmt.month(d.month), rows: [{ value: Fmt.int(d.plays), label: "plays" }] }),
       onClick: (d) => (location.hash = `#/library?${qs({ kind: "track", period: d.month, artist: a.id })}`),
     });
+    initVelocity(a, params);
     Charts.columns(document.getElementById("c-hours"), a.hours.map((v, h) => ({ h, v })), {
       value: (d) => d.v, height: 170, label: "Plays by hour", xLabel: (d) => (d.h % 6 === 0 || d.h === 23 ? String(d.h).padStart(2, "0") : null),
       tip: (d) => ({ title: `${String(d.h).padStart(2, "0")}:00–${String(d.h).padStart(2, "0")}:59`, rows: [{ value: Fmt.int(d.v), label: "plays" }] }),
