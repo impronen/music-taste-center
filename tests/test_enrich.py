@@ -374,7 +374,7 @@ class JobTests(unittest.TestCase):
         from mtc import settings
         from mtc.__main__ import main
         with self.client() as client:
-            self.assertEqual(client.get("/api/settings").json(), {"lastfm_username": None, "has_key": False, "key_works": False})
+            self.assertEqual(client.get("/api/settings").json(), {"lastfm_username": None, "has_key": False, "key_works": False, "birth_year": None})
             for bad in ("", "1abc", "a", "has space", "x" * 16, "ä-user"):
                 self.assertEqual(client.put("/api/settings/username", json={"username": bad}).status_code, 422, bad)
             r = client.put("/api/settings/username", json={"username": " Some_User-1 "})
@@ -390,6 +390,30 @@ class JobTests(unittest.TestCase):
         self.assertEqual(settings.lastfm_username(), "Other")
         with mock.patch.dict(os.environ, {"LASTFM_USER": "FromEnv"}):
             self.assertEqual(settings.lastfm_username(), "FromEnv")
+
+    def test_birth_year_setting(self):
+        from datetime import date
+        from mtc import settings
+        from mtc.__main__ import main
+        with self.client() as client:
+            self.assertIsNone(client.get("/api/settings").json()["birth_year"])
+            for bad in (1899, 2101, "abc", 1985.5):
+                self.assertEqual(client.put("/api/settings/birth-year", json={"year": bad}).status_code, 422, bad)
+            self.assertEqual(client.put("/api/settings/birth-year", json={"year": date.today().year + 1}).status_code, 422)  # not yet born
+            self.assertEqual(client.put("/api/settings/birth-year", json={"year": 1985}).json(), {"birth_year": 1985})
+            self.assertEqual(client.get("/api/settings").json()["birth_year"], 1985)
+            client.put("/api/settings/username", json={"username": "Some_User"})  # other settings survive
+            self.assertEqual(settings.load(), {"birth_year": 1985, "lastfm_username": "Some_User"})
+            self.assertEqual(client.put("/api/settings/birth-year", json={"year": 1990},
+                                        headers={"origin": "https://evil.example"}).status_code, 403)
+            self.assertEqual(client.put("/api/settings/birth-year", json={"year": None}).json(), {"birth_year": None})  # clears
+            self.assertNotIn("birth_year", settings.load())
+        self.assertEqual(main(["--db", str(self.path), "set-birth-year", "1850"]), 1)
+        self.assertEqual(main(["--db", str(self.path), "set-birth-year"]), 1)
+        self.assertEqual(main(["--db", str(self.path), "set-birth-year", "1985"]), 0)
+        self.assertEqual(settings.birth_year(), 1985)
+        self.assertEqual(main(["--db", str(self.path), "set-birth-year", "--clear"]), 0)
+        self.assertIsNone(settings.birth_year())
 
     def test_key_verification(self):
         with self.client(lastfm_factory=self.lf) as client:

@@ -195,32 +195,75 @@ def _median(hist: Counter) -> int:
 MIN_LIST_PLAYS = 5      # an album needs this many plays to be named in the lists
 LIST_SIZE = 10
 ON_RELEASE_DAYS = 30    # "there on release": first played within this many days of a full release date
+# The tracked window is a couple of decades at most, so the wait gets its own, shorter scale.
+LAG_BUCKETS = [("Under 1 year", 365), ("1–3 years", 1096), ("3–10 years", 3653), ("10+ years", None)]
+
+# Eras of a release, by its date: only the last one has a wait that means anything, because the
+# first two could not have been found on release (no tracking, or not even born).
+ERA_BEFORE_BIRTH, ERA_PRE_TRACKING, ERA_TRACKED = "before_birth", "pre_tracking", "tracked"
 
 
-def discovery_lag(conn: sqlite3.Connection) -> dict:
-    return _cached(conn, ("discovery_lag",), lambda: _discovery_lag(conn), tags=True)
+def discovery_lag(conn: sqlite3.Connection, birth_year: int | None = None) -> dict:
+    return _cached(conn, ("discovery_lag", birth_year), lambda: _discovery_lag(conn, birth_year), tags=True)
 
 
-def _discovery_lag(conn) -> dict:
-    """How long after an album's release you first played it. An album released before tracking began
-    by an artist already in rotation then is left out: its first scrobble says nothing about when you
-    found it. An album released after tracking began is measurable whoever the artist is."""
+def _era_labels(birth_year: int | None) -> dict[str, str]:
+    return {ERA_BEFORE_BIRTH: "Before you were born",
+            ERA_PRE_TRACKING: "Your years, before tracking" if birth_year else "Before tracking",
+            ERA_TRACKED: "Released while tracking"}
+
+
+def _discovery_lag(conn, birth_year: int | None) -> dict:
+    """How long after an album's release you first played it, for albums released since tracking began.
+
+    Older records have no meaningful wait (a 1965 album found in 2012 was not "found 47 years late":
+    it could not have been found on release), so they are only counted by era, and by the year you
+    first played them. That year is no discovery for an artist already in rotation when tracking
+    began (artist_stats.prehistory), so those albums are left out of it."""
     start = conn.execute("SELECT MIN(lday) FROM scrobbles").fetchone()[0]
     rows = conn.execute(
         f"SELECT al.id, al.title, ar.id, ar.name, st.prehistory, COUNT(*), ai.release_date,"
-        f" MAX(0, CAST(julianday(MIN(s.lday)) - julianday({_RELEASE_DAY}) AS INTEGER)), {_RELEASE_DAY}"
+        f" MAX(0, CAST(julianday(MIN(s.lday)) - julianday({_RELEASE_DAY}) AS INTEGER)), {_RELEASE_DAY}, MIN(s.lday)"
         f" FROM scrobbles s JOIN albums al ON al.id = s.album_id JOIN artists ar ON ar.id = al.artist_id"
         f" JOIN artist_stats st ON st.artist_id = al.artist_id JOIN album_info ai ON ai.album_id = al.id"
         f" WHERE ai.release_date IS NOT NULL AND CAST(substr(ai.release_date, 1, 4) AS INTEGER) BETWEEN ? AND ?"
         f" AND julianday({_RELEASE_DAY}) IS NOT NULL GROUP BY al.id", (MIN_YEAR, MAX_YEAR)).fetchall()
-    albums = [{"id": r[0], "name": r[1], "artist_id": r[2], "artist": r[3], "plays": r[5], "release_date": r[6],
-               "lag_days": r[7], "lag_years": round(r[7] / DAYS_PER_YEAR, 2)} for r in rows if not r[4] or r[8] > start]
-    excluded = len(rows) - len(albums)
-    if not albums:
-        return {"covered": 0, "excluded": excluded, "prehistory_days": config.PREHISTORY_DAYS}
+    labels = _era_labels(birth_year)
+    out: dict = {"covered": 0, "tracking_start": start, "birth_year": birth_year, "eras": [], "dug_up": None,
+                 "prehistory_days": config.PREHISTORY_DAYS}
+    if not rows:
+        return out
 
-    edges = [e for _, e in AGE_BUCKETS]
-    counts = [0] * len(AGE_BUCKETS)
+    def era(release_day: str) -> str:
+        if release_day >= start:
+            return ERA_TRACKED
+        return ERA_BEFORE_BIRTH if birth_year and int(release_day[:4]) < birth_year else ERA_PRE_TRACKING
+
+    albums, per_era = [], {k: [0, 0] for k in labels}  # era -> [albums, plays]
+    found: defaultdict = defaultdict(Counter)           # first-play year -> era -> albums (older records)
+    for r in rows:
+        e = era(r[8])
+        per_era[e][0] += 1
+        per_era[e][1] += r[5]
+        if e == ERA_TRACKED:
+            albums.append({"id": r[0], "name": r[1], "artist_id": r[2], "artist": r[3], "plays": r[5],
+                           "release_date": r[6], "lag_days": r[7], "lag_years": round(r[7] / DAYS_PER_YEAR, 2)})
+        elif not r[4]:
+            found[int(r[9][:4])][e] += 1
+    total_plays = sum(p for _, p in per_era.values())
+    out["eras"] = [{"key": k, "label": labels[k], "albums": n, "plays": p, "share": round(p / total_plays, 4)}
+                   for k, (n, p) in per_era.items() if n and (k != ERA_BEFORE_BIRTH or birth_year)]
+    if found:
+        old = [k for k in (ERA_BEFORE_BIRTH, ERA_PRE_TRACKING) if any(k in c for c in found.values())]
+        out["dug_up"] = {"years": [
+            {"year": y, "albums": sum(found[y].values()),
+             "by_era": [{"label": labels[k], "albums": found[y].get(k, 0)} for k in old]}
+            for y in range(min(found), max(found) + 1)]}
+    if not albums:
+        return out
+
+    edges = [e for _, e in LAG_BUCKETS]
+    counts = [0] * len(LAG_BUCKETS)
     for a in albums:
         counts[next(i for i, e in enumerate(edges) if e is None or a["lag_days"] < e)] += 1
     lags = sorted(a["lag_days"] for a in albums)
@@ -230,10 +273,11 @@ def _discovery_lag(conn) -> dict:
     late = sorted((a for a in albums if listed(a)), key=lambda a: (-a["lag_days"], -a["plays"]))[:LIST_SIZE]
     on_release = sorted((a for a in albums if listed(a) and len(a["release_date"]) == 10 and a["lag_days"] <= ON_RELEASE_DAYS),
                         key=lambda a: -a["plays"])[:LIST_SIZE]
-    return {"covered": len(albums), "excluded": excluded, "prehistory_days": config.PREHISTORY_DAYS,
+    return {**out, "covered": len(albums),
             "median_years": round(lags[len(lags) // 2] / DAYS_PER_YEAR, 2),
             "first_year_share": round(counts[0] / len(albums), 4), "late_count": counts[-1],
-            "buckets": [{"name": name, "albums": n} for (name, _), n in zip(AGE_BUCKETS, counts)],
+            "late_label": LAG_BUCKETS[-1][0],
+            "buckets": [{"name": name, "albums": n} for (name, _), n in zip(LAG_BUCKETS, counts)],
             "min_list_plays": MIN_LIST_PLAYS, "on_release_days": ON_RELEASE_DAYS,
             "late": late, "on_release": on_release}
 
