@@ -13,6 +13,7 @@ from collections import Counter, defaultdict
 from datetime import date, timedelta
 
 from . import config, rhythms
+from .insights import _artist_genre_shares
 from .rhythms import PRIOR, _cached, _cell
 
 MIN_YEAR = 1900         # release years outside this range are data errors, not music
@@ -235,3 +236,92 @@ def _discovery_lag(conn) -> dict:
             "buckets": [{"name": name, "albums": n} for (name, _), n in zip(AGE_BUCKETS, counts)],
             "min_list_plays": MIN_LIST_PLAYS, "on_release_days": ON_RELEASE_DAYS,
             "late": late, "on_release": on_release}
+
+
+# ---------------------------------------------------------------- decades through the day and year, and genre by decade
+
+GENRE_COLS = 8          # genres shown as columns in the decade x genre heatmap
+SIGNATURE_LIFT = 1.2    # a decade's signature genres are at least this over-represented in it
+SIGNATURE_N = 3
+_PARTS = [("weekday", "Weekdays"), ("weekend", "Weekend")]
+
+
+def rhythm_overview(conn: sqlite3.Connection) -> dict:
+    return _cached(conn, ("decade_rhythms",), lambda: _rhythm_overview(conn), tags=True)
+
+
+def _rhythm_overview(conn) -> dict:
+    obs = {d: defaultdict(lambda: defaultdict(Counter)) for d in ("season", "daypart", "weekpart")}
+    cov = {d: defaultdict(Counter) for d in obs}
+    by_decade: Counter = Counter()
+    for lday, part, weekend, ry, n in conn.execute(
+            "SELECT s.lday, s.lhour / 6, s.lwday >= 5, CAST(substr(ai.release_date, 1, 4) AS INTEGER), COUNT(*)"
+            " FROM scrobbles s JOIN album_info ai ON ai.album_id = s.album_id WHERE ai.release_date IS NOT NULL"
+            " GROUP BY 1, 2, 3, 4"):
+        if not MIN_YEAR <= ry <= MAX_YEAR:
+            continue
+        decade = ry // 10 * 10
+        year, month = int(lday[:4]), int(lday[5:7])
+        by_decade[decade] += n
+        for dim, ly, bucket in (
+                ("season", year + (month == 12), rhythms._SEASON_OF[month]),  # winter belongs to the year it ends in
+                ("daypart", year, rhythms.DAYPARTS[part][0]),
+                ("weekpart", year, "weekend" if weekend else "weekday")):
+            obs[dim][ly][bucket][decade] += n
+            cov[dim][ly][bucket] += n
+    covered = sum(by_decade.values())
+    if not covered:
+        return {"covered": 0}
+
+    shown = sorted(sorted((d for d in by_decade if by_decade[d] / covered >= MIN_SHARE), key=lambda d: -by_decade[d])[:MAX_ROWS])
+    names = {d: _label(d) for d in by_decade}
+
+    def matrix(dim: str, buckets: list[str], cols: list[str]) -> dict:
+        return {"cols": cols, "rows": rhythms._matrix(rhythms._lift(obs[dim], cov[dim]), buckets, shown, names)}
+
+    return {"covered": covered, "decades": [names[d] for d in shown],
+            "seasons": matrix("season", list(rhythms.SEASONS), [s.title() for s in rhythms.SEASONS]),
+            "dayparts": matrix("daypart", [p[0] for p in rhythms.DAYPARTS], [p[1] for p in rhythms.DAYPARTS]),
+            "weekparts": matrix("weekpart", [p[0] for p in _PARTS], [p[1] for p in _PARTS]),
+            "genres": _genre_by_decade(conn, shown, names, covered)}
+
+
+def _genre_by_decade(conn, shown: list[int], names: dict, dated: int) -> dict | None:
+    """Genre mix of each release decade against the library's overall mix (an artist's plays are
+    spread over its top genre tags, as in insights.genres). None without genre tags."""
+    shares = _artist_genre_shares(conn)
+    mix: defaultdict = defaultdict(Counter)   # decade -> genre -> plays
+    cov: Counter = Counter()                  # decade -> plays of artists that have genre tags
+    for artist_id, ry, n in conn.execute(
+            "SELECT s.artist_id, CAST(substr(ai.release_date, 1, 4) AS INTEGER), COUNT(*)"
+            " FROM scrobbles s JOIN album_info ai ON ai.album_id = s.album_id WHERE ai.release_date IS NOT NULL GROUP BY 1, 2"):
+        if artist_id not in shares or not MIN_YEAR <= ry <= MAX_YEAR:
+            continue
+        decade = ry // 10 * 10
+        cov[decade] += n
+        for tag_id, share in shares[artist_id]:
+            mix[decade][tag_id] += n * share
+    total = sum(cov.values())
+    if not total:
+        return None
+    overall: Counter = Counter()
+    for counts in mix.values():
+        overall.update(counts)
+    tag_names = rhythms._tag_names(conn)
+
+    def cell(decade: int, genre: int) -> dict:
+        expected = cov[decade] * overall[genre] / total
+        observed = mix[decade].get(genre, 0.0)
+        return _cell({"lift": (observed + PRIOR) / (expected + PRIOR), "observed": observed, "expected": expected,
+                      "up": 0, "years": 0})
+
+    cols = [g for g, _ in overall.most_common(GENRE_COLS)]
+    signature = []
+    for d in shown:
+        best = sorted(((g, cell(d, g)) for g in overall), key=lambda gc: -(gc[1]["lift"] or 0))
+        signature.append({"decade": d, "label": names[d], "genres": [
+            {"id": g, "name": tag_names.get(g, str(g)), "lift": c["lift"]}
+            for g, c in best if c["lift"] and c["lift"] >= SIGNATURE_LIFT][:SIGNATURE_N]})
+    return {"coverage": round(total / dated, 4), "cols": [tag_names.get(g, str(g)) for g in cols],
+            "rows": [{"id": d, "name": names[d], "cells": [cell(d, g) for g in cols]} for d in shown],
+            "signature": signature}
