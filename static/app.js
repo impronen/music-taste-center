@@ -1264,9 +1264,10 @@
         : job?.state === "stopped" ? html`<div class="notice">Stopped. Everything fetched so far is saved; fetch again to continue.</div>`
         : job?.state === "failed" ? html`<div class="notice err">Stopped with an error: ${job.error}</div>` : "";
       mount(action, html`<button class="btn primary" id="job-start" type="button" ${hasKey && waiting ? "" : raw("disabled")}>Fetch tags &amp; covers</button>`);
-      mount(el, html`<div class="progress-hero"><span class="pct">${waiting ? Fmt.int(md.pending_artists + md.pending_albums) : "✓"}</span>
-          <div class="what"><b>${waiting ? `${Fmt.int(md.pending_artists)} artists and ${Fmt.int(md.pending_albums)} albums to look up` : "Everything is up to date"}</b>
-          <span>${!hasKey ? "Add your last.fm API key below to start." : waiting ? `${md.pending_releases ? `plus ${Fmt.int(md.pending_releases)} release dates · ` : ""}about ${duration(estimate)}, most-played first. Stopping loses nothing.`
+      const datesOnly = waiting && !md.pending_artists && !md.pending_albums; // e.g. albums retried after the title matching improved
+      mount(el, html`<div class="progress-hero"><span class="pct">${!waiting ? "✓" : Fmt.int(datesOnly ? md.pending_releases : md.pending_artists + md.pending_albums)}</span>
+          <div class="what"><b>${!waiting ? "Everything is up to date" : datesOnly ? `${Fmt.int(md.pending_releases)} release dates to look up` : `${Fmt.int(md.pending_artists)} artists and ${Fmt.int(md.pending_albums)} albums to look up`}</b>
+          <span>${!hasKey ? "Add your last.fm API key below to start." : waiting ? `${!datesOnly && md.pending_releases ? `plus ${Fmt.int(md.pending_releases)} release dates · ` : ""}about ${duration(estimate)}, most-played first. Stopping loses nothing.${datesOnly ? " Albums MusicBrainz couldn't match before are tried again when the matching improves." : ""}`
             : "Every artist and album with 3+ plays was looked up in the last 120 days."}</span></div></div>
         ${job?.phases && job.state !== "idle" ? phases : ""}${outcome}`);
     }

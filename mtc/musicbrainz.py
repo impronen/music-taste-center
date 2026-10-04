@@ -4,6 +4,7 @@ Rate limit: 1 request/second with a meaningful User-Agent. Dates come from the r
 *group* (first-release-date), i.e. when the album first came out, not a later reissue.
 """
 import re
+import unicodedata
 
 from .ingest import key
 from .webapi import ApiError, JsonApi, NotFound, Transient
@@ -11,22 +12,51 @@ from .webapi import ApiError, JsonApi, NotFound, Transient
 _LUCENE_SPECIAL = re.compile(r'([+\-!(){}\[\]^"~*?:\\/]|&&|\|\|)')
 
 # Edition markers that streaming services and last.fm append to an album title but MusicBrainz
-# keeps out of it ("Rumours (Deluxe Edition)", "Thriller - 2003 Remaster"). Deliberately not
-# "live", "acoustic", "demo" or "soundtrack": those are part of what an album is called.
-_MARKER = r"deluxe|remaster(?:ed)?|edition|expanded|anniversary|version|bonus|special|mono|stereo|re-?issue"
-_BRACKETED = re.compile(rf"\s*[(\[][^()\[\]]*?\b(?:{_MARKER})\b[^()\[\]]*?[)\]]", re.I)
-_DASHED = re.compile(rf"\s+-\s+(?:[^-]*\b(?:{_MARKER})\b[^-]*|EP|Single)\s*$", re.I)
+# keeps out of it ("Rumours (Deluxe Edition)", "Thriller - 2003 Remaster"). A bracketed or " - "
+# part is only removed when EVERY word in it belongs to this vocabulary and at least one is a core
+# word, so "(Special Guest)", "(Version 2)", "(Bonus)", "(Live)" and "(Disc 2)" are real titles.
+_CORE = {"deluxe", "remaster", "remastered", "edition", "expanded", "anniversary", "reissue", "re-issue", "mono", "stereo"}
+_FILLER = {"version", "bonus", "track", "tracks", "special", "collector's", "collectors", "limited", "standard", "super",
+           "legacy", "platinum", "tour", "mix", "digital", "explicit", "clean", "digipak", "international", "and", "the", "&"}
+_YEAR_OR_ORDINAL = re.compile(r"^(?:\d{4}|\d+(?:st|nd|rd|th))$")
+_BRACKET_GROUP = re.compile(r"[(\[]([^()\[\]]*)[)\]]")
+_DASH_SUFFIX = re.compile(r"\s+-\s+([^-]*?)\s*$")
+# Dashes and brackets that streaming services also use (NFKC already turns fullwidth brackets into ASCII).
+_PUNCTUATION = str.maketrans({"–": "-", "—": "-", "‒": "-", "―": "-", "【": "[", "】": "]", "〔": "(", "〕": ")"})
+
+
+def _is_marker(text: str) -> bool:
+    words = [w for w in (w.strip(".,:;") for w in text.lower().split()) if w]
+    if not words or not all(w in _CORE or w in _FILLER or _YEAR_OR_ORDINAL.match(w) for w in words):
+        return False
+    return any(w in _CORE for w in words) or ("bonus" in words and ("track" in words or "tracks" in words))
+
+
+def _prepared(title: str) -> str:
+    return " ".join(unicodedata.normalize("NFKC", title).translate(_PUNCTUATION).split())
+
+
+def clean_title(title: str) -> tuple[str, str | None]:
+    """The title without edition markers, plus "EP" or "Single" when a " - EP" / " - Single" suffix
+    was removed (those are separate release groups from the album of the same name)."""
+    cleaned, release_type = _prepared(title), None
+    while True:
+        step = " ".join(_BRACKET_GROUP.sub(lambda m: "" if _is_marker(m.group(1)) else m.group(0), cleaned).split())
+        suffix = _DASH_SUFFIX.search(step)
+        if suffix and suffix.group(1).lower() in ("ep", "single"):
+            release_type, step = suffix.group(1).upper() if suffix.group(1).lower() == "ep" else "Single", step[:suffix.start()]
+        elif suffix and _is_marker(suffix.group(1)):
+            step = step[:suffix.start()]
+        step = step.strip()
+        if step == cleaned or not step:
+            return cleaned, release_type if cleaned != _prepared(title) else None
+        cleaned = step
 
 
 def edition_free_title(title: str) -> str:
-    """The title without edition/remaster markers, or the title itself when nothing is left."""
-    cleaned = title
-    while True:
-        step = " ".join(_DASHED.sub("", _BRACKETED.sub("", cleaned)).split())
-        if step == cleaned or not step:
-            break
-        cleaned = step
-    return cleaned if cleaned and cleaned != " ".join(title.split()) else title
+    """`title` without edition markers, or `title` itself when there was nothing to remove."""
+    cleaned, _ = clean_title(title)
+    return title if cleaned == _prepared(title) else cleaned
 
 
 def lucene_quote(text: str) -> str:
@@ -66,27 +96,37 @@ class MusicBrainz(JsonApi):
     def search_release_group(self, artist: str, title: str, min_score: int = 90) -> dict:
         """Best release group whose title matches exactly (normalized) and whose credited
         artist matches, among results scoring at least min_score. When the title carries edition
-        markers and the exact title finds nothing, search once more without them (the artist must
-        still match, so this can't pull in someone else's album)."""
+        markers and the exact title finds nothing, search once more without them, with two guards
+        against picking another release of the same artist: a " - EP" / " - Single" title needs a
+        group of that type, and a group with secondary types (Live, Compilation, Remix...) is only
+        accepted when the original title says so. The artist must match either way."""
         try:
             return self._search(artist, title, {key(title)}, min_score)
         except NotFound:
             cleaned = edition_free_title(title)
             if cleaned == title:
                 raise
-        return self._search(artist, cleaned, {key(cleaned), key(title)}, min_score)
+        return self._search(artist, cleaned, {key(cleaned), key(title)}, min_score, retry_of=title)
 
-    def _search(self, artist: str, title: str, accepted_titles: set[str], min_score: int) -> dict:
+    def _search(self, artist: str, title: str, accepted_titles: set[str], min_score: int,
+                retry_of: str | None = None) -> dict:
         data = self.get("release-group/", {
             "query": f"releasegroup:{lucene_quote(title)} AND artist:{lucene_quote(artist)}",
             "fmt": "json", "limit": "5",
         })
         want_artist = key(artist)
+        wanted_type = clean_title(retry_of)[1] if retry_of else None
         for rg in data.get("release-groups") or []:
             credit = " ".join(
                 (c.get("name") or "") + (c.get("joinphrase") or "") for c in rg.get("artist-credit") or []
             )
-            if (rg.get("score") or 0) >= min_score and key(rg.get("title") or "") in accepted_titles \
-                    and want_artist in key(credit):
-                return _group(rg)
+            if (rg.get("score") or 0) < min_score or key(rg.get("title") or "") not in accepted_titles \
+                    or want_artist not in key(credit):
+                continue
+            if retry_of is not None:
+                if wanted_type and rg.get("primary-type") != wanted_type:
+                    continue
+                if any(t.lower() not in retry_of.lower() for t in rg.get("secondary-types") or []):
+                    continue
+            return _group(rg)
         raise NotFound("no confident match")
