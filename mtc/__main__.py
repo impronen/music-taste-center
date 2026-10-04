@@ -66,8 +66,8 @@ def main(argv: list[str] | None = None) -> int:
             print(f"{r['label']}: read {r['rows_read']}, added {r['rows_added']}, duplicates {r['duplicates']},"
                   f" skipped {r['rows_skipped']} ({r['encoding']})")
             if r["rows_read"] == 0 and r["rows_skipped"]:
-                print("  Nothing could be read. The file needs comma-separated columns for artist, track and date"
-                      " (album is optional), with or without a header row.")
+                print("  Nothing could be read. The file needs comma-separated columns for artist, track and a date"
+                      " it can read (album is optional), with or without a header row.")
     elif cmd == "rebuild":
         ingest.recompute_local_time(conn)
         print(json.dumps(derive.rebuild(conn)))

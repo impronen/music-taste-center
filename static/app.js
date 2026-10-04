@@ -1199,7 +1199,7 @@
         cache.clear();
         mount(result, html`<div class="notice">Added <strong>${Fmt.int(r.rows_added)}</strong> new scrobbles from ${Fmt.int(r.rows_read)} rows
           (${Fmt.int(r.duplicates)} already known, ${Fmt.int(r.rows_skipped)} skipped, ${r.encoding}).
-          ${r.rows_read === 0 && r.rows_skipped ? "Nothing could be read: the file needs columns for artist, track and date (album is optional)." : ""}</div>`);
+          ${r.rows_read === 0 && r.rows_skipped ? "Nothing could be read: the file needs columns for artist, track and a date it can read (album is optional)." : ""}</div>`);
         setTimeout(() => route(), 1500);
       } catch (err) {
         mount(result, html`<div class="notice err">Import failed: ${err.message}</div>`);

@@ -16,7 +16,7 @@ fi
 # First run, or a half-finished earlier setup: (re)create the Python environment.
 if ! .venv/bin/python -c 'import fastapi, uvicorn' 2>/dev/null; then
   if ! python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 13) else 1)' 2>/dev/null; then
-    echo "Taste Center needs Python 3.13 or newer (this Mac has: $(python3 --version 2>&1))."
+    echo "Taste Center needs Python 3.13 or newer (this Mac has: $(command -v python3 >/dev/null && python3 --version 2>&1 || echo "no Python"))."
     echo "Install it from https://www.python.org/downloads/ and double-click this file again."
     pause
     exit 1
