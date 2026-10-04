@@ -10,6 +10,24 @@ from .webapi import ApiError, JsonApi, NotFound, Transient
 
 _LUCENE_SPECIAL = re.compile(r'([+\-!(){}\[\]^"~*?:\\/]|&&|\|\|)')
 
+# Edition markers that streaming services and last.fm append to an album title but MusicBrainz
+# keeps out of it ("Rumours (Deluxe Edition)", "Thriller - 2003 Remaster"). Deliberately not
+# "live", "acoustic", "demo" or "soundtrack": those are part of what an album is called.
+_MARKER = r"deluxe|remaster(?:ed)?|edition|expanded|anniversary|version|bonus|special|mono|stereo|re-?issue"
+_BRACKETED = re.compile(rf"\s*[(\[][^()\[\]]*?\b(?:{_MARKER})\b[^()\[\]]*?[)\]]", re.I)
+_DASHED = re.compile(rf"\s+-\s+(?:[^-]*\b(?:{_MARKER})\b[^-]*|EP|Single)\s*$", re.I)
+
+
+def edition_free_title(title: str) -> str:
+    """The title without edition/remaster markers, or the title itself when nothing is left."""
+    cleaned = title
+    while True:
+        step = " ".join(_DASHED.sub("", _BRACKETED.sub("", cleaned)).split())
+        if step == cleaned or not step:
+            break
+        cleaned = step
+    return cleaned if cleaned and cleaned != " ".join(title.split()) else title
+
 
 def lucene_quote(text: str) -> str:
     return '"' + _LUCENE_SPECIAL.sub(r"\\\1", text) + '"'
@@ -47,17 +65,28 @@ class MusicBrainz(JsonApi):
 
     def search_release_group(self, artist: str, title: str, min_score: int = 90) -> dict:
         """Best release group whose title matches exactly (normalized) and whose credited
-        artist matches, among results scoring at least min_score."""
+        artist matches, among results scoring at least min_score. When the title carries edition
+        markers and the exact title finds nothing, search once more without them (the artist must
+        still match, so this can't pull in someone else's album)."""
+        try:
+            return self._search(artist, title, {key(title)}, min_score)
+        except NotFound:
+            cleaned = edition_free_title(title)
+            if cleaned == title:
+                raise
+        return self._search(artist, cleaned, {key(cleaned), key(title)}, min_score)
+
+    def _search(self, artist: str, title: str, accepted_titles: set[str], min_score: int) -> dict:
         data = self.get("release-group/", {
             "query": f"releasegroup:{lucene_quote(title)} AND artist:{lucene_quote(artist)}",
             "fmt": "json", "limit": "5",
         })
-        want_title, want_artist = key(title), key(artist)
+        want_artist = key(artist)
         for rg in data.get("release-groups") or []:
             credit = " ".join(
                 (c.get("name") or "") + (c.get("joinphrase") or "") for c in rg.get("artist-credit") or []
             )
-            if (rg.get("score") or 0) >= min_score and key(rg.get("title") or "") == want_title \
+            if (rg.get("score") or 0) >= min_score and key(rg.get("title") or "") in accepted_titles \
                     and want_artist in key(credit):
                 return _group(rg)
         raise NotFound("no confident match")
