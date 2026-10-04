@@ -2,7 +2,7 @@
 
 **Your last.fm listening history, on your own computer.** Every play you've logged on last.fm (a "scrobble") becomes something you can browse, search and explore: how your taste connects, how it changes through the year, and where your music comes from. No ads, no extra account, nothing uploaded. Everything lives in one file on your machine.
 
-![The Overview page: a month of listening with totals, a day-by-day chart and your top artists](docs/images/overview.jpg)
+![The Overview page: a month of listening with totals and a day-by-day chart](docs/images/overview.jpg)
 
 <sub>All screenshots show a fictional listening history.</sub>
 
@@ -28,7 +28,7 @@ Ready to try it? Jump to [Install and start](#install-and-start).
 
 ## What you need
 
-- **Python 3.13 or newer.** It's free and runs the app behind the scenes. To check whether you have it, open a terminal (see below) and type `python3 --version`. If it's missing or older, install it from [python.org](https://www.python.org/downloads/): download the installer and click through it. On Windows, tick **Add python.exe to PATH** in the installer's first window.
+- **Python 3.13 or newer.** It's free and runs the app behind the scenes. To check whether you have it, open a terminal (see below) and type `python3 --version` (on Windows: `py --version`). If it's missing or older, install it from [python.org](https://www.python.org/downloads/): download the installer and click through it. On Windows, tick **Add python.exe to PATH** in the installer's first window.
 - **A last.fm account with some listening history,** and a free **API key** (explained below, in step 1 of "Get your listening history in"). You can try the app without either: see [the fictional demo library](docs/developer-guide.md#a-fictional-demo-library) (this one needs a terminal).
 - **An internet connection** to install, to download your history and to fetch genres and release dates. After that you can browse offline, except that album covers load from last.fm.
 - **Little disk space.** A library with a couple of hundred thousand scrobbles, with all its genres and release dates, takes under 100 MB.
@@ -39,7 +39,7 @@ The app runs on your own computer and opens in your web browser. It isn't a webs
 
 1. **Download the code.** On this page, click the green **Code** button, then **Download ZIP**. Double-click the downloaded file to unpack it (on Windows: right-click it, **Extract All**). You get a folder named something like `music-taste-center-main`. Put it somewhere permanent, for example in Documents: **your listening history will be stored inside this folder.**
 2. **Start the app.**
-   - **On a Mac:** open the folder and double-click **`Taste Center.command`**. The first time, it sets everything up (about a minute, with internet) and then opens the app in your browser. If macOS says it can't open the file because it was downloaded, right-click the file, choose **Open**, then **Open** again. A black Terminal window stays open while the app runs: **closing that window stops the app.** You can drag the file to the Dock for one-click access.
+   - **On a Mac:** open the folder and double-click **`Taste Center.command`**. The first time, it sets everything up (about a minute, with internet) and then opens the app in your browser. If macOS says it can't open the file because it was downloaded, try once more, then open **System Settings → Privacy & Security**, scroll down and click **Open Anyway** next to `Taste Center.command` (on older macOS versions: right-click the file, choose **Open**, then **Open** again). A black Terminal window stays open while the app runs: **closing that window stops the app.** You can drag the file to the Dock for one-click access.
    - **On Linux, or on a Mac if you prefer typing:** open a terminal in the folder (a terminal is a window where you type commands; on a Mac open the **Terminal** app, type `cd ` with a space after it, drag the folder into the window and press Enter) and run these three lines. The first two only the first time (they set up a private folder with the app's helper software):
 
      ```sh
@@ -65,7 +65,7 @@ Choose whichever suits you. You can use both: the app skips scrobbles it already
 
 The app now downloads your history in the background. **It shows no progress and nothing appears until the whole download is finished**; for a large library that takes a few minutes. Reload the page after a while. Libraries of up to about 400,000 scrobbles download this way; for a bigger one, use Option B.
 
-From then on, every time you start the app it fetches the scrobbles you've added since. It does this at most three times a day, at least four hours apart. If you restart the app sooner than that, it just skips the update. To force one, run `.venv/bin/python -m mtc update --force` in a terminal (on Windows, `.venv\Scripts\python -m mtc update --force`).
+From then on, every time you start the app it fetches the scrobbles you've added since. It does this at most three times a day, at least four hours apart. If you restart the app sooner than that, it just skips the update. To force one, run `.venv/bin/python -m mtc update --force` in a terminal opened in the app's folder (see [Install and start](#install-and-start); on Windows, `.venv\Scripts\python -m mtc update --force`).
 
 ### Option B: import a file you already have
 
@@ -117,9 +117,9 @@ Taste Center is an independent hobby project. It isn't made by or affiliated wit
 
 ## Troubleshooting
 
-- **"No scrobbles yet" after connecting your account.** The download starts when the app starts, at most three times a day and four hours apart. Check that your username and API key are saved on the Import page (the key shows a green "works" badge), restart the app, and wait a few minutes. If it still shows nothing, look in the Terminal window for a line with "error" in it; that is what to quote if you ask for help.
+- **"No scrobbles yet" after connecting your account.** The download starts when the app starts, at most three times a day and four hours apart. Check that your username and API key are saved on the Import page (the key shows a green "works" badge), restart the app, and wait a few minutes. If it still shows nothing, open a terminal in the app's folder (see [Install and start](#install-and-start)) and run `.venv/bin/python -m mtc update --status` (on Windows: `.venv\Scripts\python -m mtc update --status`). It prints how the last attempt went, including any error; that is what to quote if you ask for help.
 - **The page says it can't connect.** The app isn't running: start it again. If it still fails, another program may be using the same address. Advanced: start the app on a different port with `.venv/bin/python app.py serve --port 8800` and open <http://127.0.0.1:8800> (Mac launcher: `MTC_PORT=8800 "./Taste Center.command"` in Terminal).
-- **Times of day look shifted** (you listen at night but the app says afternoon). The app works out days and hours in Finnish time (`Europe/Helsinki`) unless told otherwise, and there is no setting for this inside the app yet. Look up your zone name in [the list of time zones](https://en.wikipedia.org/wiki/List_of_tz_database_time_zones) (examples: `Europe/London`, `America/New_York`, `Asia/Tokyo`) and start the app from a terminal with it: `MTC_TZ=America/New_York .venv/bin/python app.py` (on a Mac, `MTC_TZ=America/New_York "./Taste Center.command"`; in Windows PowerShell, first `$env:MTC_TZ = "America/New_York"`). Once, recalculate your history with the same variable set: `MTC_TZ=America/New_York .venv/bin/python -m mtc rebuild`. Use the same zone every time you start the app. A wrong zone name gives a clear error.
+- **Times of day look shifted** (you listen at night but the app says afternoon). The app works out days and hours in Finnish time (`Europe/Helsinki`) unless told otherwise, and there is no setting for this inside the app yet. Look up your zone name in [the list of time zones](https://en.wikipedia.org/wiki/List_of_tz_database_time_zones) (examples: `Europe/London`, `America/New_York`, `Asia/Tokyo`) and start the app from a terminal opened in the app's folder with it: `MTC_TZ=America/New_York .venv/bin/python app.py` (on a Mac, `MTC_TZ=America/New_York "./Taste Center.command"`; in Windows PowerShell, first `$env:MTC_TZ = "America/New_York"`). Once, recalculate your history with the same variable set: `MTC_TZ=America/New_York .venv/bin/python -m mtc rebuild`. Use the same zone every time you start the app. A wrong zone name gives a clear error.
 - **Decades or Rhythms look empty.** They need genres and release dates: run **Fetch tags & covers** on the Import page and let it work through your library. Each page says what share of your plays it is based on.
 - **Some artists appear twice.** Merge them on the **Cleanup** page.
 
