@@ -681,9 +681,9 @@
     const [d, age, lag, rh] = await Promise.all([api("/api/decades"), api("/api/decades/age"), api("/api/decades/lag"), api("/api/decades/rhythms")]);
     // A heatmap where every cell is "as usual" says nothing: state that instead of drawing a blank grid.
     const lifts = (m) => m.rows.flatMap((r) => r.cells).filter((c) => c.lift != null).map((c) => c.lift);
-    const isFlat = (m) => lifts(m).every((l) => Charts.liftStep(l) === 0);
+    const isFlat = (m) => { const l = lifts(m); return l.length > 0 && l.every((x) => Charts.liftStep(x) === 0); };
     const liftCard = (title, id, m, o) => isFlat(m)
-      ? card(title, html`<p class="empty">Nothing stands out: every decade stays within ${Fmt.pct(Math.ceil(Math.max(...lifts(m).map((l) => Math.abs(l - 1))) * 100) / 100)} of its usual share.</p>`, o)
+      ? card(title, html`<p class="empty">Nothing stands out: every decade stays within ${Fmt.pct(Math.ceil(Math.max(...lifts(m).map((l) => Math.abs(l - 1))) * 100 - 1e-9) / 100)} of its usual share.</p>`, o)
       : card(title, html`<div class="chart" id="${id}"></div>`, o);
     const head = (extra = "") => html`<div class="page-head"><div><h1>Decades</h1>
       <p class="lead">Which release decades you listen to, and how that has moved over the years.</p>${extra}</div></div>`;
