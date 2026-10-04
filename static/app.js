@@ -678,7 +678,7 @@
   // ---------- decades ----------
   async function decadesView() {
     const seq = rendering;
-    const [d, age, lag] = await Promise.all([api("/api/decades"), api("/api/decades/age"), api("/api/decades/lag")]);
+    const [d, age, lag, rh] = await Promise.all([api("/api/decades"), api("/api/decades/age"), api("/api/decades/lag"), api("/api/decades/rhythms")]);
     const head = (extra = "") => html`<div class="page-head"><div><h1>Decades</h1>
       <p class="lead">Which release decades you listen to, and how that has moved over the years.</p>${extra}</div></div>`;
     if (!d.covered) {
@@ -718,6 +718,16 @@
             : card("Typical age over the years", html`<p class="empty">Needs ${Fmt.int(age.min_year_plays)} dated plays in a listening year.</p>`)}
           ${card("Age mix per year", html`<div class="chart" id="c-age-mix"></div>`, { sub: "Share of each listening year's dated plays, by how old the album was" })}
         </div>` : ""}
+      ${rh.covered ? html`${card("Decades through the year", html`<div class="chart" id="c-dec-season"></div>`, { cls: "canvas",
+          sub: "Each season's share of a decade compared with your usual share that same year." })}
+        <div class="grid cols-7-5">
+          ${card("Decades through the day", html`<div class="chart" id="c-dec-day"></div>`, { sub: "Night 0–6 · morning 6–12 · afternoon 12–18 · evening 18–24" })}
+          ${card("Weekdays vs weekends", html`<div class="chart" id="c-dec-week"></div>`, { sub: "Monday–Friday against Saturday–Sunday" })}
+        </div>
+        ${rh.genres ? html`${card("What each decade sounds like", html`<div class="chart" id="c-dec-genre"></div>`, { cls: "canvas",
+            sub: html`Your top genres inside each release decade, against their share of all your plays. Based on ${Fmt.pct(rh.genres.coverage)} of dated plays.` })}
+          <div class="chips" style="margin-top:var(--gap)">${rh.genres.signature.filter((x) => x.genres.length).map((x) => html`<span class="chip"><b>${x.label}</b>
+            ${x.genres.map((g) => html`<a class="pill sage" href="#/tag/${g.id}">${g.name}</a>`)}</span>`)}</div>` : ""}` : ""}
       ${lag.covered ? html`${card("How long did you take to find it?", html`<div class="grid cols-3">
           ${tile("Typical wait", `${Fmt.dec(lag.median_years)} years`, "From an album's release to your first play of it")}
           ${tile("Found in its first year", Fmt.pct(lag.first_year_share), "Albums you played within a year of release")}
@@ -734,6 +744,7 @@
         <div class="prose" style="margin-top:12px;display:grid;gap:10px;max-width:760px">
           <p>Release dates come from MusicBrainz (the original release, not a reissue), or from a year tag on last.fm when MusicBrainz has nothing. Only albums with at least three plays are looked up, and plays without an album can't be dated, so the percentage above tells how much of your listening this page sees.</p>
           <p>Album age is the play date minus the release date. A date with only a year counts as 1 July${age.covered ? html` (${Fmt.pct(age.approximate_share)} of dated plays)` : ""}, and a play dated before its release counts as age 0, so the age figures are a little rough for albums released in the last year.</p>
+          ${rh.covered ? html`<p>The decade heatmaps use the same method as Rhythms: each season or part of the day is compared with that same year's mix of decades, so a decade you simply listen to more over the years doesn't look seasonal. The genre map compares a decade's genre mix with your overall mix; an artist's plays are split across its top genre tags.</p>` : ""}
           ${lag.covered ? html`<p>The wait is the time from an album's release date to the first day you played it. Albums released before tracking began by artists first heard in its first ${lag.prehistory_days} days are left out, because you probably knew them before it began; newer albums by those artists still count. “There on release” only uses full release dates, since a bare year is too vague to call a week.</p>` : ""}
           <p>1,5× means half as much again as usual. Small samples are pulled towards “as usual”, and blank cells had too few plays to say. “In vogue” compares the past 12 months with all the listening before them.</p>
         </div></details>`);
@@ -750,6 +761,12 @@
       title: (y) => `${y.year} · ${Fmt.int(y.plays)} dated plays`, label: "Decade mix per listening year",
     });
     Charts.matrix(document.getElementById("c-matrix"), d.matrix, { label: "Release decades by listening year" });
+    if (rh.covered) {
+      Charts.matrix(document.getElementById("c-dec-season"), rh.seasons, { label: "Release decades through the year" });
+      Charts.matrix(document.getElementById("c-dec-day"), rh.dayparts, { label: "Release decades by time of day" });
+      Charts.matrix(document.getElementById("c-dec-week"), rh.weekparts, { label: "Release decades on weekdays and weekends" });
+      if (rh.genres) Charts.matrix(document.getElementById("c-dec-genre"), rh.genres, { label: "Genres within each release decade" });
+    }
     if (lag.covered) {
       Charts.columns(document.getElementById("c-lag"), lag.buckets, {
         value: (b) => b.albums, height: 200, label: "Albums by wait before the first play", xLabel: (b) => b.name,

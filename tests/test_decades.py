@@ -270,6 +270,84 @@ class DiscoveryLagTests(unittest.TestCase):
         self.assertEqual((r.status_code, r.json()["covered"]), (200, 1))
 
 
+class DecadeRhythmTests(unittest.TestCase):
+    """Synthetic habits (rhythms=True): metal in winter, jazz in the morning, indie at weekends.
+    Each cluster's albums share one release decade, so the habits show up as decade lifts."""
+
+    @classmethod
+    def setUpClass(cls):
+        from tests.test_rhythms import GENRES, add_tags
+        cls.tmp = tempfile.TemporaryDirectory()
+        cls.path = Path(cls.tmp.name) / "r.db"
+        cls.conn = db.connect(cls.path)
+        ingest.import_csv_text(cls.conn, synthetic.to_csv(synthetic.generate(rhythms=True)), label="t", encoding="utf-8")
+        add_release_dates(cls.conn)
+        cluster = {a: c for c, names in synthetic.CLUSTERS.items() for a in names}
+        add_tags(cls.conn, {a: GENRES[c] for a, c in cluster.items()})
+        cls.o = decades.rhythm_overview(cls.conn)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.conn.close()
+        cls.tmp.cleanup()
+
+    @staticmethod
+    def lift(m: dict, decade: str, col: str):
+        row = next(r for r in m["rows"] if r["name"] == decade)
+        return row["cells"][m["cols"].index(col)]["lift"]
+
+    def test_a_decade_of_winter_music_is_above_usual_in_winter_and_below_in_summer(self):
+        m = self.o["seasons"]
+        self.assertEqual(m["cols"], ["Winter", "Spring", "Summer", "Autumn"])
+        self.assertGreater(self.lift(m, "2000s", "Winter"), 1.1)  # metal
+        self.assertLess(self.lift(m, "2000s", "Summer"), 1.0)
+
+    def test_a_decade_of_morning_music_leads_the_morning_hours(self):
+        self.assertGreater(self.lift(self.o["dayparts"], "1960s", "Morning"), 1.1)  # jazz at 07-08 local
+
+    def test_a_decade_of_weekend_music_leads_the_weekend(self):
+        w = self.o["weekparts"]
+        self.assertGreater(self.lift(w, "2010s", "Weekend"), 1.05)  # indie
+        self.assertLess(self.lift(w, "2010s", "Weekdays"), 1.0)
+
+    def test_every_matrix_has_the_same_decade_rows(self):
+        names = [r["name"] for r in self.o["seasons"]["rows"]]
+        self.assertEqual(names, self.o["decades"])
+        self.assertEqual([r["name"] for r in self.o["dayparts"]["rows"]], names)
+        self.assertEqual([r["name"] for r in self.o["weekparts"]["rows"]], names)
+
+    def test_each_decade_is_dominated_by_its_own_genre(self):
+        g = self.o["genres"]
+        self.assertGreater(g["coverage"], 0.9)
+        self.assertGreater(self.lift(g, "2000s", "black metal"), 1.5)
+        self.assertLess(self.lift(g, "2000s", "jazz"), 1.0)
+        sig = {x["label"]: [y["name"] for y in x["genres"]] for x in g["signature"]}
+        self.assertEqual(sig["2000s"][0], "black metal")
+        self.assertEqual(sig["1980s"][0], "finnish rock")
+
+    def test_without_genre_tags_only_the_genre_part_is_missing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            conn = db.connect(Path(tmp) / "n.db")
+            ingest.import_csv_text(conn, synthetic.to_csv(synthetic.generate(days=400)), label="t", encoding="utf-8")
+            add_release_dates(conn)
+            o = decades.rhythm_overview(conn)
+            conn.close()
+        self.assertIsNone(o["genres"])
+        self.assertGreater(o["covered"], 0)
+
+    def test_no_release_dates_is_an_empty_answer(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            conn = db.connect(Path(tmp) / "e.db")
+            ingest.import_csv_text(conn, synthetic.to_csv(synthetic.generate(days=30)), label="t", encoding="utf-8")
+            o = decades.rhythm_overview(conn)
+            conn.close()
+        self.assertEqual(o, {"covered": 0})
+
+    def test_api_serves_it(self):
+        with TestClient(create_app(self.path)) as c:
+            r = c.get("/api/decades/rhythms")
+        self.assertEqual((r.status_code, r.json()["decades"]), (200, self.o["decades"]))
+
 
 if __name__ == "__main__":
     unittest.main()
