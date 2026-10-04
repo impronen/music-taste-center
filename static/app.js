@@ -730,7 +730,7 @@
             sub: html`Your top genres inside each release decade, against their share of all your plays. Based on ${Fmt.pct(rh.genres.coverage)} of dated plays.` })}
           ${rh.genres.signature.some((x) => x.genres.length) ? html`<div class="chips" style="margin-top:var(--gap)">${rh.genres.signature.filter((x) => x.genres.length).map((x) => html`<span class="chip"><b>${x.label}</b>
             ${x.genres.map((g) => html`<a class="pill sage" href="#/tag/${g.id}">${g.name}</a>`)}</span>`)}</div>` : ""}` : ""}` : ""}
-      ${lag.eras.some((e) => e.key !== "tracked") ? card("Older records", html`<div class="grid cols-${Math.min(3, lag.eras.length)}">
+      ${lag.eras.some((e) => e.key !== "tracked") ? card("Older records", html`<div class="grid cols-${Math.max(2, Math.min(3, lag.eras.length))}">
           ${lag.eras.map((e) => tile(e.label, Fmt.pct(e.share), `${Fmt.int(e.albums)} albums · ${Fmt.int(e.plays)} plays`))}
         </div>
         ${lag.dug_up ? html`<p class="secondary small" style="margin:var(--gap) 0 4px">Older albums by the year you first played them</p>
@@ -1475,7 +1475,9 @@
       const el = restore && view.querySelector(restore);
       if (el && document.activeElement !== el) {
         el.focus({ preventScroll: true });
-        if (el.setSelectionRange && typeof el.value === "string" && el.type !== "date") el.setSelectionRange(el.value.length, el.value.length);
+        try { // throws on number, date, … inputs, which have no text selection
+          if (el.setSelectionRange && typeof el.value === "string") el.setSelectionRange(el.value.length, el.value.length);
+        } catch { /* keep the focus, skip the caret */ }
       }
     } else if (!firstRoute) {
       // a new page: move focus to its heading so screen readers announce it

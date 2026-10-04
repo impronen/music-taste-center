@@ -11,9 +11,10 @@ from . import config
 
 def load() -> dict:
     try:
-        return json.loads(config.SETTINGS_PATH.read_text(encoding="utf-8"))
+        values = json.loads(config.SETTINGS_PATH.read_text(encoding="utf-8"))
     except (FileNotFoundError, json.JSONDecodeError):
         return {}
+    return values if isinstance(values, dict) else {}
 
 
 def save(values: dict) -> None:
@@ -82,7 +83,8 @@ MIN_BIRTH_YEAR = 1900
 def birth_year() -> int | None:
     """Optional: lets the Decades page tell records from before you were born from your own years."""
     value = load().get("birth_year")
-    return value if isinstance(value, int) and not isinstance(value, bool) else None
+    ok = isinstance(value, int) and not isinstance(value, bool) and MIN_BIRTH_YEAR <= value <= date.today().year
+    return value if ok else None  # a hand-edited file may hold anything
 
 
 def set_birth_year(year: int | None) -> int | None:

@@ -408,6 +408,21 @@ class JobTests(unittest.TestCase):
                                         headers={"origin": "https://evil.example"}).status_code, 403)
             self.assertEqual(client.put("/api/settings/birth-year", json={"year": None}).json(), {"birth_year": None})  # clears
             self.assertNotIn("birth_year", settings.load())
+        with self.client() as client:  # only an explicit null clears: an empty body or a misspelt field must not
+            client.put("/api/settings/birth-year", json={"year": 1985})
+            for body in ({}, {"birthYear": 1990}):
+                self.assertEqual(client.put("/api/settings/birth-year", json=body).status_code, 422, body)
+            self.assertEqual(settings.birth_year(), 1985)
+        for junk in (3000, -1, 0, 1899, "1985", True, 1985.5, [1985], None):  # a hand-edited settings file
+            config.SETTINGS_PATH.write_text(json.dumps({"birth_year": junk}))
+            self.assertIsNone(settings.birth_year(), junk)
+        for not_an_object in ("[1]", "null", '"x"', "7"):
+            config.SETTINGS_PATH.write_text(not_an_object)
+            self.assertEqual((settings.load(), settings.birth_year()), ({}, None))
+        config.SETTINGS_PATH.write_text(json.dumps({"birth_year": 1985}))
+        self.assertEqual(settings.birth_year(), 1985)
+        self.assertEqual(main(["--db", str(self.path), "set-birth-year", "1990", "--clear"]), 1)  # not both
+        self.assertEqual(settings.birth_year(), 1985)
         self.assertEqual(main(["--db", str(self.path), "set-birth-year", "1850"]), 1)
         self.assertEqual(main(["--db", str(self.path), "set-birth-year"]), 1)
         self.assertEqual(main(["--db", str(self.path), "set-birth-year", "1985"]), 0)

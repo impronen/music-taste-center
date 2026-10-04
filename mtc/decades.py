@@ -8,6 +8,7 @@ only plays of albums with a date count; `coverage` says how many that is.
   rhythms.py, so a quiet year can't paint a decade red or green on a handful of plays.
 - "In vogue" compares the trailing 12 months with everything before them, the same way.
 """
+import calendar
 import sqlite3
 from collections import Counter, defaultdict
 from datetime import date, timedelta
@@ -196,11 +197,23 @@ MIN_LIST_PLAYS = 5      # an album needs this many plays to be named in the list
 LIST_SIZE = 10
 ON_RELEASE_DAYS = 30    # "there on release": first played within this many days of a full release date
 # The tracked window is a couple of decades at most, so the wait gets its own, shorter scale.
-LAG_BUCKETS = [("Under 1 year", 365), ("1–3 years", 1096), ("3–10 years", 3653), ("10+ years", None)]
+# Upper bounds in days: the fewest days an exact 1, 3 or 10 year anniversary can span (leap days included),
+# so a first play on the anniversary is already in the older bucket.
+LAG_BUCKETS = [("Under 1 year", 365), ("1–3 years", 1095), ("3–10 years", 3652), ("10+ years", None)]
 
 # Eras of a release, by its date: only the last one has a wait that means anything, because the
 # first two could not have been found on release (no tracking, or not even born).
 ERA_BEFORE_BIRTH, ERA_PRE_TRACKING, ERA_TRACKED = "before_birth", "pre_tracking", "tracked"
+
+
+def _release_span(release_date: str) -> tuple[str, str]:
+    """Earliest and latest day a 'YYYY', 'YYYY-MM' or 'YYYY-MM-DD' release date can mean."""
+    if len(release_date) == 4:
+        return f"{release_date}-01-01", f"{release_date}-12-31"
+    if len(release_date) == 7:
+        last = calendar.monthrange(int(release_date[:4]), int(release_date[5:7]))[1]
+        return f"{release_date}-01", f"{release_date}-{last:02d}"
+    return release_date, release_date
 
 
 def discovery_lag(conn: sqlite3.Connection, birth_year: int | None = None) -> dict:
@@ -219,30 +232,42 @@ def _discovery_lag(conn, birth_year: int | None) -> dict:
     Older records have no meaningful wait (a 1965 album found in 2012 was not "found 47 years late":
     it could not have been found on release), so they are only counted by era, and by the year you
     first played them. That year is no discovery for an artist already in rotation when tracking
-    began (artist_stats.prehistory), so those albums are left out of it."""
-    start = conn.execute("SELECT MIN(lday) FROM scrobbles").fetchone()[0]
+    began (artist_stats.prehistory), so those albums are left out of it.
+
+    A release counts as tracked when it is dated on or after the first scrobble's day. A year-only or
+    month-only date that straddles that day ("2020" when tracking began in January 2020) can't be placed
+    and is left out (`vague`), as are release dates more than a year after the newest scrobble, which
+    are data errors, not music."""
+    start, newest = conn.execute("SELECT MIN(lday), MAX(lday) FROM scrobbles").fetchone()
+    last_year = min(MAX_YEAR, int(newest[:4]) + 1) if newest else MIN_YEAR
     rows = conn.execute(
-        f"SELECT al.id, al.title, ar.id, ar.name, st.prehistory, COUNT(*), ai.release_date,"
+        f"SELECT al.id, al.title, ar.id, ar.name, COALESCE(st.prehistory, 0), COUNT(*), ai.release_date,"
         f" MAX(0, CAST(julianday(MIN(s.lday)) - julianday({_RELEASE_DAY}) AS INTEGER)), {_RELEASE_DAY}, MIN(s.lday)"
         f" FROM scrobbles s JOIN albums al ON al.id = s.album_id JOIN artists ar ON ar.id = al.artist_id"
-        f" JOIN artist_stats st ON st.artist_id = al.artist_id JOIN album_info ai ON ai.album_id = al.id"
+        f" LEFT JOIN artist_stats st ON st.artist_id = al.artist_id JOIN album_info ai ON ai.album_id = al.id"
         f" WHERE ai.release_date IS NOT NULL AND CAST(substr(ai.release_date, 1, 4) AS INTEGER) BETWEEN ? AND ?"
-        f" AND julianday({_RELEASE_DAY}) IS NOT NULL GROUP BY al.id", (MIN_YEAR, MAX_YEAR)).fetchall()
+        f" AND julianday({_RELEASE_DAY}) IS NOT NULL GROUP BY al.id", (MIN_YEAR, last_year)).fetchall()
     labels = _era_labels(birth_year)
     out: dict = {"covered": 0, "tracking_start": start, "birth_year": birth_year, "eras": [], "dug_up": None,
-                 "prehistory_days": config.PREHISTORY_DAYS}
+                 "vague": 0, "prehistory_days": config.PREHISTORY_DAYS}
     if not rows:
         return out
 
-    def era(release_day: str) -> str:
-        if release_day >= start:
+    def era(release_date: str) -> str | None:
+        earliest, latest = _release_span(release_date)
+        if earliest >= start:
             return ERA_TRACKED
-        return ERA_BEFORE_BIRTH if birth_year and int(release_day[:4]) < birth_year else ERA_PRE_TRACKING
+        if latest >= start:
+            return None  # the date straddles the start of tracking
+        return ERA_BEFORE_BIRTH if birth_year and int(release_date[:4]) < birth_year else ERA_PRE_TRACKING
 
     albums, per_era = [], {k: [0, 0] for k in labels}  # era -> [albums, plays]
     found: defaultdict = defaultdict(Counter)           # first-play year -> era -> albums (older records)
     for r in rows:
-        e = era(r[8])
+        e = era(r[6])
+        if e is None:
+            out["vague"] += 1
+            continue
         per_era[e][0] += 1
         per_era[e][1] += r[5]
         if e == ERA_TRACKED:
@@ -251,6 +276,8 @@ def _discovery_lag(conn, birth_year: int | None) -> dict:
         elif not r[4]:
             found[int(r[9][:4])][e] += 1
     total_plays = sum(p for _, p in per_era.values())
+    if not total_plays:
+        return out
     out["eras"] = [{"key": k, "label": labels[k], "albums": n, "plays": p, "share": round(p / total_plays, 4)}
                    for k, (n, p) in per_era.items() if n and (k != ERA_BEFORE_BIRTH or birth_year)]
     if found:

@@ -106,8 +106,8 @@ def main(argv: list[str] | None = None) -> int:
             print(exc)
             return 1
     elif cmd == "set-birth-year":
-        if args.year is None and not args.clear:
-            print("give a year, or --clear")
+        if (args.year is None) == (not args.clear):
+            print("give a year, or --clear (not both)")
             return 1
         try:
             year = settings.set_birth_year(None if args.clear else args.year)

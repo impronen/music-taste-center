@@ -45,7 +45,7 @@ class DismissRequest(BaseModel):
 
 
 class BirthYearRequest(BaseModel):
-    year: int | None = Field(None, ge=1900, le=2100)  # None clears it
+    year: int | None = Field(..., ge=1900, le=2100)  # required, so only an explicit null clears it
 
 
 class UsernameRequest(BaseModel):
