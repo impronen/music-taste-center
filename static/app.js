@@ -726,8 +726,8 @@
         </div>
         ${rh.genres ? html`${card("What each decade sounds like", html`<div class="chart" id="c-dec-genre"></div>`, { cls: "canvas",
             sub: html`Your top genres inside each release decade, against their share of all your plays. Based on ${Fmt.pct(rh.genres.coverage)} of dated plays.` })}
-          <div class="chips" style="margin-top:var(--gap)">${rh.genres.signature.filter((x) => x.genres.length).map((x) => html`<span class="chip"><b>${x.label}</b>
-            ${x.genres.map((g) => html`<a class="pill sage" href="#/tag/${g.id}">${g.name}</a>`)}</span>`)}</div>` : ""}` : ""}
+          ${rh.genres.signature.some((x) => x.genres.length) ? html`<div class="chips" style="margin-top:var(--gap)">${rh.genres.signature.filter((x) => x.genres.length).map((x) => html`<span class="chip"><b>${x.label}</b>
+            ${x.genres.map((g) => html`<a class="pill sage" href="#/tag/${g.id}">${g.name}</a>`)}</span>`)}</div>` : ""}` : ""}` : ""}
       ${lag.covered ? html`${card("How long did you take to find it?", html`<div class="grid cols-3">
           ${tile("Typical wait", `${Fmt.dec(lag.median_years)} years`, "From an album's release to your first play of it")}
           ${tile("Found in its first year", Fmt.pct(lag.first_year_share), "Albums you played within a year of release")}
