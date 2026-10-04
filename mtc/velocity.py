@@ -5,7 +5,8 @@ week, weeks run Monday to Sunday over local days), the same for every artist so 
 them on one axis, either by calendar date or aligned at each artist's first play.
 
 An artist already in rotation when the history began (`artist_stats.prehistory`) has plays from before
-tracking that aren't counted, so its early pace is not a discovery pace; the series says so.
+tracking that aren't counted, so its pace in the first PREHISTORY_DAYS of the history is not a discovery
+pace; the series says so (`known_before`, `known_until`).
 """
 from datetime import date, timedelta
 
@@ -75,6 +76,9 @@ def velocity(conn, artist_ids: list[int]) -> dict:
     start = first_day - timedelta(days=first_day.weekday())     # the Monday of the first week
     end = date.fromisoformat(hi)
     weeks = (end - start).days // 7 + 1
+    # derive.py calls an artist "already in rotation" when its first play is within PREHISTORY_DAYS of the
+    # history's first scrobble, so that window (not 30 days from the artist's own first play) is what is dashed.
+    known_until = (first_day + timedelta(days=config.PREHISTORY_DAYS)).isoformat()
     ids = list(dict.fromkeys(artist_ids))[:MAX_ARTISTS]
     series = []
     for artist_id in ids:
@@ -98,7 +102,7 @@ def velocity(conn, artist_ids: list[int]) -> dict:
             "first_day": date.fromordinal(first).isoformat(), "last_day": date.fromordinal(daily[-1][0]).isoformat(),
             "first_week": (first - start.toordinal()) // 7, "cum": cum,
             "known_before": known,
-            "known_until": date.fromordinal(first + config.PREHISTORY_DAYS).isoformat() if known else None,
+            "known_until": known_until if known else None,
             "facts": {"days_to": _days_to(daily), "fastest": _fastest(daily), **_pace(daily, end.toordinal())},
         })
     return {"start": start.isoformat(), "end": end.isoformat(), "weeks": weeks, "series": series}

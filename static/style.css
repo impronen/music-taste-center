@@ -423,7 +423,7 @@ td.strong { font-weight: 700; }
 .vel-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; margin-bottom: 14px; }
 .vel-chip { gap: 8px; }
 .vdot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; flex: none; }
-.vel-chip button { border: 0; background: transparent; color: inherit; font-weight: 700; padding: 0 2px; cursor: pointer; line-height: 1; }
+.vel-chip button { border: 0; background: transparent; color: inherit; font-weight: 700; padding: 0; cursor: pointer; line-height: 1; min-width: 24px; min-height: 24px; margin: -4px -6px -4px 0; display: inline-grid; place-items: center; }
 .vel-add { margin-top: 14px; }
 .vel-add > summary { cursor: pointer; display: inline-flex; }
 .vel-add[open] > summary { margin-bottom: 12px; }

@@ -343,14 +343,25 @@
     const steps = Math.max(0, ...series.map((s) => s.values.length));
     responsive(el, (width) => {
       el.replaceChildren();
+      if (!series.length) return;
       const max = Math.max(0, ...series.flatMap((s) => s.values.filter((v) => v != null)));
       const ticks = niceTicks(max);
       const yMax = ticks[ticks.length - 1];
       const top = 10, bottom = 26;
       const left = Math.max(...ticks.map((t) => fmt(t).length)) * 7.2 + 14;
       const labelled = (opts.endLabels ?? true) && width >= 560;
-      const maxChars = labelled ? Math.min(20, Math.max(...series.map((s) => s.name.length))) : 0;
-      const right = labelled ? maxChars * 6.8 + 26 : 12;
+      // measure the labels in the real font (capitals and wide letters are wider than any per-character guess)
+      const probe = svgEl("svg", { width: 0, height: 0 }, el);
+      const widthOf = (str) => text(probe, 0, 0, str, { class: "tick vlabel" }).getComputedTextLength();
+      const clip = (str, avail) => {
+        while (str.length > 2 && widthOf(str) > avail) str = str.slice(0, -2).trimEnd() + "…";
+        return str;
+      };
+      const names = series.map((s) => (s.name.length > 20 ? s.name.slice(0, 19) + "…" : s.name));
+      const widest = labelled ? Math.max(...names.map(widthOf)) : 0;
+      const right = labelled ? Math.min(width * 0.34, widest + 26) : 12;
+      if (labelled) names.forEach((n, k) => { names[k] = clip(n, right - 26); });
+      probe.remove();
       const innerW = width - left - right, innerH = height - top - bottom;
       const x = (i) => left + (steps <= 1 ? 0 : (i / (steps - 1)) * innerW);
       const y = (v) => top + innerH - (v / yMax) * innerH;
@@ -392,7 +403,7 @@
           if (placed[k].ly > limit) placed[k].ly = limit;
         }
         placed.forEach((e) => {
-          const name = e.s.name.length > maxChars ? e.s.name.slice(0, maxChars - 1) + "…" : e.s.name;
+          const name = names[series.indexOf(e.s)];
           const dot = svgEl("circle", { cx: e.x + 8, cy: e.ly, r: 4 }, svg);
           dot.style.fill = e.s.color;
           text(svg, e.x + 16, e.ly + 4.5, name, { class: "tick vlabel" });

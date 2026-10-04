@@ -202,7 +202,7 @@ def create_app(db_path: str | Path | None = None, *, lastfm_factory: Callable | 
         return decades.discovery_lag(c, settings.birth_year())
 
     @app.get("/api/velocity")
-    def artist_velocity(ids: str = Query(..., pattern=r"^\d+(,\d+){0,5}$"), c=Conn):
+    def artist_velocity(ids: str = Query(..., pattern=r"^\d{1,18}(,\d{1,18}){0,5}$"), c=Conn):
         """Weekly cumulative plays for up to six artists (`ids=1,2,3`), with their pace facts."""
         return velocity.velocity(c, [int(i) for i in ids.split(",")])
 

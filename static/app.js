@@ -459,6 +459,8 @@
     const names = new Map([[a.id, a.name]]);
     let topList = null, token = 0, found = [];
     const say = (text) => { $("#vel-msg").textContent = text; };
+    const sentence = (text) => (/[.!?]$/.test(text) ? text : `${text}.`);
+    let refocus = false; // after a chip is removed the keyboard user would otherwise land on the page top
     const span = (days) => (days == null ? "–" : days < 60 ? `${days} d` : days < 730 ? `${Math.round(days / 30.4375)} mo` : `${Fmt.dec(days / 365.25)} y`);
     const selected = () => [a.id, ...vs];
 
@@ -480,7 +482,8 @@
       if (my !== token || !root.isConnected) return;
       data.series.forEach((s) => names.set(s.id, s.name));
       vs = vs.filter((id) => data.series.some((s) => s.id === id));
-      history.replaceState(null, "", `#/artist/${a.id}${(q => (q ? `?${q}` : ""))(qs({ vs: vs.join(","), view: mode === "relative" ? "relative" : null }).replace(/%2C/g, ","))}`);
+      if (location.hash.split("?")[0] === `#/artist/${a.id}`) // not after the reader has moved to another page
+        history.replaceState(null, "", `#/artist/${a.id}${(q => (q ? `?${q}` : ""))(qs({ vs: vs.join(","), view: mode === "relative" ? "relative" : null }).replace(/%2C/g, ","))}`);
       root.querySelectorAll("[data-vel-mode]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.velMode === mode)));
       const startMs = Date.parse(`${data.start}T12:00:00Z`);
       const weekMs = 7 * 86400000;
@@ -506,6 +509,7 @@
       });
       mount($("#vel-chips"), html`${data.series.map((s, k) => html`<span class="chip vel-chip"><i class="vdot" style="background:${colorOf(k)}"></i>${k === 0
         ? html`<b>${s.name}</b>` : html`<a href="#/artist/${s.id}">${s.name}</a><button type="button" data-vel-remove="${s.id}" aria-label="Remove ${s.name} from the comparison">×</button>`}</span>`)}`);
+      if (refocus) { refocus = false; ($("[data-vel-remove]") ?? $("#vel-add > summary")).focus(); }
       const known = data.series.some((s) => s.known_before);
       $("#vel-note").textContent = [mode === "relative" ? "Each curve starts at that artist's first play." : "",
         known ? "A dashed start means the artist was already in rotation when your history began, so its early pace is not a discovery pace." : ""].filter(Boolean).join(" ");
@@ -526,16 +530,17 @@
       const add = e.target.closest("[data-vel-add]");
       const remove = e.target.closest("[data-vel-remove]");
       const modeBtn = e.target.closest("[data-vel-mode]");
-      if (add && selected().length < MAX) {
+      if (add && selected().length < MAX && !selected().includes(Number(add.dataset.velAdd))) {
         const id = Number(add.dataset.velAdd);
         names.set(id, add.dataset.name);
         vs.push(id);
-        say(`Added ${add.dataset.name}${selected().length >= MAX ? `. That is the most you can compare (${MAX}).` : "."}`);
+        say(`${sentence(`Added ${add.dataset.name}`)}${selected().length >= MAX ? ` That is the most you can compare (${MAX}).` : ""}`);
         render();
       } else if (remove) {
         const id = Number(remove.dataset.velRemove);
         vs = vs.filter((x) => x !== id);
-        say(`Removed ${names.get(id) ?? "the artist"}.`);
+        say(sentence(`Removed ${names.get(id) ?? "the artist"}`));
+        refocus = true;
         render();
       } else if (modeBtn && modeBtn.dataset.velMode !== mode) {
         mode = modeBtn.dataset.velMode;

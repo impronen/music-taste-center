@@ -32,7 +32,7 @@ The **Velocity** card on every artist page shows the artist's *cumulative* plays
 
 - **Two views.** *Calendar* puts every curve on the real date axis. *Since first play* starts each curve at zero on that artist's first play, so artists you found years apart become comparable.
 - **Weekly curve.** The curve is the cumulative play count at the end of each week (Monday to Sunday, in your time zone), the same weeks for every artist.
-- **Already in rotation.** An artist first played in the first 30 days of your history was probably known before tracking began, and plays from before then aren't counted. Its first stretch is drawn dashed, and the artist is marked "known before", because that early pace isn't a discovery pace.
+- **Already in rotation.** An artist first played in the first 30 days of your history was probably known before tracking began, and plays from before then aren't counted. The first 30 days of your history are drawn dashed for such an artist, and it is marked "known before", because its pace in that stretch isn't a discovery pace.
 - **Pace facts** under the chart: the time from the first play to the 100th, 500th and 1 000th play (a dash when it hasn't got there), the **fastest 30 days** (the most plays in any 30 consecutive days, and when that stretch began), and plays per month over the **last year** against **overall** (since the first play). "Now" means your newest scrobble. The last-year figure needs an artist older than a year, and the overall one at least 30 days, so a short burst isn't mistaken for a pace.
 - **Data.** `GET /api/velocity?ids=1,2,3` (up to six ids). Unknown ids are ignored. The per-artist day counts are cached until the next import or merge.
 

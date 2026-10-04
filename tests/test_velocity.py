@@ -15,7 +15,7 @@ DAY0 = date(2020, 1, 1)
 
 
 def ts(day: date, k: int = 0) -> int:
-    """Noon UTC plus k * 5 minutes: the same local day in every time zone for k < 24."""
+    """Noon UTC plus k * 5 minutes: the same local day for every zone from UTC-11 to UTC+11 (and k < 24)."""
     return int(datetime(day.year, day.month, day.day, 12, tzinfo=timezone.utc).timestamp()) + k * 300
 
 
@@ -58,7 +58,7 @@ class VelocityTests(Base):
         self.assertEqual(len(s["cum"]), v["weeks"])
         self.assertEqual((s["plays"], s["cum"][-1]), (300, 300))
         self.assertEqual(s["cum"], sorted(s["cum"]))                           # never decreases
-        self.assertEqual(s["cum"][s["first_week"] - 1] if s["first_week"] else 0, 0)
+        self.assertEqual((s["first_week"], s["cum"][0] > 0), (0, True))        # Steady plays in the very first week
 
     def test_the_series_share_one_time_axis_and_each_knows_its_first_week(self):
         v = self.get("Steady", "Late Bloomer")
@@ -98,12 +98,40 @@ class VelocityTests(Base):
         self.assertFalse(late["known_before"])
         self.assertIsNone(late["known_until"])
 
+    def test_the_known_before_window_is_measured_from_the_start_of_the_history(self):
+        # derive.py: prehistory = first play within PREHISTORY_DAYS of the library's FIRST scrobble
+        with tempfile.TemporaryDirectory() as tmp:
+            conn = db.connect(Path(tmp) / "k.db")
+            try:
+                rows = [("First", "F", "f0", ts(DAY0)), ("Day20", "A", "a0", ts(DAY0 + timedelta(days=20))),
+                        ("Day45", "B", "b0", ts(DAY0 + timedelta(days=45)))]
+                ingest.import_csv_text(conn, synthetic.to_csv(rows, now_playing=False), label="t", encoding="utf-8")
+                ids = {n: i for i, n in conn.execute("SELECT id, name FROM artists")}
+                v = {s["name"]: s for s in velocity.velocity(conn, list(ids.values()))["series"]}
+                self.assertTrue(v["First"]["known_before"] and v["Day20"]["known_before"])
+                self.assertFalse(v["Day45"]["known_before"])
+                first_day = date.fromisoformat(v["First"]["first_day"])
+                for name in ("First", "Day20"):  # the same window end for both: 30 days after the library's first day
+                    self.assertEqual(date.fromisoformat(v[name]["known_until"]), first_day + timedelta(days=30), name)
+                self.assertIsNone(v["Day45"]["known_until"])
+            finally:
+                conn.close()
+
     def test_unknown_ids_duplicates_and_the_limit(self):
         steady = self.id["Steady"]
         v = velocity.velocity(self.conn, [steady, steady, 99999, self.id["Early"]])
         self.assertEqual([s["name"] for s in v["series"]], ["Steady", "Early"])
-        many = velocity.velocity(self.conn, [steady] + list(range(1000, 1010)))
-        self.assertEqual(len(many["series"]), 1)
+        ids = [self.id["Steady"], self.id["Late Bloomer"], self.id["Early"]]
+        with self.conn:  # eight real artists: the cap keeps the first six, in order
+            for k in range(5):
+                self.conn.execute("INSERT INTO artists(name, name_key) VALUES (?, ?)", (f"Extra {k}", f"extra {k}"))
+                extra = self.conn.execute("SELECT MAX(id) FROM artists").fetchone()[0]
+                self.conn.execute("INSERT INTO tracks(artist_id, title, title_key) VALUES (?, 't', 't')", (extra,))
+                self.conn.execute("INSERT INTO scrobbles(ts, artist_id, track_id, lday, lhour, lwday) VALUES (?, ?, last_insert_rowid(), '2020-03-01', 12, 6)",
+                                  (ts(DAY0 + timedelta(days=60)) + k, extra))
+                ids.append(extra)
+        many = velocity.velocity(self.conn, ids)
+        self.assertEqual([s["id"] for s in many["series"]], ids[:velocity.MAX_ARTISTS])
         self.assertEqual(velocity.velocity(self.conn, [])["series"], [])
 
     def test_an_empty_library(self):
@@ -141,6 +169,11 @@ class CacheAndApiTests(unittest.TestCase):
                 self.assertEqual(ok.status_code, 200)
                 self.assertEqual({s["name"] for s in ok.json()["series"]}, {"Steady", "Late Bloomer", "Early"})
                 self.assertEqual(c.get("/api/velocity", params={"ids": "999999"}).json()["series"], [])
+                for bad in ("", "abc", "1,", "1,,2", "-1", "1;2", ",".join(["1"] * 7),
+                            "9" * 19, "1," + "9" * 30, "9" * 5000):  # ids too big for SQLite are refused, never a 500
+                    self.assertEqual(c.get("/api/velocity", params={"ids": bad}).status_code, 422, bad[:30])
+                for odd in ("007", "0", "9" * 18):
+                    self.assertEqual(c.get("/api/velocity", params={"ids": odd}).status_code, 200, odd)
                 for bad in ("", "abc", "1,", "1,,2", "-1", "1;2", ",".join(["1"] * 7)):
                     self.assertEqual(c.get("/api/velocity", params={"ids": bad}).status_code, 422, bad)
                 self.assertEqual(c.get("/api/velocity").status_code, 422)
