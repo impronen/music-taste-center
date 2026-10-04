@@ -222,6 +222,12 @@ class DiscoveryLagTests(unittest.TestCase):
         a = self.lag([("B", "2022-06-01", "Newcomer")], {"B": "2022-05-20"})
         self.assertEqual((a["covered"], a["excluded"]), (1, 1))
 
+    def test_an_album_released_after_tracking_began_counts_even_for_a_veteran_artist(self):
+        rows = [("Fresh", "2021-03-05", "Veteran"), ("Backlist", "2021-03-05", "Veteran")]
+        a = self.lag(rows, {"Fresh": "2021-03-01", "Backlist": "2005-01-01"})  # tracking began 2020-01-05
+        self.assertEqual((a["covered"], a["excluded"]), (1, 2))  # Anchor and Backlist are left out
+        self.assertEqual(a["buckets"][0]["albums"], 1)
+
     def test_lag_is_whole_days_from_release_to_the_first_play(self):
         a = self.lag([("B", "2022-06-10", "Newcomer"), ("B", "2022-06-01", "Newcomer")] * 3, {"B": "2022-05-20"})
         self.assertEqual(len(a["on_release"]), 1)

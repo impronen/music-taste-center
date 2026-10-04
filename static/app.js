@@ -722,7 +722,7 @@
           ${tile("Typical wait", `${Fmt.dec(lag.median_years)} years`, "From an album's release to your first play of it")}
           ${tile("Found in its first year", Fmt.pct(lag.first_year_share), "Albums you played within a year of release")}
           ${tile("Found 20+ years late", Fmt.int(lag.late_count), "Albums you only met two decades after release")}
-        </div>`, { cls: "accent-soft", sub: html`Based on ${Fmt.int(lag.covered)} albums${lag.excluded ? html`; ${Fmt.int(lag.excluded)} more were already in your rotation when tracking began, so their first play says nothing` : ""}` })}
+        </div>`, { cls: "accent-soft", sub: html`Based on ${Fmt.int(lag.covered)} albums${lag.excluded ? html`; ${Fmt.int(lag.excluded)} dated albums were left out: released before tracking began by artists you already played, so their first play says nothing` : ""}` })}
         <div class="grid cols-3">
           ${card("Wait before the first play", html`<div class="chart" id="c-lag"></div>`, { sub: "Albums by time from release to first play" })}
           ${card("Found late", rankList(lag.late, { href: albumHref, sub: (a) => `${a.artist} · ${a.release_date.slice(0, 4)}`, nobar: true,
@@ -734,7 +734,7 @@
         <div class="prose" style="margin-top:12px;display:grid;gap:10px;max-width:760px">
           <p>Release dates come from MusicBrainz (the original release, not a reissue), or from a year tag on last.fm when MusicBrainz has nothing. Only albums with at least three plays are looked up, and plays without an album can't be dated, so the percentage above tells how much of your listening this page sees.</p>
           <p>Album age is the play date minus the release date. A date with only a year counts as 1 July${age.covered ? html` (${Fmt.pct(age.approximate_share)} of dated plays)` : ""}, and a play dated before its release counts as age 0, so the age figures are a little rough for albums released in the last year.</p>
-          ${lag.covered ? html`<p>The wait is the time from an album's release date to the first day you played it. Artists first heard in the first ${lag.prehistory_days} days of tracking are left out, because they were probably in your life before it began. “There on release” only uses full release dates, since a bare year is too vague to call a week.</p>` : ""}
+          ${lag.covered ? html`<p>The wait is the time from an album's release date to the first day you played it. Albums released before tracking began by artists first heard in its first ${lag.prehistory_days} days are left out, because you probably knew them before it began; newer albums by those artists still count. “There on release” only uses full release dates, since a bare year is too vague to call a week.</p>` : ""}
           <p>1,5× means half as much again as usual. Small samples are pulled towards “as usual”, and blank cells had too few plays to say. “In vogue” compares the past 12 months with all the listening before them.</p>
         </div></details>`);
     view.querySelector("#how-link")?.addEventListener("click", (e) => { e.preventDefault(); const el = document.getElementById("how"); el.open = true; scrollToId("how"); });

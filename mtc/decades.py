@@ -201,18 +201,20 @@ def discovery_lag(conn: sqlite3.Connection) -> dict:
 
 
 def _discovery_lag(conn) -> dict:
-    """How long after an album's release you first played it. Artists already in rotation when
-    tracking began are left out: their first scrobble says nothing about when you found them."""
+    """How long after an album's release you first played it. An album released before tracking began
+    by an artist already in rotation then is left out: its first scrobble says nothing about when you
+    found it. An album released after tracking began is measurable whoever the artist is."""
+    start = conn.execute("SELECT MIN(lday) FROM scrobbles").fetchone()[0]
     rows = conn.execute(
         f"SELECT al.id, al.title, ar.id, ar.name, st.prehistory, COUNT(*), ai.release_date,"
-        f" MAX(0, CAST(julianday(MIN(s.lday)) - julianday({_RELEASE_DAY}) AS INTEGER))"
+        f" MAX(0, CAST(julianday(MIN(s.lday)) - julianday({_RELEASE_DAY}) AS INTEGER)), {_RELEASE_DAY}"
         f" FROM scrobbles s JOIN albums al ON al.id = s.album_id JOIN artists ar ON ar.id = al.artist_id"
         f" JOIN artist_stats st ON st.artist_id = al.artist_id JOIN album_info ai ON ai.album_id = al.id"
         f" WHERE ai.release_date IS NOT NULL AND CAST(substr(ai.release_date, 1, 4) AS INTEGER) BETWEEN ? AND ?"
         f" AND julianday({_RELEASE_DAY}) IS NOT NULL GROUP BY al.id", (MIN_YEAR, MAX_YEAR)).fetchall()
     albums = [{"id": r[0], "name": r[1], "artist_id": r[2], "artist": r[3], "plays": r[5], "release_date": r[6],
-               "lag_days": r[7], "lag_years": round(r[7] / DAYS_PER_YEAR, 2)} for r in rows if not r[4]]
-    excluded = sum(1 for r in rows if r[4])
+               "lag_days": r[7], "lag_years": round(r[7] / DAYS_PER_YEAR, 2)} for r in rows if not r[4] or r[8] > start]
+    excluded = len(rows) - len(albums)
     if not albums:
         return {"covered": 0, "excluded": excluded, "prehistory_days": config.PREHISTORY_DAYS}
 
