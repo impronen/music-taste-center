@@ -1,16 +1,17 @@
-"""The startup scrobble updater: what it asks last.fm for, the 3-a-day gate, and failing safely.
+"""The startup scrobble updater: what it asks last.fm for, the daily cap and cooldown gate, and failing safely.
 All HTTP goes through a fake user.getRecentTracks; nothing touches the network."""
 import json
 import tempfile
 import threading
 import unittest
 import urllib.parse
+from datetime import datetime
 from pathlib import Path
 from unittest import mock
 
 from fastapi.testclient import TestClient
 
-from mtc import db, derive, ingest, settings, updater
+from mtc import config, db, derive, ingest, settings, updater
 from mtc.__main__ import main
 from mtc.api import create_app
 from mtc.ingest import Scrobble
@@ -18,6 +19,8 @@ from mtc.lastfm import LastFm
 
 T0 = 1_700_000_000 - 1_700_000_000 % 60
 DAY = 86400
+HOUR = 3600
+MIDNIGHT = int(datetime(2026, 3, 10, tzinfo=config.TZ).timestamp())  # a local midnight, away from DST changes
 
 
 def track(ts, artist, title, album="", mbid=""):
@@ -110,7 +113,7 @@ class FetchTests(Base):
         self.assertEqual(r["state"], "failed")
         self.assertIn("gave up", r["error"])
         self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM scrobbles").fetchone()[0], 1)  # not the newest 200 alone
-        again = updater.run_once(self.conn, client(upstream), "me", now=T0 + DAY + 60)
+        again = updater.run_once(self.conn, client(upstream), "me", now=T0 + DAY + updater.COOLDOWN_S)
         self.assertEqual((again["state"], again["added"]), ("done", 300))
         self.assertEqual(again["since"], r["since"])
 
@@ -142,7 +145,7 @@ class RobustnessTests(Base):
         stop = threading.Event()
         stop.set()
         self.assertEqual(updater.run_once(self.conn, client([]), "me", now=T0 + DAY, stop=stop)["state"], "stopped")
-        self.assertEqual(updater.status(self.conn, T0 + DAY)["runs_in_window"], 0)
+        self.assertEqual(updater.status(self.conn, T0 + DAY)["runs_today"], 0)
 
     def test_the_cli_and_the_server_cannot_both_slip_under_the_limit(self):
         self.seed(1)
@@ -159,8 +162,8 @@ class RobustnessTests(Base):
             th.start()
         for th in threads:
             th.join()
-        self.assertEqual((states.count("done"), states.count("skipped")), (3, 5))
-        self.assertEqual(updater.status(self.conn, T0 + DAY)["runs_in_window"], 3)
+        self.assertEqual((states.count("done"), states.count("skipped")), (1, 7))  # the cooldown lets one through
+        self.assertEqual(updater.status(self.conn, T0 + DAY)["runs_today"], 1)
 
     def test_serve_without_a_subcommand_starts(self):
         with mock.patch("uvicorn.run") as run:
@@ -169,25 +172,52 @@ class RobustnessTests(Base):
 
 
 class GateTests(Base):
-    def test_three_runs_in_24_hours_then_wait_for_the_oldest_to_age_out(self):
+    def run_at(self, now, **kw):
+        return updater.run_once(self.conn, client([]), "me", now=now, **kw)
+
+    def test_a_run_too_soon_after_the_last_waits_for_the_cooldown(self):
         self.seed(1)
-        lf = client([])
-        for i in range(3):
-            self.assertEqual(updater.run_once(self.conn, lf, "me", now=T0 + i * 3600)["state"], "done")
-        skipped = updater.run_once(self.conn, lf, "me", now=T0 + 3 * 3600)
-        self.assertEqual(skipped, {"state": "skipped", "reason": "limit", "next_at": T0 + DAY})
-        self.assertFalse(updater.status(self.conn, T0 + DAY - 1)["due"])
-        self.assertTrue(updater.status(self.conn, T0 + DAY + 1)["due"])  # the first run left the window
-        self.assertEqual(updater.run_once(self.conn, lf, "me", now=T0 + DAY + 1)["state"], "done")
-        # --force ignores the limit
-        self.assertEqual(updater.run_once(self.conn, lf, "me", now=T0 + DAY + 2, force=True)["state"], "done")
+        self.assertEqual(self.run_at(MIDNIGHT + 9 * HOUR)["state"], "done")
+        soon = self.run_at(MIDNIGHT + 9 * HOUR + 60)
+        self.assertEqual(soon, {"state": "skipped", "reason": "cooldown", "next_at": MIDNIGHT + 9 * HOUR + updater.COOLDOWN_S})
+        self.assertFalse(updater.status(self.conn, MIDNIGHT + 13 * HOUR - 1)["due"])
+        self.assertEqual(self.run_at(MIDNIGHT + 13 * HOUR)["state"], "done")
+
+    def test_three_runs_a_calendar_day_then_the_next_day_starts_fresh(self):
+        self.seed(1)
+        for h in (8, 12, 16):
+            self.assertEqual(self.run_at(MIDNIGHT + h * HOUR)["state"], "done")
+        skipped = self.run_at(MIDNIGHT + 20 * HOUR)  # cooldown is over, the day's runs are not
+        self.assertEqual(skipped, {"state": "skipped", "reason": "limit", "next_at": MIDNIGHT + DAY})
+        self.assertEqual(updater.status(self.conn, MIDNIGHT + 20 * HOUR)["runs_today"], 3)
+        self.assertEqual(self.run_at(MIDNIGHT + DAY + 60)["state"], "done")  # 16:00 was 8 h before, so no cooldown either
+
+    def test_the_cooldown_holds_across_midnight(self):
+        self.seed(1)
+        self.assertEqual(self.run_at(MIDNIGHT + 23 * HOUR)["state"], "done")
+        s = updater.status(self.conn, MIDNIGHT + DAY + 60)
+        self.assertEqual((s["due"], s["runs_today"], s["reason"], s["next_at"]), (False, 0, "cooldown", MIDNIGHT + 27 * HOUR))
+        self.assertEqual(self.run_at(MIDNIGHT + 27 * HOUR)["state"], "done")
+
+    def test_yesterdays_runs_do_not_count_today_however_close(self):
+        self.seed(1)
+        for h in (14, 18, 22):
+            self.assertEqual(self.run_at(MIDNIGHT + h * HOUR)["state"], "done")
+        # the day's cap is spent, but at 02:00 (4 h after the last run) a new day has begun
+        self.assertTrue(updater.status(self.conn, MIDNIGHT + 26 * HOUR)["due"])
+        self.assertEqual(updater.status(self.conn, MIDNIGHT + 26 * HOUR)["runs_today"], 0)
+
+    def test_force_ignores_the_cooldown_and_the_limit(self):
+        self.seed(1)
+        for h in (8, 12, 16):
+            self.run_at(MIDNIGHT + h * HOUR)
+        self.assertEqual(self.run_at(MIDNIGHT + 16 * HOUR + 1, force=True)["state"], "done")
 
     def test_failed_runs_count_too(self):
         self.seed(1)
-        for i in range(3):
-            updater.run_once(self.conn, client([(T0 + 9999, "X", "y")], fail_page=1), "me", now=T0 + i)
-        self.assertEqual(updater.run_once(self.conn, client([]), "me", now=T0 + 10)["state"], "skipped")
-        self.assertEqual(updater.status(self.conn, T0 + 10)["last"]["state"], "failed")
+        updater.run_once(self.conn, client([(T0 + 9999, "X", "y")], fail_page=1), "me", now=MIDNIGHT + HOUR)
+        self.assertEqual(self.run_at(MIDNIGHT + 2 * HOUR)["state"], "skipped")
+        self.assertEqual(updater.status(self.conn, MIDNIGHT + 2 * HOUR)["last"]["state"], "failed")
 
 
 class StartupTests(Base):
@@ -203,23 +233,22 @@ class StartupTests(Base):
     def factory(self):
         return lambda: client(self.upstream, queries=self.calls)
 
-    def test_runs_once_at_startup_then_the_gate_holds_for_a_restart_spree(self):
+    def test_runs_once_at_startup_then_a_restart_spree_is_held_by_the_cooldown(self):
         with TestClient(create_app(self.path, lastfm_factory=self.factory(), auto_update=True)) as c:
             c.app.state.updater.wait(10)
             s = c.get("/api/updater").json()
-        self.assertEqual((s["last"]["state"], s["last"]["added"], s["runs_in_window"]), ("done", 4, 1))
-        for _ in range(2):
+        self.assertEqual((s["last"]["state"], s["last"]["added"], s["runs_today"]), ("done", 4, 1))
+        for _ in range(3):
             with TestClient(create_app(self.path, lastfm_factory=self.factory(), auto_update=True)) as c:
                 c.app.state.updater.wait(10)
-        with TestClient(create_app(self.path, lastfm_factory=self.factory(), auto_update=True)) as c:
-            c.app.state.updater.wait(10)
-            s = c.get("/api/updater").json()
-        self.assertEqual((s["due"], s["runs_in_window"], s["skipped"]), (False, 3, "3 runs in the last 24 hours"))
-        self.assertEqual(len(self.calls), 3)  # one page per run, and no fourth request
+                s = c.get("/api/updater").json()
+        self.assertEqual((s["due"], s["reason"], s["runs_today"]), (False, "cooldown", 1))
+        self.assertIn("cooldown", s["skipped"])
+        self.assertEqual(len(self.calls), 1)  # one page for the one run, and no further request
 
     def test_off_by_default_so_tests_and_tools_never_reach_the_network(self):
         with TestClient(create_app(self.path, lastfm_factory=self.factory())) as c:
-            self.assertEqual(c.get("/api/updater").json()["runs_in_window"], 0)
+            self.assertEqual(c.get("/api/updater").json()["runs_today"], 0)
         self.assertEqual(self.calls, [])
 
     def test_a_broken_settings_file_does_not_stop_the_server_starting(self):
@@ -232,7 +261,7 @@ class StartupTests(Base):
             with TestClient(create_app(self.path, lastfm_factory=self.factory(), auto_update=True)) as c:
                 s = c.get("/api/updater").json()
         self.assertIn("username", s["skipped"])
-        self.assertEqual((s["runs_in_window"], self.calls), (0, []))
+        self.assertEqual((s["runs_today"], self.calls), (0, []))
 
 
 if __name__ == "__main__":
