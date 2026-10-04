@@ -1,4 +1,4 @@
-"""CLI: python -m mtc [serve|import|rebuild|enrich|update|set-key|set-user|merge-artist|duplicates|stats]."""
+"""CLI: python -m mtc [serve|import|rebuild|enrich|update|set-key|set-user|set-birth-year|merge-artist|duplicates|stats]."""
 import argparse
 import json
 import os
@@ -38,6 +38,9 @@ def main(argv: list[str] | None = None) -> int:
     k.add_argument("api_key")
     u = sub.add_parser("set-user", help="store your last.fm username in data/settings.json")
     u.add_argument("username")
+    b = sub.add_parser("set-birth-year", help="store your birth year (optional; Decades page: records from before you were born)")
+    b.add_argument("year", nargs="?", type=int)
+    b.add_argument("--clear", action="store_true", help="remove it")
     m = sub.add_parser("merge-artist", help="merge SOURCE into TARGET and keep a name rule for future imports")
     m.add_argument("source")
     m.add_argument("target")
@@ -102,6 +105,16 @@ def main(argv: list[str] | None = None) -> int:
         except ValueError as exc:
             print(exc)
             return 1
+    elif cmd == "set-birth-year":
+        if (args.year is None) == (not args.clear):
+            print("give a year, or --clear (not both)")
+            return 1
+        try:
+            year = settings.set_birth_year(None if args.clear else args.year)
+        except ValueError as exc:
+            print(exc)
+            return 1
+        print(f"{'Cleared' if year is None else f'Saved {year}'} in {config.SETTINGS_PATH}")
     elif cmd == "merge-artist":
         ids = []
         for name in (args.source, args.target):

@@ -730,13 +730,23 @@
             sub: html`Your top genres inside each release decade, against their share of all your plays. Based on ${Fmt.pct(rh.genres.coverage)} of dated plays.` })}
           ${rh.genres.signature.some((x) => x.genres.length) ? html`<div class="chips" style="margin-top:var(--gap)">${rh.genres.signature.filter((x) => x.genres.length).map((x) => html`<span class="chip"><b>${x.label}</b>
             ${x.genres.map((g) => html`<a class="pill sage" href="#/tag/${g.id}">${g.name}</a>`)}</span>`)}</div>` : ""}` : ""}` : ""}
+      ${lag.eras.some((e) => e.key !== "tracked") ? card("Older records", html`<div class="grid cols-${Math.max(2, Math.min(3, lag.eras.length))}">
+          ${lag.eras.map((e) => tile(e.label, Fmt.pct(e.share), `${Fmt.int(e.albums)} albums · ${Fmt.int(e.plays)} plays`))}
+        </div>
+        ${lag.dug_up ? html`<p class="secondary small" style="margin:var(--gap) 0 4px">Older albums by the year you first played them</p>
+          <div class="chart" id="c-dug"></div>` : ""}`, { cls: "sage-soft",
+        sub: html`A wait only means something for albums you could have found on release, so records from before tracking began (${lag.tracking_start.slice(0, 4)}) are shown by share of your plays and by when you dug them up.`,
+        foot: html`<form id="birth-form" autocomplete="off"><div class="input-row"><label class="field" for="birth">Born in</label>
+          <input id="birth" style="flex:0 0 7em" type="number" inputmode="numeric" min="1900" max="${new Date().getFullYear()}" step="1" value="${lag.birth_year ?? ""}" placeholder="year">
+          <button class="btn secondary small" type="submit">Save</button></div>
+          <p class="secondary small" id="birth-msg" role="status">${lag.birth_year ? "" : "Optional: tells records from before you were born from your own years. Stays in data/settings.json."}</p></form>` }) : ""}
       ${lag.covered ? html`${card("How long did you take to find it?", html`<div class="grid cols-3">
           ${tile("Typical wait", `${Fmt.dec(lag.median_years)} years`, "From an album's release to your first play of it")}
           ${tile("Found in its first year", Fmt.pct(lag.first_year_share), "Albums you played within a year of release")}
-          ${tile("Found 20+ years late", Fmt.int(lag.late_count), "Albums you only met two decades after release")}
+          ${tile(`Found ${lag.late_label} late`, Fmt.int(lag.late_count), "Albums you only met a decade or more after release")}
         </div>
         <p class="secondary small" style="margin:var(--gap) 0 4px">Albums by time from release to first play</p>
-        <div class="chart" id="c-lag"></div>`, { cls: "accent-soft", sub: html`Based on ${Fmt.int(lag.covered)} albums${lag.excluded ? html`; ${Fmt.int(lag.excluded)} dated albums were left out: released before tracking began by artists you already played, so their first play says nothing` : ""}` })}
+        <div class="chart" id="c-lag"></div>`, { cls: "accent-soft", sub: `Based on ${Fmt.int(lag.covered)} albums released since tracking began in ${lag.tracking_start.slice(0, 4)}` })}
         <div class="grid cols-2">
           ${card("Found late", rankList(lag.late, { href: albumHref, sub: (a) => `${a.artist} · ${a.release_date.slice(0, 4)}`, nobar: true,
             value: (a) => a.lag_days, valueText: (a) => `${Fmt.dec(a.lag_years)} yrs`, compact: true }), { sub: `Longest waits, albums with ${lag.min_list_plays}+ plays` })}
@@ -748,7 +758,7 @@
           <p>Release dates come from MusicBrainz (the original release, not a reissue), or from a year tag on last.fm when MusicBrainz has nothing. Only albums with at least three plays are looked up, and plays without an album can't be dated, so the percentage above tells how much of your listening this page sees.</p>
           <p>Album age is the play date minus the release date. A date with only a year counts as 1 July${age.covered ? html` (${Fmt.pct(age.approximate_share)} of dated plays)` : ""}, and a play dated before its release counts as age 0, so the age figures are a little rough for albums released in the last year.</p>
           ${rh.covered ? html`<p>The decade heatmaps use the same method as Rhythms: each season or part of the day is compared with that same year's mix of decades, so a decade you simply listen to more over the years doesn't look seasonal. The genre map compares a decade's genre mix with your overall mix; an artist's plays are split across its top genre tags.</p>` : ""}
-          ${lag.covered ? html`<p>The wait is the time from an album's release date to the first day you played it. Albums released before tracking began by artists first heard in its first ${lag.prehistory_days} days are left out, because you probably knew them before it began; newer albums by those artists still count. “There on release” only uses full release dates, since a bare year is too vague to call a week.</p>` : ""}
+          ${lag.eras.length ? html`<p>The wait is the time from an album's release date to the first day you played it, and only albums released since tracking began count: a record from before then could not have been found on release, so “found 50 years late” would say nothing. Older records are shown by share of plays and by the year you first played them; albums by artists already in your rotation in the first ${lag.prehistory_days} days of tracking are left out of that chart, because their first scrobble is no discovery. “There on release” only uses full release dates, since a bare year is too vague to call a week.</p>` : ""}
           <p>1,5× means half as much again as usual. Small samples are pulled towards “as usual”, and blank cells had too few plays to say. “In vogue” compares the past 12 months with all the listening before them.</p>
         </div></details>`);
     view.querySelector("#how-link")?.addEventListener("click", (e) => { e.preventDefault(); const el = document.getElementById("how"); el.open = true; scrollToId("how"); });
@@ -770,6 +780,25 @@
       if (!isFlat(rh.weekparts)) Charts.matrix(document.getElementById("c-dec-week"), rh.weekparts, { label: "Release decades on weekdays and weekends" });
       if (rh.genres) Charts.matrix(document.getElementById("c-dec-genre"), rh.genres, { label: "Genres within each release decade" });
     }
+    if (lag.dug_up) {
+      Charts.columns(document.getElementById("c-dug"), lag.dug_up.years, {
+        value: (y) => y.albums, height: 180, label: "Older albums by the year you first played them", xLabel: (y) => `'${String(y.year).slice(2)}`,
+        tip: (y) => ({ title: String(y.year), rows: [{ value: Fmt.int(y.albums), label: "older albums first played" }, ...y.by_era.filter((e) => e.albums).map((e) => ({ value: Fmt.int(e.albums), label: e.label }))] }),
+      });
+    }
+    view.querySelector("#birth-form")?.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const msg = view.querySelector("#birth-msg");
+      const v = view.querySelector("#birth").value.trim();
+      try {
+        await postJson("/api/settings/birth-year", { year: v ? Number(v) : null }, "PUT", "That isn't a plausible birth year");
+        cache.delete("/api/settings");
+        cache.delete("/api/decades/lag");
+        route();
+      } catch (err) {
+        msg.textContent = err.message;
+      }
+    });
     if (lag.covered) {
       Charts.columns(document.getElementById("c-lag"), lag.buckets, {
         value: (b) => b.albums, height: 200, label: "Albums by wait before the first play", xLabel: (b) => b.name,
@@ -1446,7 +1475,9 @@
       const el = restore && view.querySelector(restore);
       if (el && document.activeElement !== el) {
         el.focus({ preventScroll: true });
-        if (el.setSelectionRange && typeof el.value === "string" && el.type !== "date") el.setSelectionRange(el.value.length, el.value.length);
+        try { // throws on number, date, … inputs, which have no text selection
+          if (el.setSelectionRange && typeof el.value === "string") el.setSelectionRange(el.value.length, el.value.length);
+        } catch { /* keep the focus, skip the caret */ }
       }
     } else if (!firstRoute) {
       // a new page: move focus to its heading so screen readers announce it

@@ -44,6 +44,10 @@ class DismissRequest(BaseModel):
     key: str = Field(..., min_length=1, max_length=20000)
 
 
+class BirthYearRequest(BaseModel):
+    year: int | None = Field(..., ge=1900, le=2100)  # required, so only an explicit null clears it
+
+
 class UsernameRequest(BaseModel):
     username: str = Field(..., pattern=r"^\s*[A-Za-z][A-Za-z0-9_-]{1,14}\s*$")
 
@@ -195,7 +199,7 @@ def create_app(db_path: str | Path | None = None, *, lastfm_factory: Callable | 
 
     @app.get("/api/decades/lag")
     def discovery_lag(c=Conn):
-        return decades.discovery_lag(c)
+        return decades.discovery_lag(c, settings.birth_year())
 
     @app.get("/api/decades/rhythms")
     def decade_rhythms(c=Conn):
@@ -264,11 +268,18 @@ def create_app(db_path: str | Path | None = None, *, lastfm_factory: Callable | 
     def get_settings():
         """Non-secret settings for the UI. The API key itself is never sent back."""
         return {"lastfm_username": settings.lastfm_username(), "has_key": bool(settings.lastfm_api_key()),
-                "key_works": settings.key_works()}
+                "key_works": settings.key_works(), "birth_year": settings.birth_year()}
 
     @app.put("/api/settings/username")
     def save_username(req: UsernameRequest):
         return {"lastfm_username": settings.set_lastfm_username(req.username)}
+
+    @app.put("/api/settings/birth-year")
+    def save_birth_year(req: BirthYearRequest):
+        try:
+            return {"birth_year": settings.set_birth_year(req.year)}
+        except ValueError as exc:  # a year in the future
+            raise HTTPException(422, str(exc)) from exc
 
     @app.get("/api/maintenance/duplicates")
     def duplicates(c=Conn):

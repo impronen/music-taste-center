@@ -1,18 +1,20 @@
-"""Local, gitignored settings (data/settings.json): the last.fm API key and username."""
+"""Local, gitignored settings (data/settings.json): the last.fm API key and username, and an optional birth year."""
 import hashlib
 import json
 import os
 import re
 import threading
+from datetime import date
 
 from . import config
 
 
 def load() -> dict:
     try:
-        return json.loads(config.SETTINGS_PATH.read_text(encoding="utf-8"))
+        values = json.loads(config.SETTINGS_PATH.read_text(encoding="utf-8"))
     except (FileNotFoundError, json.JSONDecodeError):
         return {}
+    return values if isinstance(values, dict) else {}
 
 
 def save(values: dict) -> None:
@@ -73,3 +75,21 @@ def set_lastfm_username(name: str) -> str:
         raise ValueError(f"not a valid last.fm username: {name!r}")
     update(lastfm_username=name)
     return name
+
+
+MIN_BIRTH_YEAR = 1900
+
+
+def birth_year() -> int | None:
+    """Optional: lets the Decades page tell records from before you were born from your own years."""
+    value = load().get("birth_year")
+    ok = isinstance(value, int) and not isinstance(value, bool) and MIN_BIRTH_YEAR <= value <= date.today().year
+    return value if ok else None  # a hand-edited file may hold anything
+
+
+def set_birth_year(year: int | None) -> int | None:
+    """None clears it."""
+    if year is not None and not (isinstance(year, int) and MIN_BIRTH_YEAR <= year <= date.today().year):
+        raise ValueError(f"not a plausible birth year: {year!r}")
+    update(birth_year=year)
+    return year

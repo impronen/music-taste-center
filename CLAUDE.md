@@ -16,7 +16,7 @@ Local FastAPI + SQLite app (Python 3.14, vanilla JS in `static/`). See README fo
 - Schema changes only through new numbered files in `mtc/migrations/`. Derived tables (`artist_stats`, `artist_links`, `scrobbles.session_id`) are rebuilt by `derive.rebuild` and never edited by hand.
 - Every source (CSV, the last.fm updater in `mtc/updater.py`: 3 runs per calendar day with a 4 h cooldown, started by `create_app(auto_update=True)` only) goes through `ingest.ingest_records`. It reads all records before taking the write lock, so page the API first; run long work (imports, the updater) in a thread, never on the event loop. It applies the name rules in `artist_aliases`; merges go through `maintenance.merge_artists` only.
 - External APIs go through `webapi.JsonApi` subclasses (throttle, User-Agent, retries). Tests use fake transports only, never the network. Don't lower `LASTFM_MIN_INTERVAL_S` (0.5) or `MUSICBRAINZ_MIN_INTERVAL_S` (1.1).
-- `data/settings.json` holds the API key and username: never print the key or commit the file.
+- `data/settings.json` holds the API key, username and optional birth year: never print the key or commit the file.
 - Non-GET `/api` requests with a foreign `Origin` are refused (the server is reachable from any website via localhost); keep it that way.
 - Writes that change what views show must bump `db.bump(conn, "scrobbles_version" | "tags_version")` inside their transaction; server caches (`rhythms._cached`) and the UI cache (`X-Data-Version`, checked via `/api/version` on every page change) depend on it.
 - New tables with a foreign key to artists/tracks/albums must be handled by `maintenance.merge_artists` and listed in `maintenance.MERGE_HANDLES` (a test enforces this).

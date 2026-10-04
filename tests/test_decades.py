@@ -210,35 +210,105 @@ class AlbumAgeTests(unittest.TestCase):
 
 
 class DiscoveryLagTests(unittest.TestCase):
+    """Tracking starts 2020-01-05 (the anchor's play). The wait only counts albums released since then."""
     ANCHOR = [("Anchor", "2020-01-05", "Veteran")]  # the first scrobbles ever: Veteran was already in rotation
 
-    def lag(self, rows, dates):
+    def lag(self, rows, dates, birth_year=None):
         tmp, conn = library(self.ANCHOR + rows, {"Anchor": "1999-01-01"} | dates)
         self.addCleanup(tmp.cleanup)
         self.addCleanup(conn.close)
-        return decades.discovery_lag(conn)
+        return decades.discovery_lag(conn, birth_year)
 
-    def test_artists_already_in_rotation_when_tracking_began_are_left_out(self):
-        a = self.lag([("B", "2022-06-01", "Newcomer")], {"B": "2022-05-20"})
-        self.assertEqual((a["covered"], a["excluded"]), (1, 1))
+    def eras(self, a):
+        return {e["key"]: (e["albums"], e["plays"]) for e in a["eras"]}
+
+    def test_old_records_have_no_wait_however_late_they_were_found(self):
+        a = self.lag([("Classic", "2022-06-01", "Newcomer")] * 5 + [("Fresh", "2022-06-01", "Newcomer")] * 5,
+                     {"Classic": "1965", "Fresh": "2022-03-01"})
+        self.assertEqual(a["covered"], 1)  # only Fresh: released while tracking
+        self.assertEqual([x["name"] for x in a["late"]], ["Fresh"])
+        self.assertEqual(a["late"][0]["lag_days"], 92)
+
+    def test_without_a_birth_year_everything_before_tracking_is_one_era(self):
+        a = self.lag([("Classic", "2022-06-01", "Newcomer"), ("Fresh", "2022-06-01", "Newcomer")], {"Classic": "1965", "Fresh": "2022-03-01"})
+        self.assertEqual([e["label"] for e in a["eras"]], ["Before tracking", "Released while tracking"])
+        self.assertEqual(self.eras(a), {"pre_tracking": (2, 2), "tracked": (1, 1)})  # Anchor and Classic
+        self.assertAlmostEqual(sum(e["share"] for e in a["eras"]), 1.0, places=3)
+
+    def test_a_birth_year_splits_old_records_in_before_you_were_born_and_your_years(self):
+        a = self.lag([("Classic", "2022-06-01", "Newcomer"), ("Teen", "2022-06-01", "Newcomer"), ("Fresh", "2022-06-01", "Newcomer")],
+                     {"Classic": "1970", "Teen": "1995-05", "Fresh": "2022-03-01"}, birth_year=1985)
+        self.assertEqual([e["label"] for e in a["eras"]], ["Before you were born", "Your years, before tracking", "Released while tracking"])
+        self.assertEqual(self.eras(a), {"before_birth": (1, 1), "pre_tracking": (2, 2), "tracked": (1, 1)})  # Anchor is 1999
+        self.assertEqual(a["birth_year"], 1985)
+
+    def test_the_birth_year_is_part_of_the_cache_key(self):
+        tmp, conn = library(self.ANCHOR + [("Classic", "2022-06-01", "Newcomer")], {"Anchor": "1999-01-01", "Classic": "1970"})
+        self.addCleanup(tmp.cleanup)
+        self.addCleanup(conn.close)
+        self.assertEqual(len(decades.discovery_lag(conn, 1985)["eras"]), 2)
+        self.assertEqual(len(decades.discovery_lag(conn, None)["eras"]), 1)
+        self.assertEqual(len(decades.discovery_lag(conn, 1985)["eras"]), 2)
 
     def test_an_album_released_after_tracking_began_counts_even_for_a_veteran_artist(self):
         rows = [("Fresh", "2021-03-05", "Veteran"), ("Backlist", "2021-03-05", "Veteran")]
-        a = self.lag(rows, {"Fresh": "2021-03-01", "Backlist": "2005-01-01"})  # tracking began 2020-01-05
-        self.assertEqual((a["covered"], a["excluded"]), (1, 2))  # Anchor and Backlist are left out
+        a = self.lag(rows, {"Fresh": "2021-03-01", "Backlist": "2005-01-01"})
+        self.assertEqual(a["covered"], 1)
         self.assertEqual(a["buckets"][0]["albums"], 1)
 
-    def test_lag_is_whole_days_from_release_to_the_first_play(self):
-        a = self.lag([("B", "2022-06-10", "Newcomer"), ("B", "2022-06-01", "Newcomer")] * 3, {"B": "2022-05-20"})
-        self.assertEqual(len(a["on_release"]), 1)
-        self.assertEqual((a["on_release"][0]["lag_days"], a["on_release"][0]["plays"]), (12, 6))  # first play counts, not the last
-
     def test_buckets_and_median(self):
-        rows = [(t, "2022-06-01", "Newcomer") for t in "ABCD"]
-        a = self.lag(rows, {"A": "2022-04-01", "B": "2020-06-01", "C": "2010-06-01", "D": "1990-06-01"})
+        rows = [(t, d, "Newcomer") for t, d in (("A", "2022-06-01"), ("B", "2022-06-01"), ("C", "2024-06-01"), ("D", "2032-06-01"))]
+        a = self.lag(rows, {"A": "2022-04-01", "B": "2020-06-01", "C": "2020-06-01", "D": "2020-02-01"})
         self.assertEqual([b["albums"] for b in a["buckets"]], [1, 1, 1, 1])
-        self.assertEqual((a["first_year_share"], a["late_count"]), (0.25, 1))
-        self.assertAlmostEqual(a["median_years"], 12.0, delta=0.1)  # lags 0.2, 2, 12 and 32 years: the upper middle one
+        self.assertEqual([b["name"] for b in a["buckets"]][-1], "10+ years")
+        self.assertEqual((a["first_year_share"], a["late_count"], a["late_label"]), (0.25, 1, "10+ years"))
+        self.assertAlmostEqual(a["median_years"], 4.0, delta=0.1)  # lags 0.2, 2, 4 and 12 years: the upper middle one
+
+    def test_exact_anniversaries_land_in_the_older_bucket_whatever_the_leap_days(self):
+        # A: exactly 3 years (1095 days), B: 3 years over a leap day (1096), C: a day short of 3 years (1094),
+        # D: exactly 10 years (3652 days), E: 10 years over three leap days (3653), F: a day short of 10 years (3651)
+        rows = [("A", "2023-03-01", "Newcomer"), ("B", "2024-03-01", "Newcomer"), ("C", "2023-03-01", "Newcomer"),
+                ("D", "2030-03-01", "Newcomer"), ("E", "2030-02-01", "Newcomer"), ("F", "2030-02-28", "Newcomer")]
+        a = self.lag(rows, {"A": "2020-03-01", "B": "2021-03-01", "C": "2020-03-02",
+                            "D": "2020-03-01", "E": "2020-02-01", "F": "2020-03-01"})
+        self.assertEqual([b["albums"] for b in a["buckets"]], [0, 1, 3, 2])  # C | A, B, F | D, E
+        self.assertEqual(a["late_count"], 2)
+
+    def test_release_dates_far_after_the_newest_scrobble_are_data_errors_not_found_on_release(self):
+        a = self.lag([("Bogus", "2022-06-01", "Newcomer")] * 5 + [("Real", "2022-06-01", "Newcomer")] * 5,
+                     {"Bogus": "2090-01-01", "Real": "2022-03-01"})
+        self.assertEqual(a["covered"], 1)
+        self.assertEqual([x["name"] for x in a["on_release"] + a["late"]], ["Real"])
+        self.assertEqual(self.eras(a)["tracked"], (1, 5))
+
+    def test_dates_that_straddle_the_start_of_tracking_are_left_out_not_guessed(self):
+        # tracking began 2020-01-05: a bare "2020" or "2020-01" may have come out before or after
+        rows = [(t, "2020-03-01", "Newcomer") for t in ("Y2020", "M2020", "M2020b", "Feb", "Y2021", "Y2019")]
+        a = self.lag(rows, {"Y2020": "2020", "M2020": "2020-01", "M2020b": "2020-01", "Feb": "2020-02", "Y2021": "2021", "Y2019": "2019"})
+        self.assertEqual(a["vague"], 3)
+        self.assertEqual(a["covered"], 2)  # Feb and Y2021
+        self.assertEqual(self.eras(a), {"pre_tracking": (2, 2), "tracked": (2, 2)})  # Anchor and Y2019 are older
+        self.assertAlmostEqual(sum(e["share"] for e in a["eras"]), 1.0, places=3)
+
+    def test_an_album_released_on_the_first_day_of_tracking_counts_as_tracked(self):
+        a = self.lag([("Day", "2020-01-05", "Newcomer")], {"Day": "2020-01-05"})
+        self.assertEqual((a["covered"], a["vague"], a["buckets"][0]["albums"]), (1, 0, 1))
+
+    def test_a_release_year_equal_to_the_birth_year_is_one_of_your_years(self):
+        a = self.lag([("Same", "2022-06-01", "Newcomer"), ("Before", "2022-06-01", "Newcomer")],
+                     {"Same": "1985-06-01", "Before": "1984-12-31"}, birth_year=1985)
+        self.assertEqual(self.eras(a), {"before_birth": (1, 1), "pre_tracking": (2, 2)})  # Anchor is 1999
+
+    def test_an_artist_without_a_stats_row_is_not_dropped(self):
+        tmp, conn = library(self.ANCHOR + [("Fresh", "2022-06-01", "Newcomer")], {"Anchor": "1999-01-01", "Fresh": "2022-03-01"})
+        self.addCleanup(tmp.cleanup)
+        self.addCleanup(conn.close)
+        with conn:  # artist_stats is derived and can lag behind the scrobbles
+            conn.execute("DELETE FROM artist_stats WHERE artist_id = (SELECT id FROM artists WHERE name = 'Newcomer')")
+            db.bump(conn, "tags_version")
+        a = decades.discovery_lag(conn)
+        self.assertEqual(a["covered"], 1)
+        self.assertAlmostEqual(sum(e["share"] for e in a["eras"]), 1.0, places=3)
 
     def test_a_play_before_the_release_date_counts_as_zero_lag(self):
         a = self.lag([("B", "2022-01-01", "Newcomer")] * 5, {"B": "2022-03-01"})
@@ -251,23 +321,45 @@ class DiscoveryLagTests(unittest.TestCase):
         self.assertEqual([x["name"] for x in a["on_release"]], ["Exact"])
         self.assertEqual(a["covered"], 4)  # the lists are stricter than the statistics
 
-    def test_found_late_lists_the_longest_lags_first_with_enough_plays(self):
-        rows = ([("Old", "2022-06-01", "Newcomer")] * 5 + [("Older", "2022-06-01", "Newcomer")] * 5
-                + [("Oldest", "2022-06-01", "Newcomer")] * 2)
-        a = self.lag(rows, {"Old": "1990-01-01", "Older": "1970-01-01", "Oldest": "1950-01-01"})
+    def test_found_late_lists_the_longest_waits_first_with_enough_plays(self):
+        rows = ([("Old", "2030-06-01", "Newcomer")] * 5 + [("Older", "2030-06-01", "Newcomer")] * 5
+                + [("Oldest", "2030-06-01", "Newcomer")] * 2)
+        a = self.lag(rows, {"Old": "2020-06-01", "Older": "2020-02-01", "Oldest": "2020-01-10"})
         self.assertEqual([x["name"] for x in a["late"]], ["Older", "Old"])  # Oldest has too few plays
 
-    def test_nothing_to_measure_is_an_empty_answer(self):
-        a = self.lag([], {})
-        self.assertEqual((a["covered"], a["excluded"]), (0, 1))
+    def test_dug_up_counts_old_albums_by_first_play_year_and_skips_artists_already_in_rotation(self):
+        rows = [("Classic", "2022-06-01", "Newcomer"), ("Teen", "2022-08-01", "Newcomer"), ("Deep", "2024-02-01", "Newcomer"),
+                ("Backlist", "2021-03-05", "Veteran")]  # Veteran's first scrobble is no discovery
+        a = self.lag(rows, {"Classic": "1970", "Teen": "1995", "Deep": "1960", "Backlist": "2005"}, birth_year=1985)
+        years = {y["year"]: y for y in a["dug_up"]["years"]}
+        self.assertEqual(sorted(years), [2022, 2023, 2024])  # gaps are filled for the chart
+        self.assertEqual((years[2022]["albums"], years[2023]["albums"], years[2024]["albums"]), (2, 0, 1))
+        self.assertEqual([(e["label"], e["albums"]) for e in years[2022]["by_era"]],
+                         [("Before you were born", 1), ("Your years, before tracking", 1)])
 
-    def test_api_serves_it(self):
-        tmp, conn = library(self.ANCHOR + [("B", "2022-06-01", "Newcomer")], {"B": "2022-05-20"})
+    def test_only_old_albums_still_answer_about_the_eras_but_have_no_wait(self):
+        a = self.lag([("Classic", "2022-06-01", "Newcomer")], {"Classic": "1970"})
+        self.assertEqual(a["covered"], 0)
+        self.assertNotIn("median_years", a)
+        self.assertEqual(self.eras(a), {"pre_tracking": (2, 2)})
+        self.assertEqual(a["dug_up"]["years"][0]["albums"], 1)
+
+    def test_no_dated_albums_is_an_empty_answer(self):
+        tmp, conn = library([("A", "2022-06-01")], {})
+        self.addCleanup(tmp.cleanup)
+        self.addCleanup(conn.close)
+        a = decades.discovery_lag(conn, 1985)
+        self.assertEqual((a["covered"], a["eras"], a["dug_up"]), (0, [], None))
+
+    def test_api_serves_it_with_the_saved_birth_year(self):
+        from unittest import mock
+        tmp, conn = library(self.ANCHOR + [("B", "2022-06-01", "Newcomer")], {"B": "1970", "Anchor": "1999-01-01"})
         conn.close()
-        with TestClient(create_app(Path(tmp.name) / "a.db")) as c:
+        with mock.patch("mtc.settings.birth_year", return_value=1985), TestClient(create_app(Path(tmp.name) / "a.db")) as c:
             r = c.get("/api/decades/lag")
         tmp.cleanup()
-        self.assertEqual((r.status_code, r.json()["covered"]), (200, 1))
+        self.assertEqual((r.status_code, r.json()["birth_year"]), (200, 1985))
+        self.assertEqual([e["key"] for e in r.json()["eras"]], ["before_birth", "pre_tracking"])
 
 
 class DecadeRhythmTests(unittest.TestCase):
