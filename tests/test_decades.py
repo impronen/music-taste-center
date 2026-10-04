@@ -120,9 +120,6 @@ class DecadeTests(unittest.TestCase):
         self.assertEqual(r.json()["peak"], self.o["peak"])
 
 
-if __name__ == "__main__":
-    unittest.main()
-
 
 def noon(day: str) -> int:
     return int(datetime.fromisoformat(day + "T12:00:00+00:00").timestamp())
@@ -184,6 +181,7 @@ class AlbumAgeTests(unittest.TestCase):
     def test_median_age_needs_enough_plays_that_year(self):
         few = self.age([("A", "2022-06-01")] * 5, {"A": "2012-06-01"})
         self.assertIsNone(few["years"][0]["median_years"])
+        self.assertEqual(few["min_year_plays"], decades.MIN_AGE_YEAR_PLAYS)
         n = decades.MIN_AGE_YEAR_PLAYS
         many = self.age([("A", "2022-06-01")] * n, {"A": "2012-06-01"})
         self.assertAlmostEqual(many["years"][0]["median_years"], 10.0, delta=0.1)
@@ -209,3 +207,7 @@ class AlbumAgeTests(unittest.TestCase):
             r = c.get("/api/decades/age")
         tmp.cleanup()
         self.assertEqual((r.status_code, r.json()["covered"]), (200, 1))
+
+
+if __name__ == "__main__":
+    unittest.main()

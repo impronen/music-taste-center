@@ -172,7 +172,7 @@ def _album_age(conn) -> dict:
         years.append({"year": str(ly), "plays": n, "shares": [round(c / n, 4) for c in counts],
                       "median_years": round(_median(h) / DAYS_PER_YEAR, 2) if n >= MIN_AGE_YEAR_PLAYS else None})
     return {"covered": covered, "total": total, "coverage": round(covered / total, 4),
-            "approximate_share": round(approx / covered, 4),
+            "approximate_share": round(approx / covered, 4), "min_year_plays": MIN_AGE_YEAR_PLAYS,
             "buckets": [{"name": name} for name, _ in AGE_BUCKETS],
             "years": years, "median_years": round(_median(overall) / DAYS_PER_YEAR, 2),
             "new_share": round(sum(c for d, c in overall.items() if d < AGE_BUCKETS[0][1]) / covered, 4)}

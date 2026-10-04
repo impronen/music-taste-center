@@ -692,6 +692,7 @@
     const v = d.vogue;
     const lead = v.enough && v.in_vogue.length ? v.in_vogue.map((x) => x.label) : [];
     const peakDecade = d.decades.reduce((a, b) => (b.plays > a.plays ? b : a));
+    const dated = age.covered ? age.years.filter((y) => y.median_years != null) : [];
     paint(seq, html`${head(coverage)}
       <section class="card accent-soft"><p>${lead.length
         ? html`Lately you've leaned towards the <strong>${lead.join(" and ")}</strong>: more than your usual share over the past 12 months.`
@@ -713,7 +714,8 @@
           ${tile("Back catalogue", Fmt.pct(age.years.reduce((s, y) => s + y.shares[3] * y.plays, 0) / age.covered), "Plays of albums 20 years old or more")}
         </div>`, { cls: "sage-soft", sub: "The album's age on the day you played it" })}
         <div class="grid cols-2">
-          ${card("Typical age over the years", html`<div class="chart" id="c-age"></div>`, { sub: "Median age of the album at the time you played it, per listening year" })}
+          ${dated.length ? card("Typical age over the years", html`<div class="chart" id="c-age"></div>`, { sub: "Median age of the album at the time you played it, per listening year" })
+            : card("Typical age over the years", html`<p class="empty">Needs ${Fmt.int(age.min_year_plays)} dated plays in a listening year.</p>`)}
           ${card("Age mix per year", html`<div class="chart" id="c-age-mix"></div>`, { sub: "Share of each listening year's dated plays, by how old the album was" })}
         </div>` : ""}
       <details class="card" id="how" style="margin-top:var(--gap)"><summary style="cursor:pointer"><h2 style="display:inline">How is this measured?</h2></summary>
@@ -736,8 +738,7 @@
     });
     Charts.matrix(document.getElementById("c-matrix"), d.matrix, { label: "Release decades by listening year" });
     if (age.covered) {
-      const dated = age.years.filter((y) => y.median_years != null);
-      Charts.line(document.getElementById("c-age"), dated, {
+      if (dated.length) Charts.line(document.getElementById("c-age"), dated, {
         value: (y) => y.median_years, height: 200, endDot: true, yMin: 0, label: "Median album age per listening year",
         xLabel: (y) => `'${y.year.slice(2)}`,
         tip: (y) => ({ title: y.year, rows: [{ value: `${Fmt.dec(y.median_years)} years`, label: "typical age" }, { value: Fmt.int(y.plays), label: "dated plays" }] }),
