@@ -130,7 +130,7 @@ last.fm data has spelling variants of the same artist ("Sunn 0)))" with a zero v
 
 When the server starts it pulls your new scrobbles from last.fm in a background thread, so the UI opens right away. It needs your username and API key (**Import → last.fm account**, or `python -m mtc set-user NAME` and `set-key KEY`; the env vars `LASTFM_USER` and `LASTFM_API_KEY` override the file).
 
-- **At most 3 runs in any 24 hours.** Each attempt, successful or not, is timestamped in the database (`meta`, key `updater_attempts`), so restarting the server a few times in a row doesn't hammer the API. A start with no username or key doesn't count.
+- **At most 3 runs per calendar day, 4 hours apart.** The day is the local one (`MTC_TZ`, Helsinki by default) and resets at midnight; the 4-hour cooldown also holds across midnight. Each attempt, successful or not, is timestamped in the database (`meta`, key `updater_attempts`), so restarting the server a few times in a row doesn't hammer the API. A start with no username or key doesn't count.
 - **What it fetches:** everything after your newest stored scrobble, minus a day of overlap for late offline scrobbles (`user.getRecentTracks`, 200 per page, the "now playing" track skipped). An empty library fetches the whole history. All pages are read before anything is stored, so a failure half way changes nothing and the next run starts from the same point. Duplicates are ignored, so the overlap is harmless.
 - **See it:** `GET /api/updater` (last result, runs in the window, next allowed time) or `python -m mtc update --status`.
 - **Run it by hand:** `python -m mtc update` (same limit; `--force` ignores it).

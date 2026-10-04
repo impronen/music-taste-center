@@ -30,7 +30,7 @@ def main(argv: list[str] | None = None) -> int:
                    help=f"refetch items older than this (default {config.METADATA_TTL_DAYS})")
     e.add_argument("--status", action="store_true", help="only print coverage")
 
-    up = sub.add_parser("update", help="pull new scrobbles from last.fm (at most 3 runs per 24 hours)")
+    up = sub.add_parser("update", help="pull new scrobbles from last.fm (at most 3 runs per day, 4 hours apart)")
     up.add_argument("--force", action="store_true", help="ignore the daily limit")
     up.add_argument("--status", action="store_true", help="only print when it last ran and may run next")
 
