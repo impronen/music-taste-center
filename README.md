@@ -39,6 +39,7 @@ MTC_DB=/tmp/demo.db .venv/bin/python app.py
 | **Eras** | Per year: top artists, the *signature* artist (most over-represented compared with all time), and the biggest new discovery |
 | **Cleanup** | Merge artists that are spelled in more than one way, with suggested duplicates and name rules that fix future imports |
 | **Rhythms** | How genres (or places) move through the year, the week and the day: a genre × month heatmap, what stands out each season, time of day, weekdays vs weekends, seasonal artists (with "coming up"), genre drift per year, and how varied your mix is |
+| **Decades** | Which release decades you listen to: plays by release year, each listening year's decade mix, a decade × year heatmap, and which decades are in vogue over the past 12 months compared with the listening before. Needs release dates (Import → Fetch tags & covers); the page shows what share of your plays it is based on |
 | **Insights** | Rediscover (recommendations from your own past), on the rise, forgotten favourites, obsessions, staying power, gateways, binges, one-track artists, deep dives |
 
 ### How the connections work

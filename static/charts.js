@@ -192,7 +192,7 @@
 
   // ---------- column chart ----------
   /* opts: { value(d), xLabel(d,i), tip(d) -> {title, rows}, onClick(d), highlight(d) -> bool, height, label, axis }
-     Base bars are pale, bars above the median full accent, the peak (or highlighted) bar darkest. */
+     Base bars are pale, bars above the median full accent, the peak bar (or every highlighted bar) darkest. */
   function columns(el, data, opts) {
     const height = opts.height ?? 200;
     responsive(el, (width) => {
@@ -200,7 +200,7 @@
       const vals = data.map(opts.value);
       const max = Math.max(0, ...vals);
       const med = median(vals);
-      const peakIdx = data.findIndex((d, i) => (opts.highlight ? opts.highlight(d) : vals[i] === max && max > 0));
+      const peakIdx = opts.highlight ? -1 : vals.findIndex((v) => v === max && max > 0);
       const top = 8, bottom = 26;
       let left = 0;
       let ticks = null;
@@ -228,7 +228,7 @@
         const x0 = left + i * band;
         const bx = x0 + (band - bw) / 2;
         const h = Math.max(v > 0 ? Math.min(bw, 4) : 0, y(0) - y(v));
-        const cls = i === peakIdx ? "bar peak" : v > med ? "bar up" : "bar";
+        const cls = (opts.highlight ? v > 0 && opts.highlight(d) : i === peakIdx) ? "bar peak" : v > med ? "bar up" : "bar";
         const hit = svgEl("rect", { x: x0, y: top, width: band, height: innerH, class: "hit" + (opts.onClick ? " link" : "") }, svg);
         const bar = h > 0 ? svgEl("path", { d: pillPath(bx, y(0) - h, bw, h), class: cls }, svg) : svgEl("rect", { x: bx, y: y(0), width: bw, height: 0, class: cls }, svg);
         const t = () => opts.tip(d);

@@ -12,7 +12,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 
-from . import config, db, derive, enrich, fsutil, ingest, insights, jobs, maintenance, rhythms, settings, updater
+from . import config, db, decades, derive, enrich, fsutil, ingest, insights, jobs, maintenance, rhythms, settings, updater
 from .webapi import Fatal, NotFound
 
 MAX_UPLOAD_BYTES = 300 * 1024 * 1024
@@ -184,6 +184,10 @@ def create_app(db_path: str | Path | None = None, *, lastfm_factory: Callable | 
     @app.get("/api/rhythms")
     def rhythm_overview(kind: str = Query("genre", pattern="^(genre|place)$"), c=Conn):
         return rhythms.overview(c, kind)
+
+    @app.get("/api/decades")
+    def decade_overview(c=Conn):
+        return decades.overview(c)
 
     @app.get("/api/rhythms/artists")
     def seasonal_artists(c=Conn):
