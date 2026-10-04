@@ -2,6 +2,9 @@
 
 Artists live in genre clusters; sessions mostly stay inside one cluster, artists unlock over
 time (discoveries), and some months have an obsession. All names are invented.
+
+`python -m tests.synthetic` prints a CSV; `python -m tests.synthetic --demo-db PATH` writes a complete
+fictional library (scrobbles, genre tags and release dates) for trying the app and for screenshots.
 """
 import csv
 import io
@@ -138,7 +141,92 @@ def to_csv(rows: list[tuple[str, str, str, int]], now_playing: bool = True) -> s
     return "﻿" + buf.getvalue()
 
 
+# Fictional metadata for the demo library: per cluster a main genre, some sub-genres, and a span of release years.
+DEMO_GENRES = {
+    "suomirock": ("finnish rock", ["rock", "pop rock", "alternative"]),
+    "electronic": ("electronic", ["ambient", "idm", "synthpop"]),
+    "jazz": ("jazz", ["instrumental", "bebop"]),
+    "metal": ("black metal", ["metal", "doom metal"]),
+    "indie": ("indie pop", ["indie", "dream pop", "lo-fi"]),
+}
+DEMO_YEARS = {"suomirock": (1978, 1996), "electronic": (1991, 2009), "jazz": (1955, 1973),
+              "metal": (1996, 2016), "indie": (2007, 2025)}
+
+
+def build_demo_db(path, seed: int = 7) -> None:
+    """Write a fresh database with a fictional history plus genre tags and release dates, as a
+    fetch from last.fm and MusicBrainz would leave it. Refuses to touch an existing file."""
+    import os
+    import time
+
+    from mtc import db, ingest
+
+    if os.path.exists(path):
+        raise FileExistsError(f"{path} already exists; pick a new file so no real data is touched")
+    conn = db.connect(path)
+    try:
+        ingest.import_csv_text(conn, to_csv(generate(seed=seed, rhythms=True)), label="demo", encoding="utf-8")
+        cluster_of = {a: c for c, names in CLUSTERS.items() for a in names}
+        now = int(time.time())
+        with conn:
+            tag_ids = {}
+
+            def tag(name, kind):
+                if name not in tag_ids:
+                    tag_ids[name] = conn.execute("INSERT INTO tags(name, kind) VALUES (?, ?)", (name, kind)).lastrowid
+                return tag_ids[name]
+
+            for artist_id, name in conn.execute("SELECT id, name FROM artists").fetchall():
+                cluster = cluster_of.get(name) or next((c for c in CLUSTERS if name.endswith(f"{c.title()} Project")), None)
+                if name == SEASONAL_ARTIST:
+                    genres = [("christmas", 100)]
+                elif cluster:
+                    main, subs = DEMO_GENRES[cluster]
+                    genres = [(main, 100), (subs[artist_id % len(subs)], 30 + artist_id * 7 % 25)]
+                else:
+                    continue
+                for genre, weight in genres:
+                    conn.execute("INSERT INTO artist_tags VALUES (?, ?, ?)", (artist_id, tag(genre, "genre"), weight))
+                if cluster in ("suomirock", "metal"):
+                    conn.execute("INSERT INTO artist_tags VALUES (?, ?, 60)", (artist_id, tag("finnish", "place")))
+                conn.execute("INSERT INTO artist_info(artist_id, status, fetched_at, tags_fetched_at) VALUES (?, 'ok', ?, ?)",
+                             (artist_id, now, now))
+            for album_id, artist in conn.execute(
+                    "SELECT al.id, ar.name FROM albums al JOIN artists ar ON ar.id = al.artist_id").fetchall():
+                cluster = cluster_of.get(artist) or next((c for c in CLUSTERS if artist.endswith(f"{c.title()} Project")), None)
+                rng = random.Random(seed * 7919 + album_id)
+                if rng.random() < 0.06 or cluster is None:  # the odd album MusicBrainz doesn't know
+                    conn.execute("INSERT INTO album_info(album_id, status, fetched_at, mb_status, mb_fetched_at)"
+                                 " VALUES (?, 'ok', ?, 'not_found', ?)", (album_id, now, now))
+                    continue
+                year = rng.randint(*DEMO_YEARS[cluster])
+                precision = rng.random()
+                if precision < 0.45:
+                    date, source = f"{year}-{rng.randint(1, 12):02d}-{rng.randint(1, 28):02d}", "musicbrainz"
+                elif precision < 0.75:
+                    date, source = f"{year}-{rng.randint(1, 12):02d}", "musicbrainz"
+                else:
+                    date, source = str(year), "tag"  # a year tag was all there was
+                conn.execute(
+                    "INSERT INTO album_info(album_id, status, fetched_at, release_date, release_date_source, release_type,"
+                    " mb_status, mb_fetched_at) VALUES (?, 'ok', ?, ?, ?, 'Album', ?, ?)",
+                    (album_id, now, date, source, "ok" if source == "musicbrainz" else "not_found", now))
+            db.bump(conn, "tags_version")
+    finally:
+        conn.close()
+
+
 if __name__ == "__main__":
     import sys
 
-    sys.stdout.write(to_csv(generate(rhythms="--rhythms" in sys.argv)))
+    if "--demo-db" in sys.argv:
+        target = sys.argv[sys.argv.index("--demo-db") + 1:][:1]
+        if not target:
+            sys.exit("usage: python -m tests.synthetic --demo-db PATH")
+        try:
+            build_demo_db(target[0])
+        except FileExistsError as exc:
+            sys.exit(str(exc))
+        print(f"Wrote {target[0]}")
+    else:
+        sys.stdout.write(to_csv(generate(rhythms="--rhythms" in sys.argv)))
