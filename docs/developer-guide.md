@@ -81,7 +81,7 @@ The README screenshots were taken from such a demo library.
 The full list is in `CLAUDE.md`; the ones that matter most:
 
 - **No personal data in the repo.** `data/`, `*.db` and `*.csv` are gitignored; tests and demos use the synthetic generator. Never commit `data/settings.json`.
-- **Schema changes** only through new numbered files in `mtc/migrations/`. Derived tables (`artist_stats`, `artist_links`, `scrobbles.session_id`) are rebuilt by `derive.rebuild` and never edited by hand.
+- **Schema changes** only through new numbered files in `mtc/migrations/`. A numbered migration may also carry a one-off data fix: `004` queues a re-lookup of release dates the improved title matching can now find, which the next fetch performs (nothing is fetched automatically). Derived tables (`artist_stats`, `artist_links`, `scrobbles.session_id`) are rebuilt by `derive.rebuild` and never edited by hand.
 - **Every source goes through `ingest.ingest_records`**, and long work runs in a thread, never on the event loop.
 - **External APIs** go through `webapi.JsonApi` subclasses (throttle, User-Agent, retries). Don't lower the minimum intervals in `mtc/config.py`.
 - **Writes that change what views show** must bump `db.bump(conn, "scrobbles_version" | "tags_version")`; the server caches and the UI cache depend on it.
