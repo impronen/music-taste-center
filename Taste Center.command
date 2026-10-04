@@ -13,10 +13,19 @@ if curl -sf -o /dev/null "$URL/api/overview"; then
   exit 0
 fi
 
-if [[ ! -x .venv/bin/python ]]; then
-  echo "First run: setting up the Python environment…"
+# First run, or a half-finished earlier setup: (re)create the Python environment.
+if ! .venv/bin/python -c 'import fastapi, uvicorn' 2>/dev/null; then
+  if ! python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 13) else 1)' 2>/dev/null; then
+    echo "Taste Center needs Python 3.13 or newer (this Mac has: $(command -v python3 >/dev/null && python3 --version 2>&1 || echo "no Python"))."
+    echo "Install it from https://www.python.org/downloads/ and double-click this file again."
+    pause
+    exit 1
+  fi
+  echo "First run: setting up the Python environment (needs an internet connection)…"
+  rm -rf .venv  # nothing in it works yet
   if ! { python3 -m venv .venv && .venv/bin/pip install -q -r requirements.txt; }; then
-    echo "Setup failed."
+    echo "Setup failed. Check your internet connection and double-click this file again."
+    rm -rf .venv
     pause
     exit 1
   fi

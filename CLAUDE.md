@@ -1,6 +1,6 @@
 # Taste Center
 
-Local FastAPI + SQLite app (Python 3.14, vanilla JS in `static/`). See README for features and architecture.
+Local FastAPI + SQLite app (Python 3.14, vanilla JS in `static/`). See the README for installing and using it, `docs/how-it-works.md` for what each page measures and `docs/developer-guide.md` for architecture.
 
 ## Commands (always the project `.venv`)
 - Run: `.venv/bin/python app.py` (http://127.0.0.1:8765). The server does not auto-reload; restart after Python changes.
