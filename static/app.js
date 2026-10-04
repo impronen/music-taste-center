@@ -675,6 +675,58 @@
     }
   }
 
+  // ---------- decades ----------
+  async function decadesView() {
+    const seq = rendering;
+    const d = await api("/api/decades");
+    const head = (extra = "") => html`<div class="page-head"><div><h1>Decades</h1>
+      <p class="lead">Which release decades you listen to, and how that has moved over the years.</p>${extra}</div></div>`;
+    if (!d.covered) {
+      paint(seq, html`${head()}${card("No release dates yet", html`<p>Decades need release dates for your albums. Fetch them on the Import page; the views fill in as dates arrive.</p>
+        <p style="margin-top:16px"><a class="btn primary" href="#/import">Go to Import →</a></p>`, { cls: "accent-soft" })}`);
+      return;
+    }
+    const coverage = html`<div class="head-chips"><span class="pill sage">Based on ${Fmt.pct(d.coverage)} of your plays</span>
+      ${d.coverage < 0.5 ? html`<a class="pill accent" href="#/import">Fetch more release dates</a>` : ""}
+      <a class="pill" href="#how" id="how-link">How is this measured?</a></div>`;
+    const v = d.vogue;
+    const lead = v.enough && v.in_vogue.length ? v.in_vogue.map((x) => x.label) : [];
+    const peakDecade = d.decades.reduce((a, b) => (b.plays > a.plays ? b : a));
+    paint(seq, html`${head(coverage)}
+      <section class="card accent-soft"><p>${lead.length
+        ? html`Lately you've leaned towards the <strong>${lead.join(" and ")}</strong>: more than your usual share over the past 12 months.`
+        : v.enough ? "The past 12 months look like your usual mix of decades."
+        : "There aren't enough dated plays in the last 12 months to say what is in vogue yet."}
+        Overall, the <strong>${peakDecade.label}</strong> lead with ${Fmt.pct(peakDecade.share)} of dated plays.</p></section>
+      ${card("Plays by release year", html`<div class="chart" id="c-years"></div>`, { cls: "canvas", sub: "Every release year of the albums you play; the busiest decade is darkest." })}
+      <div class="grid cols-7-5">
+        ${card("Decades over the years", html`<div class="chart" id="c-drift"></div>`, { sub: "Share of each listening year's dated plays" })}
+        ${card("In vogue lately", v.enough ? html`<ol class="rank sage compact">${v.decades.map((x, i) => html`<li><span class="row">
+            <span class="pos">${i + 1}</span><span class="name">${x.label}<small>${Fmt.pct(x.recent_share)} lately · ${Fmt.pct(x.before_share)} before</small></span>
+            <span class="num">${liftText(x.lift)}</span></span></li>`)}</ol>` : html`<p class="empty">Needs ${Fmt.int(50)} dated plays in the last 12 months.</p>`,
+          { cls: "sage-soft", sub: "Past 12 months against everything before" })}
+      </div>
+      ${card("Decade by listening year", html`<div class="chart" id="c-matrix"></div>`, { cls: "canvas", sub: "Each decade's share in a year compared with its share of all your plays." })}
+      <details class="card" id="how" style="margin-top:var(--gap)"><summary style="cursor:pointer"><h2 style="display:inline">How is this measured?</h2></summary>
+        <div class="prose" style="margin-top:12px;display:grid;gap:10px;max-width:760px">
+          <p>Release dates come from MusicBrainz (the original release, not a reissue), or from a year tag on last.fm when MusicBrainz has nothing. Only albums with at least three plays are looked up, and plays without an album can't be dated, so the percentage above tells how much of your listening this page sees.</p>
+          <p>1,5× means half as much again as usual. Small samples are pulled towards “as usual”, and blank cells had too few plays to say. “In vogue” compares the past 12 months with all the listening before them.</p>
+        </div></details>`);
+    view.querySelector("#how-link")?.addEventListener("click", (e) => { e.preventDefault(); const el = document.getElementById("how"); el.open = true; scrollToId("how"); });
+    const decadeOf = (y) => Math.floor(y / 10) * 10;
+    Charts.columns(document.getElementById("c-years"), d.years, {
+      value: (y) => y.plays, height: 220, axis: true, label: "Plays by release year",
+      highlight: (y) => decadeOf(y.year) === peakDecade.decade,
+      xLabel: (y) => (y.year % 10 === 0 ? String(y.year) : null),
+      tip: (y) => ({ title: String(y.year), rows: [{ value: Fmt.int(y.plays), label: "plays" }] }),
+    });
+    Charts.stacked(document.getElementById("c-drift"), d.drift.years, {
+      series: d.drift.series, shares: (y) => y.shares, other: (y) => y.other, xLabel: (y) => `'${y.year.slice(2)}`,
+      title: (y) => `${y.year} · ${Fmt.int(y.plays)} dated plays`, label: "Decade mix per listening year",
+    });
+    Charts.matrix(document.getElementById("c-matrix"), d.matrix, { label: "Release decades by listening year" });
+  }
+
   // ---------- connections ----------
   async function connectionsView(params) {
     const seq = rendering;
@@ -1275,6 +1327,7 @@
     [/^\/connections$/, connectionsView],
     [/^\/eras$/, erasView],
     [/^\/rhythms$/, rhythmsView],
+    [/^\/decades$/, decadesView],
     [/^\/insights$/, insightsView],
     [/^\/import$/, importView],
     [/^\/cleanup$/, cleanupView],
