@@ -478,7 +478,8 @@
     });
     const legend = document.createElement("div");
     legend.className = "legend-cat";
-    [...opts.series.map((s, i) => ({ name: s.name, color: colors[i] })), { name: "other", color: "var(--series-other)" }].forEach((s) => {
+    const hasOther = data.some((d) => opts.other(d) > 0);
+    [...opts.series.map((s, i) => ({ name: s.name, color: colors[i] })), ...(hasOther ? [{ name: "other", color: "var(--series-other)" }] : [])].forEach((s) => {
       const item = document.createElement("span");
       const i = document.createElement("i");
       i.style.background = s.color;
