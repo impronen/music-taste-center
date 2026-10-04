@@ -122,3 +122,68 @@ def _vogue(plays: Counter, by_decade: Counter, covered: int) -> dict:
     out.sort(key=lambda x: -x["lift"])
     return {"enough": True, "plays": r_total, "min_plays": MIN_RECENT_PLAYS, "decades": out,
             "in_vogue": [x for x in out if x["lift"] >= VOGUE_LIFT][:3]}
+
+
+# ---------------------------------------------------------------- album age at play
+
+# Upper bounds in days: the fewest days an exact 1, 5 or 20 year anniversary can be (leap days included),
+# so a play on the anniversary is already in the older bucket.
+AGE_BUCKETS = [("Under 1 year", 365), ("1–5 years", 1826), ("5–20 years", 7305), ("20+ years", None)]
+MIN_AGE_YEAR_PLAYS = 100  # dated plays for a listening year to get a median
+DAYS_PER_YEAR = 365.25
+
+# A year-only date counts as 1 July and a year-month as the 15th: the middle of what it could mean.
+_RELEASE_DAY = ("CASE length(ai.release_date) WHEN 4 THEN ai.release_date || '-07-01'"
+                " WHEN 7 THEN ai.release_date || '-15' ELSE ai.release_date END")
+
+
+def album_age(conn: sqlite3.Connection) -> dict:
+    return _cached(conn, ("album_age",), lambda: _album_age(conn), tags=True)
+
+
+def _album_age(conn) -> dict:
+    """How old the albums were when you played them, per listening year."""
+    # plays per (listening year, whole days of age); a play before its release date counts as age 0
+    hist: defaultdict = defaultdict(Counter)
+    approx = 0
+    for ly, days, imprecise, n in conn.execute(
+            f"SELECT CAST(substr(s.lday, 1, 4) AS INTEGER),"
+            f" MAX(0, CAST(julianday(s.lday) - julianday({_RELEASE_DAY}) AS INTEGER)),"
+            f" length(ai.release_date) < 10, COUNT(*)"
+            f" FROM scrobbles s JOIN album_info ai ON ai.album_id = s.album_id"
+            f" WHERE ai.release_date IS NOT NULL AND CAST(substr(ai.release_date, 1, 4) AS INTEGER) BETWEEN ? AND ?"
+            f" AND julianday({_RELEASE_DAY}) IS NOT NULL GROUP BY 1, 2, 3", (MIN_YEAR, MAX_YEAR)):
+        hist[ly][days] += n
+        approx += n if imprecise else 0
+    covered = sum(sum(h.values()) for h in hist.values())
+    total = conn.execute("SELECT COUNT(*) FROM scrobbles").fetchone()[0]
+    if not covered:
+        return {"covered": 0, "total": total, "coverage": 0.0}
+
+    edges = [e for _, e in AGE_BUCKETS]
+    years, overall = [], Counter()
+    for ly in sorted(hist):
+        h = hist[ly]
+        n = sum(h.values())
+        overall.update(h)
+        counts = [0] * len(AGE_BUCKETS)
+        for days, c in h.items():
+            counts[next(i for i, e in enumerate(edges) if e is None or days < e)] += c
+        years.append({"year": str(ly), "plays": n, "shares": [round(c / n, 4) for c in counts],
+                      "median_years": round(_median(h) / DAYS_PER_YEAR, 2) if n >= MIN_AGE_YEAR_PLAYS else None})
+    return {"covered": covered, "total": total, "coverage": round(covered / total, 4),
+            "approximate_share": round(approx / covered, 4),
+            "buckets": [{"name": name} for name, _ in AGE_BUCKETS],
+            "years": years, "median_years": round(_median(overall) / DAYS_PER_YEAR, 2),
+            "new_share": round(sum(c for d, c in overall.items() if d < AGE_BUCKETS[0][1]) / covered, 4)}
+
+
+def _median(hist: Counter) -> int:
+    """Median of a {value: count} histogram."""
+    half = sum(hist.values()) / 2
+    run = 0
+    for value in sorted(hist):
+        run += hist[value]
+        if run >= half:
+            return value
+    return 0

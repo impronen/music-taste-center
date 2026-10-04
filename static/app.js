@@ -678,7 +678,7 @@
   // ---------- decades ----------
   async function decadesView() {
     const seq = rendering;
-    const d = await api("/api/decades");
+    const [d, age] = await Promise.all([api("/api/decades"), api("/api/decades/age")]);
     const head = (extra = "") => html`<div class="page-head"><div><h1>Decades</h1>
       <p class="lead">Which release decades you listen to, and how that has moved over the years.</p>${extra}</div></div>`;
     if (!d.covered) {
@@ -707,9 +707,19 @@
           { cls: "sage-soft", sub: "Past 12 months against everything before" })}
       </div>
       ${card("Decade by listening year", html`<div class="chart" id="c-matrix"></div>`, { cls: "canvas", sub: "Each decade's share in a year compared with its share of all your plays." })}
+      ${age.covered ? html`${card("How old is the music you play?", html`<div class="grid cols-3">
+          ${tile("Typical age", `${Fmt.dec(age.median_years)} years`, "Half of your plays are of albums younger than this")}
+          ${tile("Fresh releases", Fmt.pct(age.new_share), "Plays of albums less than a year old")}
+          ${tile("Back catalogue", Fmt.pct(age.years.reduce((s, y) => s + y.shares[3] * y.plays, 0) / age.covered), "Plays of albums 20 years old or more")}
+        </div>`, { cls: "sage-soft", sub: "The album's age on the day you played it" })}
+        <div class="grid cols-2">
+          ${card("Typical age over the years", html`<div class="chart" id="c-age"></div>`, { sub: "Median age of the album at the time you played it, per listening year" })}
+          ${card("Age mix per year", html`<div class="chart" id="c-age-mix"></div>`, { sub: "Share of each listening year's dated plays, by how old the album was" })}
+        </div>` : ""}
       <details class="card" id="how" style="margin-top:var(--gap)"><summary style="cursor:pointer"><h2 style="display:inline">How is this measured?</h2></summary>
         <div class="prose" style="margin-top:12px;display:grid;gap:10px;max-width:760px">
           <p>Release dates come from MusicBrainz (the original release, not a reissue), or from a year tag on last.fm when MusicBrainz has nothing. Only albums with at least three plays are looked up, and plays without an album can't be dated, so the percentage above tells how much of your listening this page sees.</p>
+          <p>Album age is the play date minus the release date. A date with only a year counts as 1 July${age.covered ? html` (${Fmt.pct(age.approximate_share)} of dated plays)` : ""}, and a play dated before its release counts as age 0, so the age figures are a little rough for albums released in the last year.</p>
           <p>1,5× means half as much again as usual. Small samples are pulled towards “as usual”, and blank cells had too few plays to say. “In vogue” compares the past 12 months with all the listening before them.</p>
         </div></details>`);
     view.querySelector("#how-link")?.addEventListener("click", (e) => { e.preventDefault(); const el = document.getElementById("how"); el.open = true; scrollToId("how"); });
@@ -725,6 +735,19 @@
       title: (y) => `${y.year} · ${Fmt.int(y.plays)} dated plays`, label: "Decade mix per listening year",
     });
     Charts.matrix(document.getElementById("c-matrix"), d.matrix, { label: "Release decades by listening year" });
+    if (age.covered) {
+      const dated = age.years.filter((y) => y.median_years != null);
+      Charts.line(document.getElementById("c-age"), dated, {
+        value: (y) => y.median_years, height: 200, endDot: true, yMin: 0, label: "Median album age per listening year",
+        xLabel: (y) => `'${y.year.slice(2)}`,
+        tip: (y) => ({ title: y.year, rows: [{ value: `${Fmt.dec(y.median_years)} years`, label: "typical age" }, { value: Fmt.int(y.plays), label: "dated plays" }] }),
+      });
+      Charts.stacked(document.getElementById("c-age-mix"), age.years, {
+        series: age.buckets, shares: (y) => y.shares, other: () => 0, xLabel: (y) => `'${y.year.slice(2)}`,
+        colors: ["var(--seq-2)", "var(--seq-3)", "var(--seq-5)", "var(--seq-7)"],
+        title: (y) => `${y.year} · ${Fmt.int(y.plays)} dated plays`, label: "Album age mix per listening year",
+      });
+    }
   }
 
   // ---------- connections ----------

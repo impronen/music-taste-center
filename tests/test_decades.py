@@ -2,6 +2,7 @@
 cluster preference rotates yearly (synthetic.generate), so which decade is in vogue is known."""
 import tempfile
 import unittest
+from datetime import datetime
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -121,3 +122,90 @@ class DecadeTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def noon(day: str) -> int:
+    return int(datetime.fromisoformat(day + "T12:00:00+00:00").timestamp())
+
+
+def library(rows: list[tuple[str, str, str]], dates: dict[str, str]):
+    """(album, play day, release date by album): one artist, one track per play, as a temp DB."""
+    tmp = tempfile.TemporaryDirectory()
+    conn = db.connect(Path(tmp.name) / "a.db")
+    plays = [("Artist", album, f"t{i}", noon(day)) for i, (album, day) in enumerate(rows)]
+    ingest.import_csv_text(conn, synthetic.to_csv(plays, now_playing=False), label="t", encoding="utf-8")
+    with conn:
+        for album_id, title in conn.execute("SELECT id, title FROM albums").fetchall():
+            if title in dates:
+                conn.execute("INSERT INTO album_info(album_id, status, fetched_at, release_date) VALUES (?, 'ok', 0, ?)",
+                             (album_id, dates[title]))
+        db.bump(conn, "tags_version")
+    return tmp, conn
+
+
+class AlbumAgeTests(unittest.TestCase):
+    def age(self, rows, dates):
+        tmp, conn = library(rows, dates)
+        self.addCleanup(tmp.cleanup)
+        self.addCleanup(conn.close)
+        return decades.album_age(conn)
+
+    def shares(self, a, year="2022"):
+        return next(y for y in a["years"] if y["year"] == year)["shares"]
+
+    def test_plays_land_in_the_age_buckets_by_whole_months(self):
+        a = self.age([("New", "2022-06-01"), ("Recent", "2022-06-01"), ("Old", "2022-06-01"), ("Ancient", "2022-06-01")],
+                     {"New": "2022-03-01", "Recent": "2019-06-01", "Old": "2012-06-01", "Ancient": "1985-06-01"})
+        self.assertEqual(self.shares(a), [0.25, 0.25, 0.25, 0.25])
+        self.assertEqual(a["covered"], 4)
+        self.assertEqual([b["name"] for b in a["buckets"]], [b[0] for b in decades.AGE_BUCKETS])
+
+    def test_a_bucket_boundary_belongs_to_the_older_bucket(self):
+        # exactly one year (across a leap day), a day short of it, and exactly five and twenty years
+        a = self.age([("A", "2021-06-01"), ("B", "2021-06-01"), ("C", "2022-06-01"), ("D", "2022-06-01")],
+                     {"A": "2020-06-01", "B": "2020-06-02", "C": "2017-06-01", "D": "2002-06-01"})
+        self.assertEqual(self.shares(a, "2021"), [0.5, 0.5, 0.0, 0.0])
+        self.assertEqual(self.shares(a, "2022"), [0.0, 0.0, 0.5, 0.5])
+
+    def test_year_only_dates_count_as_the_first_of_july(self):
+        a = self.age([("Y", "2022-06-15"), ("Y", "2022-08-01")], {"Y": "2021"})  # 349 and 396 days after 1 July 2021
+        self.assertEqual(self.shares(a), [0.5, 0.5, 0.0, 0.0])
+        self.assertEqual(a["approximate_share"], 1.0)
+
+    def test_a_play_before_the_release_date_counts_as_age_zero(self):
+        a = self.age([("Future", "2022-01-10")], {"Future": "2022-03-01"})
+        self.assertEqual(self.shares(a), [1.0, 0.0, 0.0, 0.0])
+        self.assertEqual(a["new_share"], 1.0)
+
+    def test_full_dates_are_not_approximate(self):
+        a = self.age([("Exact", "2022-06-01")], {"Exact": "2020-01-01"})
+        self.assertEqual(a["approximate_share"], 0.0)
+
+    def test_median_age_needs_enough_plays_that_year(self):
+        few = self.age([("A", "2022-06-01")] * 5, {"A": "2012-06-01"})
+        self.assertIsNone(few["years"][0]["median_years"])
+        n = decades.MIN_AGE_YEAR_PLAYS
+        many = self.age([("A", "2022-06-01")] * n, {"A": "2012-06-01"})
+        self.assertAlmostEqual(many["years"][0]["median_years"], 10.0, delta=0.1)
+        self.assertAlmostEqual(many["median_years"], 10.0, delta=0.1)
+
+    def test_each_listening_year_is_separate(self):
+        a = self.age([("A", "2021-06-01"), ("A", "2023-06-01")], {"A": "2020-06-01"})
+        self.assertEqual([y["year"] for y in a["years"]], ["2021", "2023"])
+        self.assertEqual((self.shares(a, "2021"), self.shares(a, "2023")), ([0.0, 1.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0]))
+
+    def test_undated_albums_and_nonsense_dates_are_ignored(self):
+        a = self.age([("A", "2022-06-01"), ("B", "2022-06-01"), ("C", "2022-06-01")], {"A": "2020-01-01", "B": "0001", "C": "20xx"})
+        self.assertEqual((a["covered"], a["total"]), (1, 3))
+
+    def test_no_dates_is_an_empty_answer(self):
+        a = self.age([("A", "2022-06-01")], {})
+        self.assertEqual((a["covered"], a["coverage"]), (0, 0.0))
+
+    def test_api_serves_it(self):
+        tmp, conn = library([("A", "2022-06-01")], {"A": "2020-01-01"})
+        conn.close()
+        with TestClient(create_app(Path(tmp.name) / "a.db")) as c:
+            r = c.get("/api/decades/age")
+        tmp.cleanup()
+        self.assertEqual((r.status_code, r.json()["covered"]), (200, 1))
