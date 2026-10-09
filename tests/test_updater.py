@@ -378,6 +378,37 @@ class LovedTests(Base):
         self.assertEqual([t["name"] for t in cards["unloved"]], ["Plain"])
         self.assertEqual(cards["loved_count"], 2)
 
+    def test_library_love_rate_per_artist(self):
+        old, new = T0, T0 + 400 * DAY
+        ingest.ingest_records(self.conn, [Scrobble("A", "Gone", old), Scrobble("A", "Kept", old + 60),
+                                          Scrobble("A", "Kept", new), Scrobble("A", "Plain", new + 60),
+                                          Scrobble("A", "Other", new + 120)]
+                              + [Scrobble("Many", f"m{i}", new + 600 + i * 60) for i in range(6)]  # most plays, no loves
+                              + [Scrobble("Few", "f", new + 1200), Scrobble("Few", "g", old + 120)], source="csv")
+        derive.rebuild(self.conn)
+        updater.store_loved(self.conn, [("A", "Gone", old), ("a", "kept", old), ("A", "Kept", old + 1),  # one track, twice
+                                        ("Few", "f", old), ("Nobody", "Never played", old)])
+
+        def rows(**kw):
+            r = insights.library(self.conn, "artist", **kw)
+            return r["total"], [(x["name"], x["loved"], x["loved_rate"]) for x in r["items"]]
+        self.assertEqual(rows(), (3, [("Many", 0, None), ("A", 2, 0.5), ("Few", 1, 0.5)]))
+        self.assertEqual(rows(sort="loved"), (3, [("A", 2, 0.5), ("Few", 1, 0.5), ("Many", 0, None)]))
+        self.assertEqual(rows(sort="loved", limit=1, offset=1), (3, [("Few", 1, 0.5)]))
+        self.assertEqual(rows(sort="loved", q="a"), (2, [("A", 2, 0.5), ("Many", 0, None)]))
+        # a period: count and rate cover only the tracks played in it ("Gone" isn't, so A has one)
+        day = datetime.fromtimestamp(new, config.TZ).date().isoformat()
+        self.assertEqual(rows(start=day, end=day, sort="loved", limit=2),
+                         (3, [("A", 1, 1 / 3), ("Few", 1, 1.0)]))
+        self.assertEqual(rows(start=day, end=day, sort="loved", offset=2), (3, [("Many", 0, None)]))
+        before = datetime.fromtimestamp(old, config.TZ).date().isoformat()  # Few's loved track wasn't played then
+        self.assertEqual(rows(start=before, end=before, sort="loved"), (2, [("A", 2, 1.0), ("Few", 0, None)]))
+        self.assertEqual(rows(start=before, end=day, sort="loved"), rows(sort="loved"))  # the whole span is all time
+        self.assertEqual(rows(sort="tracks")[1][0][0], "Many")  # the other keys still work
+        a = self.conn.execute("SELECT id FROM artists WHERE name = 'A'").fetchone()[0]
+        detail = insights.artist(self.conn, a)
+        self.assertEqual((detail["n_loved"], detail["n_tracks"]), (2, 4))  # what the top-tracks subtitle divides
+
 
 class LoveTimingTests(Base):
     def test_love_timing_on_the_track_page_and_the_two_cards(self):

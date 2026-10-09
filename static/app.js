@@ -362,7 +362,7 @@
   // ---------- library: one table for every kind and period ----------
   const KINDS = [["artist", "Artists"], ["track", "Tracks"], ["album", "Albums"], ["genre", "Genres"]];
   const LIB_COLS = {
-    artist: [["name", "Artist"], ["plays", "Plays", "num"], ["tracks", "Tracks", "num"], ["years", "Years", "num"], ["first", "First heard"], ["last", "Last played"]],
+    artist: [["name", "Artist"], ["plays", "Plays", "num"], ["tracks", "Tracks", "num"], ["years", "Years", "num"], ["loved", "Loved", "num"], ["first", "First heard"], ["last", "Last played"]],
     track: [["name", "Track"], ["artist", "Artist"], ["plays", "Plays", "num"], ["first", "First played"], ["last", "Last played"]],
     album: [["name", "Album"], ["artist", "Artist"], ["plays", "Plays", "num"], ["tracks", "Tracks heard", "num"], ["released", "Released"], ["last", "Last played"]],
     genre: [["name", "Genre"], ["plays", "Share", "num"], [null, "Your artists"]],
@@ -403,6 +403,7 @@
     const rows = {
       artist: (a, i) => html`<tr>${rank(i)}<td><a class="who" href="#/artist/${a.id}">${initial(a.name)}<span>${a.name}</span></a></td>
         <td class="num strong">${Fmt.int(a.plays)}</td><td class="num">${Fmt.int(a.tracks)}</td><td class="num">${a.years}</td>
+        <td class="num">${a.loved ? html`${Fmt.int(a.loved)}${a.loved_rate != null ? html` <span class="secondary" title="${Fmt.pct(a.loved_rate)} of the tracks played">· ${Fmt.pct(a.loved_rate)}<span class="sr-only"> of the tracks played</span></span>` : ""}` : "–"}</td>
         <td>${Fmt.date(a.first_ts)}</td><td>${Fmt.date(a.last_ts)}</td></tr>`,
       track: (t, i) => html`<tr>${rank(i)}<td><a class="who" href="#/track/${t.id}">${initial(t.name)}<span>${t.name}</span></a></td>
         <td>${link.artist(t.artist_id, t.artist)}</td><td class="num strong">${Fmt.int(t.plays)}</td><td>${Fmt.date(t.first_ts)}</td><td>${Fmt.date(t.last_ts)}</td></tr>`,
@@ -647,7 +648,7 @@
         sub: "Cumulative plays: a steeper line is a faster pace. Compare up to six artists." })}
       <div class="grid cols-3">
         ${card("Top tracks", rankList(a.tracks.slice(0, 6), { href: trackHref, name: lovedName }),
-          a.n_loved ? { sub: `${Fmt.int(a.n_loved)} loved on last.fm` } : {})}
+          a.n_loved ? { sub: `${Fmt.int(a.n_loved)} loved on last.fm, ${Fmt.pct(a.n_loved / a.n_tracks)} of the tracks you've played` } : {})}
         ${card("Albums", a.albums.length ? rankList(a.albums.slice(0, 6), { href: albumHref, nobar: true, cover: (t) => ({ name: t.name, url: t.image_url }),
           sub: (t) => `${t.release_date ? `${year(t.release_date)} · ` : ""}${t.n_tracks} tracks` }) : html`<p class="empty">No albums.</p>`)}
         ${card("Played alongside", a.related.length ? html`<div class="chips">${a.related.slice(0, 10).map((r) => {

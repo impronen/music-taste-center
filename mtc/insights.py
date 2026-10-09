@@ -27,6 +27,8 @@ LOVE_TIMING = ("SELECT lv.track_id, lv.loved_at, MIN(s.ts) AS first_ts, COUNT(*)
 # Plays in the first month of the history may continue listening from before it, so a track
 # first played then can't be called a first listen.
 HISTORY_GRACE = 30 * DAY
+# loved tracks per artist, as artist()'s n_loved
+LOVED_BY_ARTIST = f"SELECT t.artist_id, COUNT(*) AS n FROM ({LOVED}) lv JOIN tracks t ON t.id = lv.track_id GROUP BY 1"
 
 
 def _rows(cur) -> list[dict]:
@@ -334,7 +336,7 @@ def artists(conn: sqlite3.Connection, q: str = "", sort: str = "plays", limit: i
 # natural direction (most plays, newest first, A–Z for names).
 _LIB_SORTS = {
     "artist": {"plays": "plays DESC", "name": "name COLLATE NOCASE ASC", "tracks": "tracks DESC", "years": "years DESC, plays DESC",
-               "first": "first_ts ASC", "last": "last_ts DESC"},
+               "first": "first_ts ASC", "last": "last_ts DESC", "loved": "loved DESC, plays DESC"},
     "track": {"plays": "plays DESC", "name": "name COLLATE NOCASE ASC", "artist": "artist COLLATE NOCASE ASC, plays DESC",
               "first": "first_ts ASC", "last": "last_ts DESC"},
     "album": {"plays": "plays DESC", "name": "name COLLATE NOCASE ASC", "artist": "artist COLLATE NOCASE ASC, plays DESC",
@@ -367,13 +369,20 @@ def library(conn: sqlite3.Connection, kind: str = "artist", start: str | None = 
     if kind == "artist" and not start and not end and artist_id is None:
         # all time: the precomputed artist_stats answer this without touching the scrobbles
         name_where = "a.name_key LIKE ? ESCAPE '\\'" if q else "1=1"
-        base = ("SELECT a.id, a.name, st.plays, st.n_tracks AS tracks, st.n_years AS years, st.first_ts, st.last_ts"
-                f" FROM artist_stats st JOIN artists a ON a.id = st.artist_id WHERE {name_where}")
+        base = ("SELECT a.id, a.name, st.plays, st.n_tracks AS tracks, st.n_years AS years, st.first_ts, st.last_ts,"
+                " COALESCE(lc.n, 0) AS loved, 1.0 * lc.n / st.n_tracks AS loved_rate"
+                f" FROM artist_stats st JOIN artists a ON a.id = st.artist_id LEFT JOIN ({LOVED_BY_ARTIST}) lc"
+                f" ON lc.artist_id = a.id WHERE {name_where}")
         args = [pat] if q else []
     elif kind == "artist":
-        base = ("SELECT a.id, a.name, COUNT(*) AS plays, COUNT(DISTINCT s.track_id) AS tracks, st.n_years AS years,"
-                " st.first_ts, MAX(s.ts) AS last_ts FROM scrobbles s JOIN artists a ON a.id = s.artist_id"
-                f" JOIN artist_stats st ON st.artist_id = a.id WHERE {where} GROUP BY a.id")
+        # in a period, both figures cover only the tracks played in it, so the cell reconciles
+        # (count ÷ tracks); over the whole span they equal the all-time ones
+        base = ("SELECT b.*, CASE WHEN b.loved THEN 1.0 * b.loved / b.tracks END AS loved_rate"
+                " FROM (SELECT a.id, a.name, COUNT(*) AS plays, COUNT(DISTINCT s.track_id) AS tracks, st.n_years AS years,"
+                " st.first_ts, MAX(s.ts) AS last_ts, COUNT(DISTINCT CASE WHEN s.track_id IN"
+                " (SELECT track_id FROM loved WHERE track_id IS NOT NULL) THEN s.track_id END) AS loved"
+                " FROM scrobbles s JOIN artists a ON a.id = s.artist_id"
+                f" JOIN artist_stats st ON st.artist_id = a.id WHERE {where} GROUP BY a.id) b")
     elif kind == "track":
         base = ("SELECT t.id, t.title AS name, a.id AS artist_id, a.name AS artist, COUNT(*) AS plays,"
                 " MIN(s.ts) AS first_ts, MAX(s.ts) AS last_ts FROM scrobbles s JOIN tracks t ON t.id = s.track_id"

@@ -16,8 +16,8 @@ The details behind the pages: what is measured, how, and what is sent to the int
 | Page | What it shows |
 |---|---|
 | **Overview** | Any period: last 7/30/90 days, last year, all time, a calendar year or month, or a custom date range. Totals with the change vs the previous period, scrobbles per day (up to 120 days) or per month, top artists, tracks and albums, new discoveries, and a listening clock. Also all-time *novelty* (share of plays going to artists discovered in the previous 12 months) and recent plays |
-| **Library** | Every artist, sortable and filterable, plus top artists, tracks, albums or genres for any period (the same period bar, or a day or month clicked on a chart) |
-| **Artist** | Plays per month, a *velocity* chart (cumulative plays, comparable across up to six artists), top tracks and albums, *how you discovered them* (the artist you were playing right before), who they *led you to*, artists *listened alongside*, and time of day |
+| **Library** | Every artist, sortable and filterable, plus top artists, tracks, albums or genres for any period (the same period bar, or a day or month clicked on a chart). The artists' *Loved* column counts their tracks loved on last.fm and the love rate: the share of the artist's tracks you've played that are loved. In a period both cover only the tracks played in that period |
+| **Artist** | Plays per month, a *velocity* chart (cumulative plays, comparable across up to six artists), top tracks (with how many are loved on last.fm, and what share of the tracks you've played that is) and albums, *how you discovered them* (the artist you were playing right before), who they *led you to*, artists *listened alongside*, and time of day |
 | **Connections** | Force graph of your top artists, linked by co-listening, with taste clusters found automatically |
 | **Eras** | Per year: top artists, the *signature* artist (most over-represented compared with all time), and the biggest new discovery |
 | **Cleanup** | Merge artists that are spelled in more than one way, with suggested duplicates and name rules that fix future imports |
