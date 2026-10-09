@@ -1102,8 +1102,10 @@
       row: (r) => [artistHref(r), r.name, `${Fmt.int(r.plays)} plays`, `${Fmt.int(r.n_tracks)} tracks`],
       empty: () => "Nothing yet." },
   ];
+  // " · ♥ 3 loved" after a Rediscover reason when the artist has loved tracks (they weigh in the rank)
+  const lovedCount = (n) => (n > 0 ? html` · <span class="loved count" title="${Fmt.int(n)} loved on last.fm">${icon("heart", 14)} ${Fmt.int(n)} loved<span class="sr-only"> ${n === 1 ? "track" : "tracks"}</span></span>` : "");
   const REDISCOVER = { kind: "rediscover", title: "Rediscover", sub: "Artists you used to play alongside your current favourites, untouched for a year.",
-    row: (r, ref) => [artistHref(r), r.name, html`because you're into ${r.because.slice(0, 2).map((b, k) => html`${k ? " and " : ""}${b.name}`)}`, Fmt.ago(r.last_ts, ref)],
+    row: (r, ref) => [artistHref(r), r.name, html`because you're into ${r.because.slice(0, 2).map((b, k) => html`${k ? " and " : ""}${b.name}`)}${lovedCount(r.loved)}`, Fmt.ago(r.last_ts, ref)],
     empty: (years) => (years < 1 ? "Needs a year of history." : "Nothing to rediscover: you still play everything you used to pair with your favourites.") };
   const seeAll = (kind, label) => html`<a class="more" href="#/insights/${kind}">See all ${label.toLowerCase()} →</a>`;
 
@@ -1130,7 +1132,7 @@
           ${i.rediscover.length > tiles ? html`<p class="card-foot">${seeAll("rediscover", "rediscoveries")}</p>` : ""}</div>
         ${i.rediscover.length ? html`<div class="tiles-2">${i.rediscover.slice(0, tiles).map((r) => html`<a class="tile-link" href="#/artist/${r.id}">
             <span class="top-line"><b>${r.name}</b><span class="ago">${Fmt.ago(r.last_ts, ref)}</span></span>
-            <span class="why">because you're into ${r.because.slice(0, 2).map((b, k) => html`${k ? " and " : ""}<b>${b.name}</b>`)}</span></a>`)}</div>`
+            <span class="why">because you're into ${r.because.slice(0, 2).map((b, k) => html`${k ? " and " : ""}<b>${b.name}</b>`)}${lovedCount(r.loved)}</span></a>`)}</div>`
           : html`<p>${REDISCOVER.empty(years)}</p>`}
       </section>
       <div class="columns-3">${sections.map(([d, body, foot]) => card(d.title, body, { id: d.kind, cls: d.cls, sub: d.sub, foot }))}</div>`);

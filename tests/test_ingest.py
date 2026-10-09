@@ -1,8 +1,11 @@
+import math
 import tempfile
 import unittest
+from collections import defaultdict
 from pathlib import Path
 
-from mtc import db, derive, fsutil, ingest, insights
+from mtc import db, derive, fsutil, ingest, insights, updater
+from mtc.ingest import Scrobble
 from tests import synthetic
 
 
@@ -145,6 +148,151 @@ class ImportTests(unittest.TestCase):
         self.assertEqual(detail["plays"], top["plays"])
         self.assertEqual(sum(m["plays"] for m in detail["monthly"]), top["plays"])
         self.assertEqual(sum(detail["hours"]), top["plays"])
+
+
+def rediscover_before_loved(conn, limit):
+    """Rediscover as it was before loved tracks counted, frozen here to prove nothing changes
+    while nothing is loved."""
+    hi = conn.execute("SELECT MAX(ts) FROM scrobbles").fetchone()[0]
+    core = dict(conn.execute(
+        "SELECT artist_id, COUNT(*) FROM scrobbles WHERE ts > ? GROUP BY artist_id ORDER BY 2 DESC LIMIT 20",
+        (hi - 90 * 86400,)))
+    names = dict(conn.execute("SELECT id, name FROM artists"))
+    stale = {a: (p, last) for a, p, last in conn.execute(
+        "SELECT artist_id, plays, last_ts FROM artist_stats WHERE last_ts < ? AND plays >= 5", (hi - 365 * 86400,))}
+    scores, because = defaultdict(float), defaultdict(list)
+    marks = ",".join("?" * len(core))
+    for a, b, score in conn.execute(
+            f"SELECT a, b, score FROM artist_links WHERE a IN ({marks}) OR b IN ({marks})", (*core, *core)):
+        for src, dst in ((a, b), (b, a)):
+            if src in core and dst in stale:
+                scores[dst] += score
+                because[dst].append((score, src))
+    ranked = sorted(scores, key=lambda a: (-scores[a] * math.log1p(stale[a][0]), a))[:limit]
+    return [{"id": a, "name": names[a], "plays": stale[a][0], "last_ts": stale[a][1], "score": scores[a],
+             "because": [{"id": s, "name": names[s]} for _, s in sorted(because[a], reverse=True)[:3]]}
+            for a in ranked]
+
+
+class RediscoverSyntheticTests(unittest.TestCase):
+    """The full synthetic history (2 800 days) has artists that fell out of rotation."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.TemporaryDirectory()
+        csv = Path(cls.tmp.name) / "export.csv"
+        csv.write_text(synthetic.to_csv(synthetic.generate()), encoding="utf-8")
+        cls.conn = db.connect(Path(cls.tmp.name) / "t.db")
+        ingest.import_csv(cls.conn, csv)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.conn.close()
+        cls.tmp.cleanup()
+
+    def tearDown(self):
+        updater.store_loved(self.conn, [])
+
+    def assert_pages(self):
+        full = insights.insight_list(self.conn, "rediscover", limit=500)["items"]
+        self.assertGreater(len(full), 3)
+        self.assertEqual(full[:15], insights.insights(self.conn)["rediscover"])
+        first = insights.insight_list(self.conn, "rediscover", limit=3)
+        rest = insights.insight_list(self.conn, "rediscover", limit=500, offset=3)["items"]
+        self.assertEqual(first["items"] + rest, full)
+        self.assertTrue(first["has_more"])
+        return full
+
+    def test_without_loved_tracks_nothing_changes(self):
+        got = insights.rediscover(self.conn, 500)
+        self.assertGreater(len(got), 3)
+        self.assertEqual([r.pop("loved") for r in got], [0] * len(got))
+        self.assertEqual(got, rediscover_before_loved(self.conn, 500))
+        self.assert_pages()
+
+    def test_loved_tracks_lift_an_artist_and_paging_still_works(self):
+        items = insights.rediscover(self.conn, 500)
+        last = items[-1]["name"]
+        self.assertGreaterEqual(items[-1]["plays"], insights.REDISCOVER_MIN_PLAYS)  # so all four loves count
+        titles = [t for (t,) in self.conn.execute(
+            "SELECT t.title FROM tracks t JOIN artists a ON a.id = t.artist_id WHERE a.name = ? ORDER BY t.id LIMIT 4",
+            (last,))]
+        updater.store_loved(self.conn, [(last, t, 1) for t in titles])
+        full = self.assert_pages()
+        names = [r["name"] for r in full]
+        # the same artists, with the loved one's rank tripled (4 loves = the 3× cap)
+        expected = [r["name"] for r in sorted(items, key=lambda r: (
+            -r["score"] * math.log1p(r["plays"]) * (3 if r["name"] == last else 1), r["id"]))]
+        self.assertEqual(names, expected)
+        self.assertLess(names.index(last), len(names) - 1)
+        self.assertEqual({r["name"]: r["loved"] for r in full if r["loved"]}, {last: 4})
+
+
+class RediscoverLovedTests(unittest.TestCase):
+    """A small history: Core is played now; X, Y and Z were played alongside it over a year ago.
+    X and Y have identical histories (6 plays, 6 shared sessions); Z has 3 plays."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.conn = db.connect(Path(self.tmp.name) / "t.db")
+        t0, day = 1_600_000_000 - 1_600_000_000 % 60, 86400
+        recs = []
+        for d in range(6):
+            ts = t0 + d * day
+            recs += [Scrobble("Core", f"c{d}", ts), Scrobble("Ex", f"x{d}", ts + 180), Scrobble("Why", f"y{d}", ts + 360)]
+            if d < 3:
+                recs.append(Scrobble("Zed", f"z{d}", ts + 540))
+        recs += [Scrobble("Core", f"c{d}", t0 + d * day) for d in range(400, 410)]
+        recs.append(Scrobble("Solo", "s0", t0 + 20 * day))  # a session of its own: no links
+        ingest.ingest_records(self.conn, recs, source="csv")
+        derive.rebuild(self.conn)
+        self.id = dict(self.conn.execute("SELECT name, id FROM artists"))
+        self.track = {"Ex": "x", "Why": "y"}  # track title prefixes
+
+    def tearDown(self):
+        self.conn.close()
+        self.tmp.cleanup()
+
+    def names(self):
+        return [r["name"] for r in insights.rediscover(self.conn)]
+
+    def love(self, *pairs):
+        updater.store_loved(self.conn, [(a, t, 1) for a, t in pairs])
+
+    def test_a_loved_artist_outranks_an_otherwise_equal_one(self):
+        lo, hi = sorted(["Ex", "Why"], key=self.id.get)
+        self.assertEqual(self.names(), [lo, hi])  # a tie goes to the lower id; Zed has too few plays
+        self.love((hi, self.track[hi] + "0"))
+        items = insights.rediscover(self.conn)
+        self.assertEqual([(r["name"], r["loved"]) for r in items], [(hi, 1), (lo, 0)])
+
+    def test_a_loved_artist_with_few_plays_gets_in_when_linked(self):
+        self.love(("Zed", "z0"))
+        items = {r["name"]: r for r in insights.rediscover(self.conn)}
+        self.assertEqual((items["Zed"]["plays"], items["Zed"]["loved"]), (3, 1))
+        self.love(("Zed", "z0"), ("Solo", "s0"))  # loved and stale, but never played alongside Core
+        self.assertEqual(self.names(), ["Ex", "Why", "Zed"] if self.id["Ex"] < self.id["Why"] else ["Why", "Ex", "Zed"])
+
+    def test_a_low_play_artist_counts_one_love_at_most(self):
+        # Zed (3 plays, 3 shared sessions) with every track loved would beat Ex and Why (6 shared
+        # sessions each) at the full 3×; let in on a love, it counts one, and stays below them.
+        self.love(("Zed", "z0"), ("Zed", "z1"), ("Zed", "z2"))
+        items = insights.rediscover(self.conn)
+        lo, hi = sorted(["Ex", "Why"], key=self.id.get)
+        self.assertEqual([(r["name"], r["loved"]) for r in items], [(lo, 0), (hi, 0), ("Zed", 3)])
+        z, x = items[2], items[0]
+        full = z["score"] * math.log1p(z["plays"]) * insights.loved_boost(3)
+        self.assertGreater(full, x["score"] * math.log1p(x["plays"]))  # the cap is what keeps it below
+
+    def test_the_boost_is_bounded(self):
+        self.assertEqual(insights.loved_boost(0), 1)
+        self.assertEqual(insights.loved_boost(1), 1.5)
+        self.assertEqual(insights.loved_boost(4), insights.loved_boost(100))
+        lo, hi = sorted(["Ex", "Why"], key=self.id.get)
+        self.love(*[(hi, f"{self.track[hi]}{d}") for d in range(6)], *[(lo, f"{self.track[lo]}{d}") for d in range(4)])
+        items = insights.rediscover(self.conn)
+        # six loves count no more than four: still a tie, which the lower id wins
+        self.assertEqual([(r["name"], r["loved"]) for r in items], [(lo, 4), (hi, 6)])
 
 
 if __name__ == "__main__":
