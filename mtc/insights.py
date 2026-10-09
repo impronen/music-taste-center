@@ -755,9 +755,35 @@ def _loved_count(conn: sqlite3.Connection) -> int:
     return conn.execute("SELECT COUNT(*) FROM loved_tracks").fetchone()[0]
 
 
+# Rediscover: how far back "stale" starts, the plays an unloved stale artist needs, and the loved boost.
+REDISCOVER_STALE_DAYS = 365
+REDISCOVER_MIN_PLAYS = 5
+LOVED_BOOST_PER_TRACK = 0.5
+LOVED_BOOST_MAX_TRACKS = 4
+
+
+def loved_boost(n_loved: int) -> float:
+    """Rank multiplier for an artist with `n_loved` loved tracks: 1 + 0,5 per loved track, counting
+    at most 4, so 1× (none), 1,5× (one) ... 3× (four or more)."""
+    return 1 + LOVED_BOOST_PER_TRACK * min(n_loved, LOVED_BOOST_MAX_TRACKS)
+
+
 def rediscover(conn: sqlite3.Connection, limit: int = 15) -> list[dict]:
     """Recommendations from your own library: artists strongly linked (co-listened) with what
-    you play now, but not played in the past year."""
+    you play now, but not played in the past year.
+
+    Candidates are artists last played over a year before the newest scrobble, with at least 5
+    plays, or with any number of plays when you've loved one of their tracks on last.fm (a love is
+    a stronger signal than a handful of plays). Only artists linked to one of your 20 most played
+    artists of the last 90 days score at all, so a loved artist still needs links to appear.
+
+    Rank = (sum of link scores to those artists) × log1p(plays) × loved_boost(loved tracks).
+    The boost is bounded (1 + 0,5 per loved track, at most 3×): one love lifts an artist by half,
+    more loves keep helping a little, but loving a whole album can't bury a far better co-listening
+    match. An artist let in on a love with fewer than 5 plays counts at most one love (1,5×): the
+    Ochiai link score already runs high for artists with few sessions, so it gets in but can't jump
+    far ahead of established artists. With nothing loved every boost is exactly 1, so the order is
+    the plain link × plays one. Ties go to the lower artist id."""
     lo, hi = _span(conn)
     if hi is None:
         return []
@@ -767,8 +793,12 @@ def rediscover(conn: sqlite3.Connection, limit: int = 15) -> list[dict]:
     if not core:
         return []
     names = dict(conn.execute("SELECT id, name FROM artists"))
+    loved = dict(conn.execute(
+        f"SELECT t.artist_id, COUNT(*) FROM ({LOVED}) lv JOIN tracks t ON t.id = lv.track_id GROUP BY t.artist_id"))
     stale = {a: (p, last) for a, p, last in conn.execute(
-        "SELECT artist_id, plays, last_ts FROM artist_stats WHERE last_ts < ? AND plays >= 5", (hi - 365 * DAY,))}
+        "SELECT artist_id, plays, last_ts FROM artist_stats WHERE last_ts < ? AND (plays >= ? OR artist_id IN"
+        f" (SELECT t.artist_id FROM ({LOVED}) lv JOIN tracks t ON t.id = lv.track_id))",
+        (hi - REDISCOVER_STALE_DAYS * DAY, REDISCOVER_MIN_PLAYS))}
     scores: defaultdict[int, float] = defaultdict(float)
     because: defaultdict[int, list] = defaultdict(list)
     marks = ",".join("?" * len(core))
@@ -779,9 +809,15 @@ def rediscover(conn: sqlite3.Connection, limit: int = 15) -> list[dict]:
             if src in core and dst in stale:
                 scores[dst] += score
                 because[dst].append((score, src))
-    ranked = sorted(scores, key=lambda a: (-scores[a] * math.log1p(stale[a][0]), a))[:limit]
+    def boost(a: int) -> float:
+        n = loved.get(a, 0)
+        return loved_boost(n if stale[a][0] >= REDISCOVER_MIN_PLAYS else min(n, 1))
+
+    rank = {a: scores[a] * math.log1p(stale[a][0]) * boost(a) for a in scores}
+    ranked = sorted(scores, key=lambda a: (-rank[a], a))[:limit]
     return [
         {"id": a, "name": names[a], "plays": stale[a][0], "last_ts": stale[a][1], "score": scores[a],
+         "loved": loved.get(a, 0),
          "because": [{"id": s, "name": names[s]} for _, s in sorted(because[a], reverse=True)[:3]]}
         for a in ranked
     ]
