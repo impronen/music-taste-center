@@ -1269,13 +1269,18 @@
         <small>${what}${mine ? html`<br>${r.artists.map(playsLine).join(" / ")}` : ""}</small></div>
       <span class="ext">${extra}</span></li>`;
   }
+  const PROMPT_TASKS = [["releases", "New releases"], ["discover", "New artists"], ["profile", "Taste only"]];
+  let copyTimer = 0;
   let upcomingRefresh = null; // the running refresh, so a re-render doesn't start another
   let upcomingAutoAt = 0;     // when the page last refreshed by itself (at most every 10 minutes, so a failing source can't loop)
   const upcomingOpen = new Set(); // weeks whose "Also out" list is open, kept across re-renders
   async function upcomingView(params) {
     const seq = rendering;
     const all = params.get("show") === "all";
-    const [u, ov] = await Promise.all([api("/api/upcoming", { fresh: true }), api("/api/overview")]);
+    const task = PROMPT_TASKS.some(([k]) => k === params.get("prompt")) ? params.get("prompt") : "releases";
+    const here = (o) => "#/upcoming?" + qs({ show: all ? "all" : null, prompt: task === "releases" ? null : task, ...o });
+    const [u, ov, tp] = await Promise.all([api("/api/upcoming", { fresh: true }), api("/api/overview"),
+      api("/api/taste-prompt?" + qs({ task }), { fresh: true }).catch(() => ({ text: "" }))]); // the releases show without it
     const keep = (r) => all || r.release_type !== "Single";
     const src = u.sources;
     const checked = Math.max(0, ...Object.values(src).map((s) => s.at ?? 0)); // the newest list; a failing source says so below
@@ -1299,6 +1304,12 @@
       ${!checked && !busy ? html`<p class="empty box">Nothing fetched yet.</p>` : ""}
       ${ov.empty ? "" : !anyMine && checked ? html`<p class="empty box">None of your artists has a release coming in these weeks${all ? "" : " (singles hidden)"}.
         Release ids come with the metadata fetch on the Import page, which helps matching.</p>` : ""}
+      ${tp.text ? card("Research prompt for any AI", html`<pre class="prompt" id="prompt-text" tabindex="0" role="region" aria-label="The prompt">${tp.text}</pre>`, {
+        sub: "Your taste, weighted to what you play now and to genres over artist names, with a ready task. Paste it into ChatGPT, Claude, Gemini or any agent that can search the web.",
+        aside: html`<div class="seg" role="group" aria-label="Task">${PROMPT_TASKS.map(([k, l]) => html`<button type="button" data-prompt="${k}" aria-pressed="${String(k === task)}">${l}</button>`)}</div>
+          <button type="button" class="btn primary small" id="copy-prompt">Copy</button><span class="sr-only" role="status" id="copy-status"></span>`,
+        id: "prompt", cls: "sage-soft",
+      }) : ""}
       <nav class="jumpbar" aria-label="Jump to a week">${u.weeks.map((w) => html`<button type="button" data-to="wk-${w.friday}">${Fmt.day(w.friday)}
         <span class="count">${Fmt.int(w.mine.filter(keep).length)}</span></button>`)}</nav>
       ${u.weeks.map((w) => {
@@ -1314,8 +1325,26 @@
         });
       })}`);
     view.querySelectorAll("[data-show]").forEach((b) => b.addEventListener("click", () => {
-      location.hash = "#/upcoming" + (b.dataset.show === "all" ? "?show=all" : "");
+      location.hash = here({ show: b.dataset.show === "all" ? "all" : null });
     }));
+    view.querySelectorAll("[data-prompt]").forEach((b) => b.addEventListener("click", () => {
+      location.hash = here({ prompt: b.dataset.prompt === "releases" ? null : b.dataset.prompt });
+    }));
+    view.querySelector("#copy-prompt")?.addEventListener("click", async (e) => {
+      const b = e.currentTarget, pre = view.querySelector("#prompt-text"), status = view.querySelector("#copy-status");
+      clearTimeout(copyTimer);
+      status.textContent = ""; // so a second copy is announced again
+      try {
+        await navigator.clipboard.writeText(tp.text);
+        b.textContent = "Copied";
+      } catch { // no clipboard access: select the text so Cmd/Ctrl+C works
+        pre.focus();
+        getSelection().selectAllChildren(pre);
+        b.textContent = "Selected: press Cmd/Ctrl+C";
+      }
+      status.textContent = b.textContent;
+      copyTimer = setTimeout(() => { b.textContent = "Copy"; status.textContent = ""; }, 2500);
+    });
     view.querySelectorAll("[data-to]").forEach((b) => b.addEventListener("click", () => {
       document.getElementById(b.dataset.to).setAttribute("tabindex", "-1");
       scrollToId(b.dataset.to);
@@ -1876,7 +1905,7 @@
   function focusKey(el) {
     if (!el || !view.contains(el)) return null;
     if (el.id) return `#${CSS.escape(el.id)}`;
-    for (const a of ["data-sort", "data-kind", "data-period", "data-n", "data-k", "data-year", "data-to", "data-show"]) {
+    for (const a of ["data-sort", "data-kind", "data-period", "data-n", "data-k", "data-year", "data-to", "data-show", "data-prompt"]) {
       if (el.hasAttribute(a)) return `[${a}="${CSS.escape(el.getAttribute(a))}"]`;
     }
     return null;

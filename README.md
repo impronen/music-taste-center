@@ -97,7 +97,7 @@ It works through your most-played artists and albums first, in the background, w
 | **Rhythms** | Genres (or places) through the year, the week and the day, seasonal artists, and how varied your taste is |
 | **Decades** | Release decades, the age of the music you play, how long you took to find albums, and older records |
 | **Insights** | Rediscover, on the rise, forgotten favourites, obsessions, staying power, gateways, binges, loved tracks you've left behind and more |
-| **Upcoming** | New albums and EPs for this Friday and the six after it, by the artists you play first |
+| **Upcoming** | New albums and EPs for this Friday and the six after it, by the artists you play first, and a ready-made prompt about your taste to paste into any AI assistant (new releases, new artists, or just your taste) |
 | **Cleanup** (broom icon) | Merge duplicate spellings of an artist; the fix sticks for future imports |
 | **Import** (upload icon) | Add scrobbles, connect your account, and fetch genres, covers and release dates |
 

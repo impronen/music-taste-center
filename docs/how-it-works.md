@@ -12,6 +12,7 @@ The details behind the pages: what is measured, how, and what is sent to the int
 - [Cleaning up duplicate artists](#cleaning-up-duplicate-artists)
 - [The live updater](#the-live-updater)
 - [Upcoming releases](#upcoming-releases)
+- [The research prompt](#the-research-prompt)
 
 ## The pages in detail
 
@@ -26,7 +27,7 @@ The details behind the pages: what is measured, how, and what is sent to the int
 | **Rhythms** | How genres (or places) move through the year, the week and the day: a genre × month heatmap, what stands out each season, time of day, weekdays vs weekends, seasonal artists (with "coming up"), genre drift per year, and how varied your mix is |
 | **Decades** | Release decades, the age of the music you play, how long you took to find albums, and older records (see [Decades](#decades)) |
 | **Insights** | Rediscover (recommendations from your own past), on the rise, forgotten favourites, obsessions, staying power, gateways, binges, one-track artists, loved then left, not loved (yet), love at first listen, slow burners, deep dives, and what you love vs what you play (see [below](#what-you-love-vs-what-you-play)); "See all" on a card opens the full list (`#/insights/binges` etc.), 50 more at a time up to 500 |
-| **Upcoming** | New releases for this Friday and the six after it, by artists you play first (see [Upcoming releases](#upcoming-releases)) |
+| **Upcoming** | New releases for this Friday and the six after it, by artists you play first (see [Upcoming releases](#upcoming-releases)), and a research prompt about your taste for any AI assistant (see [The research prompt](#the-research-prompt)) |
 | **Import** (upload icon) | Add a CSV (a scrobble is identified by time, artist and track, so rows already stored are skipped), connect your last.fm account, and fetch tags, covers and release dates |
 
 ## Artist velocity
@@ -152,3 +153,13 @@ The Upcoming page lists what comes out on this Friday and the six after it, by t
 - **Order.** Yours are ranked by how much you play the artist: log(1 + all-time plays) + 1,5 × log(1 + plays in the 12 months up to your latest scrobble) + 0,5 × loved tracks (at most 6). So a current favourite comes before an old one with more plays.
 - **The rest.** Each week also lists the rest of Wikipedia's releases under *Also out*, and counts the other albums and EPs ListenBrainz knows, with a link there. Singles are hidden unless you pick **With singles**.
 - **Data.** `GET /api/upcoming` (the stored lists) and `POST /api/upcoming/refresh` (fetch again; one at a time).
+
+## The research prompt
+
+The Upcoming page also writes your taste as a prompt you can copy into any AI assistant that can search the web (ChatGPT, Claude, Gemini…), so it can do the research the app can't. The app sends nothing anywhere; you paste the text yourself, so read it first if you like.
+
+- **Recent listening counts more.** Each play is weighted by its age: the weight halves every 3 months before your latest scrobble, so "now" means roughly the last few months without a hard cut-off.
+- **Genres before artists.** The weighted plays are split over each artist's top genre tags, as in the genre profile. The prompt lists the genres you're into now (as shares of all your recent listening, and says how much of it has no genre tags), the ones *rising* (share among tagged artists now at least 1,5× the all-time share, both shares plus 0,5 points so tiny genres can't jump, and at least 10 weighted plays), the long-term core, the ones *fading* (at most 0,5×), the genres you love more often than you play (from [What you love vs what you play](#what-you-love-vs-what-you-play)) and the scenes with at least 5 % of recent listening (an artist with a place tag such as finnish counts fully for that scene). Rising and fading are left out when less than half of your recent listening has genre tags.
+- **Artists as examples.** The most played artists now, recent discoveries (first played in the last 6 months, 5+ plays), all-time staples and your most recently loved tracks. The prompt tells the assistant that the genres matter more than these names.
+- **Tasks.** *New releases* asks for 10 to 15 albums and EPs on this Friday and the next, mostly by artists you don't play yet, with dates checked against a source, and lists the releases the page already found so they aren't repeated; Finnish music media are named when the finnish scene matters. *New artists* asks for 10 artists to explore. *Taste only* is the profile alone, for your own question.
+- **Data.** `GET /api/taste-prompt?task=releases|discover|profile`, cached until the next import, merge, tag fetch or loved-tracks update.
