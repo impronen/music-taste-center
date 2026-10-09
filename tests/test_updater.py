@@ -379,5 +379,39 @@ class LovedTests(Base):
         self.assertEqual(cards["loved_count"], 2)
 
 
+class LoveTimingTests(Base):
+    def test_love_timing_on_the_track_page_and_the_two_cards(self):
+        d0 = T0 + 60 * DAY
+        recs = [Scrobble("A", "Early", T0)]  # the history starts here
+        recs += [Scrobble("A", "Quick", d0 + i * DAY) for i in range(6)]
+        recs += [Scrobble("A", "Slow", T0 + 40 * DAY + i * DAY) for i in range(15)]
+        recs += [Scrobble("A", "Pre", d0 + 10 * DAY), Scrobble("A", "Just", d0 + 20 * DAY)]
+        ingest.ingest_records(self.conn, recs, source="csv")
+        derive.rebuild(self.conn)
+        updater.store_loved(self.conn, [("A", "Quick", d0 + 120), ("A", "Slow", T0 + 51 * DAY + 60),
+                                        ("A", "Early", T0 + 120), ("A", "Pre", d0), ("A", "Just", d0 + 20 * DAY - 3600)])
+        ids = dict(self.conn.execute("SELECT title, id FROM tracks"))
+        love = {name: insights.track(self.conn, ids[name])["love"] for name in ("Quick", "Slow", "Early", "Pre", "Just")}
+        # loved two minutes into the first play: that play was still going, so none were over
+        self.assertEqual(love["Quick"], {"plays_before": 0, "after_s": 120, "before_first": False,
+                                         "just_before": False, "history_start": False})
+        self.assertEqual((love["Slow"]["plays_before"], love["Slow"]["after_s"]), (11, 11 * DAY + 60))
+        self.assertTrue(love["Early"]["history_start"])  # its first plays may predate the history
+        self.assertTrue(love["Pre"]["before_first"])
+        self.assertEqual((love["Just"]["just_before"], love["Just"]["before_first"], love["Just"]["plays_before"]), (True, False, 0))
+        cards = insights.insights(self.conn)
+        self.assertEqual(sorted(t["name"] for t in cards["instant_love"]), ["Just", "Quick"])  # not Early (history start) nor Pre
+        self.assertEqual([(t["name"], t["plays_before"]) for t in cards["slow_burners"]], [("Slow", 11)])
+        self.assertEqual({t["plays_before"] for t in cards["instant_love"]}, {0})  # the card's SQL agrees with track()
+
+    def test_a_love_from_before_the_history_has_no_timing(self):
+        ingest.ingest_records(self.conn, [Scrobble("A", "Song", T0)], source="csv")
+        derive.rebuild(self.conn)
+        updater.store_loved(self.conn, [("A", "Song", T0 - DAY)])
+        song = self.conn.execute("SELECT id FROM tracks").fetchone()[0]
+        detail = insights.track(self.conn, song)
+        self.assertEqual((detail["loved_at"], detail["love"]), (T0 - DAY, None))
+
+
 if __name__ == "__main__":
     unittest.main()

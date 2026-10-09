@@ -100,6 +100,27 @@
   const artistHref = (it) => `#/artist/${it.id}`;
   const trackHref = (it) => `#/track/${it.id}`;
   const albumHref = (it) => `#/album/${it.id}`;
+  // a length of time: "the same day", "1 day", "12 days", "5 months", "2,5 years"
+  const span = (seconds) => {
+    const days = Math.round(seconds / 86400);
+    return days < 1 ? "the same day" : days === 1 ? "1 day" : Fmt.ago(0, seconds).replace(" ago", "");
+  };
+  const nPlays = (n) => `${Fmt.int(n)} ${n === 1 ? "play" : "plays"}`;
+  // how a loved track was loved (track page). A track first played in the history's first month
+  // may have been played before it, so it gets "at least" and no claims about the first listen.
+  function loveTiming(lv) {
+    const n = lv.plays_before;
+    if (lv.history_start) {
+      if (lv.before_first || lv.just_before) return "Loved before its first scrobble here.";
+      return n === 0 ? "Loved during its first scrobble here."
+        : `Loved after at least ${nPlays(n)}${lv.after_s >= 86400 ? `, at least ${span(lv.after_s)} after its first scrobble here` : ""}.`;
+    }
+    if (lv.before_first) return "Loved before you first scrobbled it.";
+    if (lv.just_before) return "Loved just before your first scrobble of it.";
+    if (n === 0) return "Loved during your first listen.";
+    return lv.after_s < 86400 ? `Loved after ${nPlays(n)}, the same day you first played it.`
+      : `Loved after ${nPlays(n)}, ${span(lv.after_s)} after your first play.`;
+  }
   // a track name with a heart when it's loved on last.fm (rankList's name option)
   const lovedName = (t) => html`${t.name}${t.loved_at ? html` <span class="loved" title="Loved on ${Fmt.date(t.loved_at)}">${icon("heart", 14)}<span class="sr-only">(loved on ${Fmt.date(t.loved_at)})</span></span>` : ""}`;
 
@@ -677,7 +698,8 @@
     const t = await api(`/api/tracks/${id}`);
     paint(seq, html`
       <section class="hero no-cover"><div><span class="kicker">Track · <a href="#/artist/${t.artist_id}">${t.artist}</a></span><h1>${t.name}</h1>
-        ${t.loved_at ? html`<div class="chips tags"><span class="chip loved-chip">${icon("heart", 14)} Loved on ${Fmt.date(t.loved_at)}</span></div>` : ""}</div></section>
+        ${t.loved_at ? html`<div class="chips tags"><span class="chip loved-chip">${icon("heart", 14)} Loved on ${Fmt.date(t.loved_at)}</span></div>
+          ${t.love ? html`<p class="lead">${loveTiming(t.love)}</p>` : ""}` : ""}</div></section>
       <div class="tiles">
         ${tile("Plays", Fmt.int(t.plays), `on ${Fmt.int(t.n_days)} days`, "accent")}
         ${tile("First played", Fmt.date(t.first_ts), "", "", true)}
@@ -1068,6 +1090,13 @@
     { kind: "unloved", title: "Not loved (yet)", sub: "Your most played tracks without a heart on last.fm", cls: "", key: "unloved",
       row: (r) => [trackHref(r), r.name, r.artist, `${Fmt.int(r.plays)} plays`],
       empty: (years, ctx) => (!ctx.loved_count ? NO_LOVED : "You've loved every track you play.") },
+    { kind: "instant-love", title: "Love at first listen", sub: "Loved within the first few plays, most played since", cls: "sage-soft", key: "instant_love",
+      row: (r) => [trackHref(r), r.name, `${r.artist} · ${r.plays_before ? `loved after ${nPlays(r.plays_before)}`
+        : r.loved_at < r.first_ts ? "loved before the first play" : "loved on the first listen"}`, nPlays(r.plays)],
+      empty: (years, ctx) => (!ctx.loved_count ? NO_LOVED : "No track was loved within its first few plays.") },
+    { kind: "slow-burners", title: "Slow burners", sub: "Loved only after many plays", cls: "", key: "slow_burners",
+      row: (r) => [trackHref(r), r.name, `${r.artist} · ${r.loved_at - r.first_ts < 86400 ? "loved the same day" : `loved ${span(r.loved_at - r.first_ts)} in`}`, nPlays(r.plays_before)],
+      empty: (years, ctx) => (!ctx.loved_count ? NO_LOVED : "No loved track took ten plays or more.") },
     { kind: "deep-dives", title: "Deep dives", sub: "Catalogues you've explored the furthest", cls: "", key: "deep_dives",
       row: (r) => [artistHref(r), r.name, `${Fmt.int(r.plays)} plays`, `${Fmt.int(r.n_tracks)} tracks`],
       empty: () => "Nothing yet." },
