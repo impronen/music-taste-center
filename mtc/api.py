@@ -191,24 +191,35 @@ def create_app(db_path: str | Path | None = None, *, lastfm_factory: Callable | 
         """Genres, decades and artists over- and under-represented among loved tracks vs plays."""
         return taste_gap.taste_gap(c)
 
+    def lastfm_client():
+        """The last.fm client for "new to you" releases, or None without a saved key."""
+        if lastfm_factory:
+            return lastfm_factory()
+        key = settings.lastfm_api_key()
+        if not key:
+            return None
+        from .lastfm import LastFm
+        return LastFm(key, min_interval=config.LASTFM_MIN_INTERVAL_S)
+
     @app.get("/api/upcoming")
     def upcoming(c=Conn):
-        """Releases of the next few Fridays from the cache, artists in the library first."""
-        return releases.upcoming(c)
+        """Releases of the next few Fridays from the cache: new to you, then artists in the library."""
+        return releases.upcoming(c, has_lastfm=bool(lastfm_factory or settings.lastfm_api_key()))
+
+    @app.post("/api/upcoming/refresh", status_code=202)
+    def upcoming_refresh():
+        """Fetch the release lists again, and the similar artists and tags behind "new to you", in the
+        background (the first time takes minutes). GET /api/upcoming says when it's done."""
+        try:
+            releases.start(path, releases_factory or releases.clients, lastfm_client)
+        except releases.Busy as exc:
+            raise HTTPException(409, str(exc)) from None
+        return {"started": True}
 
     @app.get("/api/taste-prompt")
     def taste_prompt_text(task: str = Query("releases", pattern="^(releases|discover|profile)$"), c=Conn):
         """Your taste (recent listening and genres weighted more) as a research prompt for any AI agent."""
         return taste_prompt.build(c, task)
-
-    @app.post("/api/upcoming/refresh")
-    def upcoming_refresh(c=Conn):
-        """Fetch ListenBrainz and Wikipedia again (a few seconds), then return the new list."""
-        try:
-            result = releases.refresh(c, *(releases_factory or releases.clients)())
-        except releases.Busy as exc:
-            raise HTTPException(409, str(exc)) from None
-        return {**releases.upcoming(c), "result": result}
 
     @app.get("/api/graph")
     def graph(n: int = Query(120, ge=10, le=400), per_node: int = Query(6, ge=1, le=20), c=Conn):

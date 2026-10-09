@@ -97,7 +97,7 @@ It works through your most-played artists and albums first, in the background, w
 | **Rhythms** | Genres (or places) through the year, the week and the day, seasonal artists, and how varied your taste is |
 | **Decades** | Release decades, the age of the music you play, how long you took to find albums, and older records |
 | **Insights** | Rediscover, on the rise, forgotten favourites, obsessions, staying power, gateways, binges, loved tracks you've left behind and more |
-| **Upcoming** | New albums and EPs for this Friday and the six after it, by the artists you play first, and a ready-made prompt about your taste to paste into any AI assistant (new releases, new artists, or just your taste) |
+| **Upcoming** | New albums and EPs for this Friday and the six after it: by new artists similar to the ones you play (with your last.fm API key) and by your own artists, and a ready-made prompt about your taste to paste into any AI assistant (new releases, new artists, or just your taste) |
 | **Cleanup** (broom icon) | Merge duplicate spellings of an artist; the fix sticks for future imports |
 | **Import** (upload icon) | Add scrobbles, connect your account, and fetch genres, covers and release dates |
 
@@ -108,7 +108,7 @@ Press **/** anywhere to search. The moon button in the top right switches betwee
 ## Your data and privacy
 
 - **Everything stays on your computer.** Your history lives in `data/mtc.db`, and your username and API key in `data/settings.json`, both inside the app's folder and both kept out of git. The app listens only on your own machine.
-- **What is sent out.** Only when you download or fetch: your last.fm username and API key to last.fm; artist and album names to last.fm and MusicBrainz; and your browser loads album covers from last.fm's servers. The Upcoming page asks ListenBrainz and Wikipedia for their lists of new releases (only dates are sent, nothing about you) and loads release covers from the Cover Art Archive. The fonts are bundled, so nothing else is loaded from the internet.
+- **What is sent out.** Only when you download or fetch: your last.fm username and API key to last.fm; artist and album names to last.fm and MusicBrainz; and your browser loads album covers from last.fm's servers. The Upcoming page asks ListenBrainz and Wikipedia for their lists of new releases (only dates are sent, nothing about you), asks last.fm for artists similar to the ones you play most and for the genre tags of artists with new releases, and loads release covers from the Cover Art Archive. The fonts are bundled, so nothing else is loaded from the internet.
 - **Back up** by closing the app and copying the whole `data` folder.
 - **Update** by closing the app, downloading the new ZIP, unpacking it and copying your old `data` folder into the new folder. Don't copy the hidden `.venv` folder; the new version sets itself up again the first time you start it. Delete the old folder only after you've checked that your history shows up.
 - **Move or rename the app's folder?** Delete the hidden `.venv` folder inside it first; it is rebuilt on the next start.

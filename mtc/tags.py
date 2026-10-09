@@ -31,6 +31,11 @@ def normalize(name: str) -> str:
     return key(name).replace("_", " ").strip(" -")
 
 
+def fold(name: str) -> str:
+    """One key for spellings of a tag: "post-rock", "post rock" and "postrock" (as the fetch merges them)."""
+    return normalize(name).replace(" ", "").replace("-", "")
+
+
 def classify(name: str) -> str:
     n = normalize(name)
     if YEAR.match(n):
