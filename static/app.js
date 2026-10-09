@@ -1250,7 +1250,22 @@
 
   async function cleanupView(params) {
     const seq = rendering;
-    const [groups, rules] = await Promise.all([api("/api/maintenance/duplicates", { fresh: true }), api("/api/maintenance/aliases", { fresh: true })]);
+    const [groups, rules, loved] = await Promise.all([api("/api/maintenance/duplicates", { fresh: true }),
+      api("/api/maintenance/aliases", { fresh: true }), api("/api/loved/unmatched", { fresh: true })]);
+    const playsText = (n) => `${Fmt.int(n)} ${n === 1 ? "play" : "plays"}`;
+    const lovedHtml = (u, i) => html`<li>
+        <div class="lm-main"><b>${u.title}</b> <span class="meta">by ${u.artist_id ? link.artist(u.artist_id, u.artist) : u.artist}</span>
+          <span class="reason">${u.reason[0].toUpperCase() + u.reason.slice(1)} · loved ${Fmt.date(u.loved_at)}</span></div>
+        <div class="lm-actions">${u.suggestions.length
+          ? u.suggestions.map((s) => html`<button type="button" class="btn secondary small loved-link" data-i="${i}" data-track="${s.id}">Link to ${s.title} (${playsText(s.plays)})</button>`)
+          : html`<span class="reason">${u.artist_id ? "No similar title among this artist's tracks." : "If it's spelled differently here, merge it or add a name rule above."}</span>`}</div></li>`;
+    // the rules list shows even when nothing is loved any more, so leftover links can still be undone
+    const lovedBody = html`${!loved.total ? html`<p class="empty box">Nothing loved yet. Loved tracks come from last.fm with each update.</p>`
+        : loved.items.length ? html`<ul class="rows loved-unmatched">${loved.items.map(lovedHtml)}</ul>`
+        : html`<p class="empty box">All ${Fmt.int(loved.total)} loved tracks match your library.</p>`}
+        ${loved.rules.length ? html`<h3 class="lm-head">Linked by you</h3><ul class="rows rules loved-rules">${loved.rules.map((r) => html`<li><b>${r.title}</b><span aria-hidden="true">${icon("arrow", 14)}</span>
+            <a class="to" href="#/track/${r.track_id}">${r.track}</a><span class="meta">${r.still_loved ? r.track_artist : `${r.track_artist}, no longer loved`}</span><span class="meta">${Fmt.date(r.created_at)}</span>
+            <button type="button" class="btn ghost small loved-undo" data-id="${r.id}" aria-label="Undo the link from ${r.title} to ${r.track}">Undo</button></li>`)}</ul>` : ""}`;
     const preset = params.get("merge") ? await api(`/api/artists/${Number(params.get("merge"))}`).catch(() => null) : null;
     const PAGE = 20;
     let shown = PAGE;
@@ -1282,6 +1297,8 @@
             <input id="r-name" type="text" spellcheck="false" placeholder="A spelling you haven't imported yet" aria-label="Spelling" required maxlength="500">
             <span class="arrow" aria-hidden="true">${icon("arrow", 14)}</span>${picker("r-target", "Artist")}<button type="submit" class="btn secondary" id="r-go" disabled>Add rule</button></form>`,
         { sub: "Applied on every import. Removing one doesn't split artists already merged." })}
+      ${card(html`Loved tracks that don't match ${loved.items.length ? html`<span class="pill accent" style="vertical-align:4px">${Fmt.int(loved.items.length)}</span>` : ""}`,
+        lovedBody, { id: "loved-unmatched", sub: "Loved on last.fm but not found under the same title here. Linking one keeps working after each update, and Undo takes it back." })}
       <dialog id="merge-dialog" aria-labelledby="merge-title"><div class="dialog-body"></div></dialog>`);
 
     const say = (tpl, err = false) => {
@@ -1382,6 +1399,35 @@
         await refresh(r.scrobbles_moved ? html`That spelling was already imported, so it was merged: ${Fmt.int(r.scrobbles_moved)} scrobbles moved.` : html`Rule added.`);
       } catch (err) { say(err.message, true); }
     });
+
+    // loved tracks that don't match: link one to a suggested track, or undo a link
+    // After the page redraws, the clicked button is gone: focus the button that now sits where it
+    // was (the next row of the same list), else the status line that announces the result.
+    const lovedDone = async (message, rowsSelector, index) => {
+      cache.clear();
+      await refresh(message);
+      if (!location.hash.startsWith("#/cleanup")) return;
+      const next = [...view.querySelectorAll(rowsSelector)].slice(index).map((li) => li.querySelector("button")).find(Boolean);
+      const target = next ?? document.getElementById("cleanup-msg");
+      if (!target) return;
+      if (!next) target.tabIndex = -1;
+      target.focus({ preventScroll: !next });
+    };
+    view.querySelectorAll(".loved-link").forEach((b) => b.addEventListener("click", async () => {
+      const i = Number(b.dataset.i), u = loved.items[i];
+      b.disabled = true;
+      try {
+        const r = await postJson("/api/loved/rules", { artist: u.artist, title: u.title, track_id: Number(b.dataset.track) });
+        await lovedDone(html`Linked “${r.title}” to <a href="#/track/${r.track_id}">${r.track}</a>.`, ".loved-unmatched > li", i);
+      } catch (err) { b.disabled = false; say(err.message, true); }
+    }));
+    view.querySelectorAll(".loved-undo").forEach((b, j) => b.addEventListener("click", async () => {
+      b.disabled = true;
+      try {
+        await postJson(`/api/loved/rules/${Number(b.dataset.id)}`, null, "DELETE");
+        await lovedDone(html`Link removed. That loved track is unmatched again.`, ".loved-rules > li", j);
+      } catch (err) { b.disabled = false; say(err.message, true); }
+    }));
   }
 
   // ---------- import ----------

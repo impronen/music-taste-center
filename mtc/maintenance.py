@@ -1,5 +1,8 @@
 """Data maintenance: merge duplicate artists, keep name rules for future imports, and find
-likely duplicates (spelling variants such as "Sunn 0)))" vs "Sunn O)))")."""
+likely duplicates (spelling variants such as "Sunn 0)))" vs "Sunn O)))"), and link loved tracks
+whose title is spelled differently from the library's."""
+import difflib
+import re
 import sqlite3
 import time
 import unicodedata
@@ -23,6 +26,7 @@ MERGE_HANDLES = {
     ("artist_stats", "artist_id", "artists"), ("artist_stats", "gateway_id", "artists"),
     ("artist_stats", "first_track_id", "tracks"),  # derived: source row dropped, gateways repointed, rebuilt
     ("artist_links", "a", "artists"), ("artist_links", "b", "artists"),  # derived: dropped and rebuilt
+    ("loved_title_rules", "track_id", "tracks"),   # repointed to the target's same-titled track
 }
 
 
@@ -56,6 +60,7 @@ def merge_artists(conn: sqlite3.Connection, source_id: int, target_id: int, *, r
                 "DELETE FROM scrobbles WHERE track_id = ? AND EXISTS (SELECT 1 FROM scrobbles d"
                 " WHERE d.track_id = ? AND d.artist_id = ? AND d.ts = scrobbles.ts)", (tid, same[0], target_id)).rowcount
             conn.execute("UPDATE scrobbles SET track_id = ?, artist_id = ? WHERE track_id = ?", (same[0], target_id, tid))
+            conn.execute("UPDATE loved_title_rules SET track_id = ? WHERE track_id = ?", (same[0], tid))
             conn.execute("DELETE FROM tracks WHERE id = ?", (tid,))
         conn.execute("UPDATE scrobbles SET artist_id = ? WHERE artist_id = ?", (target_id, source_id))
         for aid, akey in conn.execute("SELECT id, title_key FROM albums WHERE artist_id = ?", (source_id,)).fetchall():
@@ -225,3 +230,142 @@ def dismiss(conn: sqlite3.Connection, gkey: str) -> None:
     with conn:
         conn.execute("INSERT OR IGNORE INTO dismissed_duplicates(group_key, created_at) VALUES (?, ?)",
                      (gkey, int(time.time())))
+
+
+# ---------------------------------------------------------------- loved tracks that don't match
+
+NO_ARTIST = "artist not in your library"
+NO_TITLE = "no track with this title"
+SIMILAR_MIN = 0.8  # difflib ratio of two loose title keys, for suggestions only
+
+# Edition words, whole words only (so "Without", "Radioactive" and "Liverpool" stay). A remix is
+# left out on purpose: it is a different recording, not the original under another name.
+_EDITION = (r"remaster(?:ed|s)?|live|version|edit(?:ed|ion)?|mix(?:ed)?|mono|stereo|demo|acoustic|bonus"
+            r"|deluxe|single|explicit|instrumental|anniversary|reissue(?:d)?|extended")
+_BRACKETED = re.compile(r"[(\[][^)\]]*\b(?:" + _EDITION + r"|feat|ft|featuring|with)\b[^)\]]*[)\]]")
+_DASHED = re.compile(r"\s[-\u2013\u2014]\s.*\b(?:" + _EDITION + r")\b.*$")
+_FEAT = re.compile(r"\s(?:feat\.?|ft\.|featuring)\s.*$")
+_DIGITS = re.compile(r"\d")
+
+
+def loose_title(title: str) -> str:
+    """Spelling-insensitive track title, only for *suggesting* matches: Latin accents dropped,
+    edition suffixes ("(Remastered 2011)", "[Live]", " - Single Version", "feat. X") removed, &
+    read as "and", and everything but letters and digits (so every kind of apostrophe) removed."""
+    s = unicodedata.normalize("NFKD", title).casefold()
+    # only the Latin combining accents: others (e.g. Japanese dakuten) change the letter
+    s = unicodedata.normalize("NFC", "".join(c for c in s if not "\u0300" <= c <= "\u036f"))
+    s = _FEAT.sub("", _DASHED.sub("", _BRACKETED.sub(" ", s)))
+    s = s.replace("&", " and ")
+    return "".join(c for c in s if c.isalnum())
+
+
+def _direct_match(conn: sqlite3.Connection, artist_key: str, title_key: str) -> tuple[int | None, int | None]:
+    """(artist id, track id) a loved entry resolves to by name alone, as in the 005 view."""
+    row = conn.execute(
+        "SELECT COALESCE(x.artist_id, a.id) FROM (SELECT ? AS k) q LEFT JOIN artist_aliases x ON x.name_key = q.k"
+        " LEFT JOIN artists a ON a.name_key = q.k", (artist_key,)).fetchone()
+    artist_id = row[0] if row else None
+    if artist_id is None:
+        return None, None
+    t = conn.execute("SELECT id FROM tracks WHERE artist_id = ? AND title_key = ?", (artist_id, title_key)).fetchone()
+    return artist_id, t[0] if t else None
+
+
+def title_suggestions(conn: sqlite3.Connection, artist_id: int, title: str, limit: int = 3) -> list[dict]:
+    """Up to `limit` of the artist's tracks that are probably `title`: the same loose title
+    first, then the most similar ones above SIMILAR_MIN; more plays win ties."""
+    want = loose_title(title)
+    if not want:
+        return []
+    scored = []
+    for r in conn.execute("SELECT t.id, t.title, COUNT(s.id) AS plays FROM tracks t LEFT JOIN scrobbles s"
+                          " ON s.track_id = t.id WHERE t.artist_id = ? GROUP BY t.id", (artist_id,)):
+        have = loose_title(r["title"])
+        if not have:
+            continue
+        if have == want:
+            score = 2.0
+        elif _DIGITS.sub("", have) == _DIGITS.sub("", want):
+            continue  # "Part 1" vs "Part 2": similar spelling, different track
+        else:
+            score = difflib.SequenceMatcher(None, want, have).ratio()
+        if score >= SIMILAR_MIN:
+            scored.append((score, r["plays"], r["id"], r["title"]))
+    scored.sort(key=lambda x: (-x[0], -x[1], x[2]))
+    return [{"id": i, "title": t, "plays": p} for _, p, i, t in scored[:limit]]
+
+
+def unmatched_loved(conn: sqlite3.Connection) -> list[dict]:
+    """Loved tracks that don't resolve to a track in the library, newest first, with why: the
+    artist isn't known at all, or it is (directly or through a name rule) but no track has this
+    title, in which case likely matches among that artist's tracks are suggested."""
+    out = []
+    for r in conn.execute(
+            "SELECT l.artist_key, l.title_key, l.artist, l.title, l.loved_at FROM loved_tracks l"
+            " WHERE NOT EXISTS (SELECT 1 FROM loved_title_rules r JOIN tracks t ON t.id = r.track_id"
+            "   WHERE r.artist_key = l.artist_key AND r.title_key = l.title_key)"
+            " ORDER BY l.loved_at DESC, l.artist_key, l.title_key").fetchall():
+        artist_id, track_id = _direct_match(conn, r["artist_key"], r["title_key"])
+        if track_id is not None:
+            continue
+        item = {"artist": r["artist"], "title": r["title"], "loved_at": r["loved_at"], "artist_id": artist_id}
+        if artist_id is None:
+            item.update(reason=NO_ARTIST, suggestions=[])
+        else:
+            item.update(reason=NO_TITLE, suggestions=title_suggestions(conn, artist_id, r["title"]))
+        out.append(item)
+    return out
+
+
+def loved_rules(conn: sqlite3.Connection) -> list[dict]:
+    """Loved-title rules, newest first, with the track each links to and whether the entry is
+    still loved (an unloved one's rule stays, harmless, until removed)."""
+    return [dict(r) for r in conn.execute(
+        "SELECT r.id, r.artist, r.title, r.created_at, t.id AS track_id, t.title AS track, a.id AS artist_id,"
+        " a.name AS track_artist, l.loved_at IS NOT NULL AS still_loved FROM loved_title_rules r"
+        " JOIN tracks t ON t.id = r.track_id JOIN artists a ON a.id = t.artist_id"
+        " LEFT JOIN loved_tracks l ON l.artist_key = r.artist_key AND l.title_key = r.title_key"
+        " ORDER BY r.created_at DESC, r.id DESC")]
+
+
+def add_loved_rule(conn: sqlite3.Connection, artist: str, title: str, track_id: int) -> dict:
+    """Link the loved entry (artist, title) to `track_id`, one of the same artist's tracks. Kept
+    by the entry's names, so it survives the updater replacing the loved list."""
+    ak, tk = key(artist), key(title)
+    loved = conn.execute("SELECT artist, title FROM loved_tracks WHERE artist_key = ? AND title_key = ?",
+                         (ak, tk)).fetchone()
+    if loved is None:
+        raise LookupError("that track isn't loved")
+    track = conn.execute("SELECT id, title, artist_id FROM tracks WHERE id = ?", (track_id,)).fetchone()
+    if track is None:
+        raise LookupError("track not found")
+    artist_id, direct = _direct_match(conn, ak, tk)
+    if artist_id is None:
+        raise ValueError("that artist isn't in your library; merge or add a name rule first")
+    if track["artist_id"] != artist_id:
+        raise ValueError("that track is by another artist")
+    if direct is not None:
+        raise ValueError("that loved track already matches")
+    if conn.execute("SELECT 1 FROM loved_title_rules WHERE artist_key = ? AND title_key = ?", (ak, tk)).fetchone():
+        raise ValueError("that loved track is already linked; undo the link first")
+    try:
+        with conn:
+            rule_id = conn.execute(
+                "INSERT INTO loved_title_rules(artist_key, title_key, artist, title, track_id, created_at)"
+                " VALUES (?, ?, ?, ?, ?, ?)",
+                (ak, tk, loved["artist"], loved["title"], track_id, int(time.time()))).lastrowid
+            db.bump(conn, "scrobbles_version")
+    except sqlite3.IntegrityError:  # linked meanwhile from another tab
+        raise ValueError("that loved track is already linked; undo the link first") from None
+    return {"id": rule_id, "artist": loved["artist"], "title": loved["title"], "track_id": track_id,
+            "track": track["title"]}
+
+
+def remove_loved_rule(conn: sqlite3.Connection, rule_id: int) -> bool:
+    """Undo a loved-title rule: the loved entry is unmatched again."""
+    with conn:
+        removed = conn.execute("DELETE FROM loved_title_rules WHERE id = ?", (rule_id,)).rowcount > 0
+        if removed:
+            db.bump(conn, "scrobbles_version")
+    return removed
