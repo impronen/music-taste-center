@@ -1247,6 +1247,95 @@
     });
   }
 
+  // ---------- upcoming ----------
+  // Releases of the next Fridays (releases.py). The server keeps a cache; a stale one is refreshed
+  // when the page opens, which takes a few seconds, so the cached list shows meanwhile.
+  const LB_FRESH = "https://listenbrainz.org/explore/fresh-releases/";
+  const fridayLabel = (iso, today) => {
+    const days = Math.round((new Date(iso + "T12:00:00") - new Date(today + "T12:00:00")) / 864e5);
+    return days === 0 ? "Out today" : days < 0 ? "Out this week" : days < 7 ? "This Friday" : days < 14 ? "Next Friday" : `In ${Math.round(days / 7)} weeks`;
+  };
+  const playsLine = (a) => [nPlays(a.plays), a.recent_plays ? `${Fmt.int(a.recent_plays)} in the last year` : "", a.loved ? `${Fmt.int(a.loved)} loved` : ""].filter(Boolean).join(" · ");
+  function releaseRow(r, mine) {
+    const extra = [
+      r.source_url ? html`<a class="chip plain" href="${r.source_url}" target="_blank" rel="noopener noreferrer">News ${icon("external", 14)}</a>` : "",
+      r.release_group_mbid ? html`<a class="chip plain" href="https://musicbrainz.org/release-group/${r.release_group_mbid}" target="_blank" rel="noopener noreferrer">MusicBrainz ${icon("external", 14)}</a>` : "",
+    ];
+    const what = [r.release_type, Fmt.day(r.release_date), r.genre, r.label].filter(Boolean).join(" · ");
+    const by = mine ? r.artists.map((a, k) => html`${k ? ", " : ""}${link.artist(a.id, a.name)}`) : r.artist;
+    const cover = r.cover_url || (mine && r.artists[0].image_url) || null;
+    return html`<li>${initial(r.title, cover, true)}
+      <div class="grow"><b>${r.title}</b> <span class="meta">by ${by}</span>
+        <small>${what}${mine ? html`<br>${r.artists.map(playsLine).join(" / ")}` : ""}</small></div>
+      <span class="ext">${extra}</span></li>`;
+  }
+  let upcomingRefresh = null; // the running refresh, so a re-render doesn't start another
+  let upcomingAutoAt = 0;     // when the page last refreshed by itself (at most every 10 minutes, so a failing source can't loop)
+  const upcomingOpen = new Set(); // weeks whose "Also out" list is open, kept across re-renders
+  async function upcomingView(params) {
+    const seq = rendering;
+    const all = params.get("show") === "all";
+    const [u, ov] = await Promise.all([api("/api/upcoming", { fresh: true }), api("/api/overview")]);
+    const keep = (r) => all || r.release_type !== "Single";
+    const src = u.sources;
+    const checked = Math.max(0, ...Object.values(src).map((s) => s.at ?? 0)); // the newest list; a failing source says so below
+    const errors = Object.entries(src).filter(([, s]) => s.error).map(([k, s]) => `${k === "listenbrainz" ? "ListenBrainz" : "Wikipedia"}: ${s.error}`);
+    const busy = u.refreshing || upcomingRefresh;
+    const status = busy ? "Checking ListenBrainz and Wikipedia for new releases…"
+      : !checked ? "Not checked yet."
+      : Date.now() / 1000 - checked < 86400 ? `Checked at ${new Date(checked * 1000).toTimeString().slice(0, 5)}.`
+      : `Checked ${Fmt.ago(checked, Date.now() / 1000)}.`;
+    const anyMine = u.weeks.some((w) => w.mine.some(keep));
+    paint(seq, html`
+      <div class="page-head"><div><h1>Upcoming</h1>
+        <p class="lead">New releases for this Friday and the ${u.weeks.length - 1} after it, by artists you play first. From ListenBrainz (MusicBrainz data) and Wikipedia's list of albums.</p></div></div>
+      <div class="toolbar upcoming-bar">
+        <div class="seg" role="group" aria-label="Show">
+          <button type="button" data-show="albums" aria-pressed="${String(!all)}">Albums and EPs</button>
+          <button type="button" data-show="all" aria-pressed="${String(all)}">With singles</button></div>
+        <span class="muted" role="status">${status}</span>
+        <button type="button" class="btn secondary small" id="refresh" aria-disabled="${String(!!busy)}">Check again</button></div>
+      ${errors.length ? html`<p class="empty box">Couldn't update everything: ${errors.join("; ")}. Showing what was saved before.</p>` : ""}
+      ${!checked && !busy ? html`<p class="empty box">Nothing fetched yet.</p>` : ""}
+      ${ov.empty ? "" : !anyMine && checked ? html`<p class="empty box">None of your artists has a release coming in these weeks${all ? "" : " (singles hidden)"}.
+        Release ids come with the metadata fetch on the Import page, which helps matching.</p>` : ""}
+      <nav class="jumpbar" aria-label="Jump to a week">${u.weeks.map((w) => html`<button type="button" data-to="wk-${w.friday}">${Fmt.day(w.friday)}
+        <span class="count">${Fmt.int(w.mine.filter(keep).length)}</span></button>`)}</nav>
+      ${u.weeks.map((w) => {
+        const mine = w.mine.filter(keep), also = w.also.filter(keep);
+        return card(html`${fridayLabel(w.friday, u.today)}: ${Fmt.day(w.friday)}`, html`
+          ${mine.length ? html`<ul class="rows releases">${mine.map((r) => releaseRow(r, true))}</ul>`
+            : html`<p class="empty box">Nothing from your artists${checked ? "" : " yet"}.</p>`}
+          ${also.length ? html`<details class="also" data-week="${w.friday}" ${upcomingOpen.has(w.friday) ? raw("open") : ""}><summary class="more">Also out: ${Fmt.int(also.length)} more from Wikipedia's list</summary>
+            <ul class="rows releases compact">${also.map((r) => releaseRow(r, false))}</ul></details>` : ""}`, {
+          id: `wk-${w.friday}`,
+          sub: `${Fmt.int(mine.length)} by artists you play`,
+          foot: w.more ? html`<a href="${LB_FRESH}" target="_blank" rel="noopener noreferrer">${Fmt.int(w.more)} more albums and EPs on ListenBrainz ${icon("external", 14)}</a>` : "",
+        });
+      })}`);
+    view.querySelectorAll("[data-show]").forEach((b) => b.addEventListener("click", () => {
+      location.hash = "#/upcoming" + (b.dataset.show === "all" ? "?show=all" : "");
+    }));
+    view.querySelectorAll("[data-to]").forEach((b) => b.addEventListener("click", () => {
+      document.getElementById(b.dataset.to).setAttribute("tabindex", "-1");
+      scrollToId(b.dataset.to);
+    }));
+    const run = () => {
+      if (upcomingRefresh || busy) return;
+      upcomingRefresh = postJson("/api/upcoming/refresh")
+        .catch((err) => { if (!/already/.test(err.message)) console.error(err); })
+        .finally(() => { upcomingRefresh = null; if (location.hash.startsWith("#/upcoming")) route(); });
+      if (location.hash.startsWith("#/upcoming")) route(); // show the "checking" state
+    };
+    view.querySelector("#refresh").addEventListener("click", run); // stays focusable while busy; run() ignores it then
+    view.querySelectorAll("details.also").forEach((d) => d.addEventListener("toggle", () => {
+      if (d.open) upcomingOpen.add(d.dataset.week); else upcomingOpen.delete(d.dataset.week);
+    }));
+    if (u.stale && !busy && Date.now() - upcomingAutoAt > 10 * 60e3) { upcomingAutoAt = Date.now(); run(); }
+    // a refresh started elsewhere (another tab, or before a reload): look again until it's done
+    if (u.refreshing && !upcomingRefresh) setTimeout(() => { if (seq === routeSeq && location.hash.startsWith("#/upcoming")) route(); }, 3000);
+  }
+
   // ---------- cleanup ----------
   function bindPicker(input, onPick) {
     const box = input.parentElement.querySelector(".picker-results");
@@ -1778,6 +1867,7 @@
     [/^\/decades$/, decadesView],
     [/^\/insights$/, insightsView],
     [/^\/insights\/([a-z-]+)$/, insightView],
+    [/^\/upcoming$/, upcomingView],
     [/^\/import$/, importView],
     [/^\/cleanup$/, cleanupView],
   ];
@@ -1786,7 +1876,7 @@
   function focusKey(el) {
     if (!el || !view.contains(el)) return null;
     if (el.id) return `#${CSS.escape(el.id)}`;
-    for (const a of ["data-sort", "data-kind", "data-period", "data-n", "data-k", "data-year", "data-to"]) {
+    for (const a of ["data-sort", "data-kind", "data-period", "data-n", "data-k", "data-year", "data-to", "data-show"]) {
       if (el.hasAttribute(a)) return `[${a}="${CSS.escape(el.getAttribute(a))}"]`;
     }
     return null;

@@ -12,7 +12,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 
-from . import config, db, decades, velocity, derive, enrich, fsutil, ingest, insights, jobs, maintenance, rhythms, settings, taste_gap, updater
+from . import config, db, decades, velocity, derive, enrich, fsutil, ingest, insights, jobs, maintenance, releases, rhythms, settings, taste_gap, updater
 from .webapi import Fatal, NotFound
 
 MAX_UPLOAD_BYTES = 300 * 1024 * 1024
@@ -60,8 +60,9 @@ class UsernameRequest(BaseModel):
 
 
 def create_app(db_path: str | Path | None = None, *, lastfm_factory: Callable | None = None,
-               musicbrainz_factory: Callable | None = None, auto_update: bool = False) -> FastAPI:
-    """The factories replace the real last.fm / MusicBrainz clients (tests pass fakes).
+               musicbrainz_factory: Callable | None = None, releases_factory: Callable | None = None,
+               auto_update: bool = False) -> FastAPI:
+    """The factories replace the real last.fm / MusicBrainz / release-list clients (tests pass fakes).
     `auto_update` pulls new scrobbles from last.fm at startup, gated to 3 runs a day (updater.py);
     it is off by default so tests and tools never reach the network, and `serve` turns it on."""
     path = Path(db_path or config.DB_PATH)
@@ -189,6 +190,20 @@ def create_app(db_path: str | Path | None = None, *, lastfm_factory: Callable | 
     def loved_gap(c=Conn):
         """Genres, decades and artists over- and under-represented among loved tracks vs plays."""
         return taste_gap.taste_gap(c)
+
+    @app.get("/api/upcoming")
+    def upcoming(c=Conn):
+        """Releases of the next few Fridays from the cache, artists in the library first."""
+        return releases.upcoming(c)
+
+    @app.post("/api/upcoming/refresh")
+    def upcoming_refresh(c=Conn):
+        """Fetch ListenBrainz and Wikipedia again (a few seconds), then return the new list."""
+        try:
+            result = releases.refresh(c, *(releases_factory or releases.clients)())
+        except releases.Busy as exc:
+            raise HTTPException(409, str(exc)) from None
+        return {**releases.upcoming(c), "result": result}
 
     @app.get("/api/graph")
     def graph(n: int = Query(120, ge=10, le=400), per_node: int = Query(6, ge=1, le=20), c=Conn):
