@@ -1272,10 +1272,15 @@
       <span class="ext">${extra}</span></li>`;
   }
   const PROMPT_TASKS = [["releases", "New releases"], ["discover", "New artists"], ["profile", "Taste only"]];
+  const DOCS = "https://github.com/impronen/music-taste-center/blob/main/docs/how-it-works.md";
+  const shortDay = (iso) => Fmt.day(iso).replace(/\s\d{4}$/, ""); // "16 Oct"
   let copyTimer = 0;
   let upcomingRefresh = null; // the running refresh, so a re-render doesn't start another
   let upcomingAutoAt = 0;     // when the page last refreshed by itself (at most every 10 minutes, so a failing source can't loop)
-  const upcomingOpen = new Set(); // weeks whose "Also out" list is open, kept across re-renders
+  // kept across re-renders (a refresh re-renders the page every few seconds)
+  const upcomingOpen = new Set(); // weeks whose "Also out" list is open
+  let promptOpen = false;         // the whole prompt shown
+  let quietOpen = null;           // the quiet week whose list is shown
   async function upcomingView(params) {
     const seq = rendering;
     const all = params.get("show") === "all";
@@ -1284,61 +1289,91 @@
     const [u, ov, tp] = await Promise.all([api("/api/upcoming", { fresh: true }), api("/api/overview"),
       api("/api/taste-prompt?" + qs({ task }), { fresh: true }).catch(() => ({ text: "" }))]); // the releases show without it
     const keep = (r) => all || r.release_type !== "Single";
-    const src = u.sources;
-    const checked = Math.max(0, ...Object.values(src).map((s) => s.at ?? 0)); // the newest list; a failing source says so below
-    const fm = u.lastfm;
-    const errors = [...Object.entries(src).filter(([, s]) => s.error).map(([k, s]) => `${k === "listenbrainz" ? "ListenBrainz" : "Wikipedia"}: ${s.error}`),
-      ...(fm.has_key && fm.error ? [`last.fm: ${fm.error}`] : [])];
+    const src = u.sources, fm = u.lastfm, now = Date.now() / 1000;
+    const checked = Math.max(0, ...Object.values(src).map((s) => s.at ?? 0)); // the newest list; a failing source gets a pill
     const busy = u.refreshing || upcomingRefresh;
     const partly = fm.has_key && fm.seeds && fm.seeds_done < fm.seeds ? ` Similar artists looked up for ${Fmt.int(fm.seeds_done)} of your ${Fmt.int(fm.seeds)} most played.` : "";
-    const status = busy ? `${u.progress || "Checking ListenBrainz and Wikipedia"}…`
+    const status = busy ? `${u.progress || "Checking ListenBrainz and Wikipedia for new releases"}…`
       : !checked ? "Not checked yet."
-      : Date.now() / 1000 - checked < 86400 ? `Checked at ${new Date(checked * 1000).toTimeString().slice(0, 5)}.`
-      : `Checked ${Fmt.ago(checked, Date.now() / 1000)}.`;
-    const statusText = busy ? status : status + partly;
-    const anyMine = u.weeks.some((w) => w.mine.some(keep));
+      : (now - checked < 86400 ? `Checked at ${new Date(checked * 1000).toTimeString().slice(0, 5)}.` : `Checked ${Fmt.ago(checked, now)}.`) + partly;
+    const listName = { listenbrainz: "ListenBrainz", wikipedia: "Wikipedia" };
+    const pills = busy ? [] : [
+      ...Object.entries(src).filter(([, s]) => s.error).map(([k, s]) => html`<span class="pill accent" title="${s.error}">${listName[k]} didn't answer · ${
+        s.at ? `showing the list from ${Fmt.ago(s.at, now).replace(/^today$/, "earlier today")}` : "nothing saved yet"}<span class="sr-only"> (${s.error})</span></span>`),
+      fm.has_key && fm.error ? html`<span class="pill accent" title="${fm.error}">${/api key|error (10|26)|suspend/i.test(fm.error)
+        ? "last.fm refused the API key" : "last.fm didn't answer"} · new artists may be out of date<span class="sr-only"> (${fm.error})</span></span>` : "",
+      fm.has_key ? "" : html`<a class="pill sage" href="#/import">Save your last.fm API key for new artists</a>`,
+    ];
+    const weeks = u.weeks.map((w) => {
+      const fresh = fm.has_key ? w.new.filter(keep) : [], mine = w.mine.filter(keep);
+      return { ...w, fresh, mine, also: w.also.filter(keep), count: fresh.length + mine.length };
+    });
+    const busyWeeks = weeks.filter((w) => w.count), quiet = weeks.filter((w) => !w.count);
+    if (!quiet.some((w) => w.friday === quietOpen)) quietOpen = null;
+    const lbMore = (n) => html`<a href="${LB_FRESH}" target="_blank" rel="noopener noreferrer">${Fmt.int(n)} more albums and EPs on ListenBrainz ${icon("external", 14)}</a>`;
+    const section = (label, rows) => (rows ? html`${fm.has_key ? html`<h3 class="list-h">${label}</h3>` : ""}${rows}` : "");
     paint(seq, html`
-      <div class="page-head"><div><h1>Upcoming</h1>
-        <p class="lead">New releases for this Friday and the ${u.weeks.length - 1} after it: new artists similar to the ones you play, and your own artists. From ListenBrainz (MusicBrainz data), Wikipedia's list of albums and last.fm.</p></div></div>
+      <div class="page-head"><div><span class="kicker">Seven Fridays</span><h1>Upcoming</h1>
+        <p class="lead">New albums and EPs for this Friday and the ${["zero", "one", "two", "three", "four", "five", "six", "seven", "eight"][weeks.length - 1] ?? weeks.length - 1} after it${fm.has_key ? ": new artists similar to the ones you play, and your own artists ranked by how much you play them" : ", ranked by how much you play the artist"}.</p></div></div>
       <div class="toolbar upcoming-bar">
         <div class="seg" role="group" aria-label="Show">
           <button type="button" data-show="albums" aria-pressed="${String(!all)}">Albums and EPs</button>
           <button type="button" data-show="all" aria-pressed="${String(all)}">With singles</button></div>
-        <span class="muted" role="status">${statusText}</span>
+        <div class="status-line" role="status"><span>${status}</span>${pills}</div>
         <button type="button" class="btn secondary small" id="refresh" aria-disabled="${String(!!busy)}">Check again</button></div>
-      ${errors.length ? html`<p class="empty box">Couldn't update everything: ${errors.join("; ")}. Showing what was saved before.</p>` : ""}
-      ${!checked && !busy ? html`<p class="empty box">Nothing fetched yet.</p>` : ""}
-      ${fm.has_key ? "" : html`<p class="empty box">Save your last.fm API key on the <a href="#/import">Import page</a> to also see releases by new artists similar to the ones you play.</p>`}
-      ${ov.empty ? "" : !anyMine && checked ? html`<p class="empty box">None of your artists has a release coming in these weeks${all ? "" : " (singles hidden)"}.
+      ${busyWeeks.length ? html`<nav class="jumpbar" aria-label="Jump to a week">${busyWeeks.map((w) => html`<button type="button" data-to="wk-${w.friday}">${shortDay(w.friday)}
+        <span class="count">${Fmt.int(w.count)}</span></button>`)}${quiet.length ? html`<span class="quiet-note">${quiet.length === 1 ? "1 quiet week" : `${quiet.length} quiet weeks`} below</span>` : ""}</nav>` : ""}
+      ${checked && !busyWeeks.length && !ov.empty ? html`<p class="empty box">None of your artists has a release coming in these weeks${all ? "" : " (singles hidden)"}.
         Release ids come with the metadata fetch on the Import page, which helps matching.</p>` : ""}
-      ${tp.text ? card("Research prompt for any AI", html`<pre class="prompt" id="prompt-text" tabindex="0" role="region" aria-label="The prompt">${tp.text}</pre>`, {
-        sub: "Your taste, weighted to what you play now and to genres over artist names, with a ready task. Paste it into ChatGPT, Claude, Gemini or any agent that can search the web.",
-        aside: html`<div class="seg" role="group" aria-label="Task">${PROMPT_TASKS.map(([k, l]) => html`<button type="button" data-prompt="${k}" aria-pressed="${String(k === task)}">${l}</button>`)}</div>
-          <button type="button" class="btn primary small" id="copy-prompt">Copy</button><span class="sr-only" role="status" id="copy-status"></span>`,
-        id: "prompt", cls: "sage-soft",
-      }) : ""}
-      <nav class="jumpbar" aria-label="Jump to a week">${u.weeks.map((w) => html`<button type="button" data-to="wk-${w.friday}">${Fmt.day(w.friday)}
-        <span class="count">${Fmt.int(w.new.filter(keep).length + w.mine.filter(keep).length)}</span></button>`)}</nav>
-      ${u.weeks.map((w) => {
-        const mine = w.mine.filter(keep), also = w.also.filter(keep), fresh = w.new.filter(keep);
-        return card(html`${fridayLabel(w.friday, u.today)}: ${Fmt.day(w.friday)}`, html`
-          ${fm.has_key ? html`<h3 class="list-h">New to you</h3>${fresh.length ? html`<ul class="rows releases">${fresh.map((r) => releaseRow(r, false, whyNew(r)))}</ul>`
-            : html`<p class="empty box">${fm.seeds_done ? "Nothing new that fits you this week." : "Not looked up yet."}</p>`}
-            <h3 class="list-h">From your artists</h3>` : ""}
-          ${mine.length ? html`<ul class="rows releases">${mine.map((r) => releaseRow(r, true))}</ul>`
-            : html`<p class="empty box">Nothing from your artists${checked ? "" : " yet"}.</p>`}
-          ${also.length ? html`<details class="also" data-week="${w.friday}" ${upcomingOpen.has(w.friday) ? raw("open") : ""}><summary class="more">Also out: ${Fmt.int(also.length)} more from Wikipedia's list</summary>
-            <ul class="rows releases compact">${also.map((r) => releaseRow(r, false))}</ul></details>` : ""}`, {
-          id: `wk-${w.friday}`,
-          sub: fm.has_key ? `${Fmt.int(fresh.length)} new to you · ${Fmt.int(mine.length)} by artists you play` : `${Fmt.int(mine.length)} by artists you play`,
-          foot: w.more ? html`<a href="${LB_FRESH}" target="_blank" rel="noopener noreferrer">${Fmt.int(w.more)} more albums and EPs on ListenBrainz ${icon("external", 14)}</a>` : "",
-        });
-      })}`);
+      ${busyWeeks.map((w) => card("", html`
+        <div class="week-head"><h2>${fridayLabel(w.friday, u.today)}</h2><span class="date">${shortDay(w.friday)}</span>
+          <span class="count-text">${fm.has_key ? `${Fmt.int(w.fresh.length)} new to you · ` : ""}${Fmt.int(w.mine.length)} by artists you play</span></div>
+        ${section("New to you", w.fresh.length ? html`<ul class="rows releases">${w.fresh.map((r) => releaseRow(r, false, whyNew(r)))}</ul>` : "")}
+        ${section("From your artists", w.mine.length ? html`<ul class="rows releases">${w.mine.map((r) => releaseRow(r, true))}</ul>` : "")}
+        ${w.also.length ? html`<details class="also" data-week="${w.friday}" ${upcomingOpen.has(w.friday) ? raw("open") : ""}><summary class="more">Also out: ${Fmt.int(w.also.length)} more from Wikipedia's list</summary>
+          <ul class="rows releases compact">${w.also.map((r) => releaseRow(r, false))}</ul></details>` : ""}`, {
+        id: `wk-${w.friday}`, foot: w.more ? lbMore(w.more) : "",
+      }))}
+      ${checked && quiet.length ? html`<section class="card quiet" id="quiet">
+        <h2>Quiet weeks</h2><p>${!fm.has_key ? "Nothing from your artists." : fm.seeds_done ? "Nothing new to you and nothing from your artists."
+          : "Nothing from your artists (new artists aren't looked up yet)."} Other releases are still listed.</p>
+        <div class="chips">${quiet.map((w) => (w.also.length || w.more
+          ? html`<button type="button" class="chip" data-quiet="${w.friday}" aria-expanded="${String(w.friday === quietOpen)}" aria-controls="quiet-${w.friday}"><b>${shortDay(w.friday)}</b>
+              <span class="secondary">${w.also.length ? `${Fmt.int(w.also.length)} also out` : `${Fmt.int(w.more)} on ListenBrainz`}</span></button>`
+          : html`<span class="chip plain"><b>${shortDay(w.friday)}</b> <span class="secondary">nothing listed</span></span>`))}</div>
+        ${quiet.filter((w) => w.also.length || w.more).map((w) => html`<div id="quiet-${w.friday}" class="quiet-list" role="region"
+            aria-label="${fridayLabel(w.friday, u.today)}, ${shortDay(w.friday)}" ${w.friday === quietOpen ? "" : raw("hidden")}>
+          <h3 class="list-h">${fridayLabel(w.friday, u.today)}, ${shortDay(w.friday)}</h3>
+          ${w.also.length ? html`<ul class="rows releases compact">${w.also.map((r) => releaseRow(r, false))}</ul>` : ""}
+          ${w.more ? html`<p class="card-foot">${lbMore(w.more)}</p>` : ""}</div>`)}
+      </section>` : ""}
+      ${tp.text ? html`<section class="card sage-soft" id="prompt">
+        <div class="card-head"><div><h2>Ask an AI to dig further</h2>
+          <p>A description of your taste, weighted to what you play now, with a ready task. Paste it into any assistant that can search the web. Nothing is sent from here.</p></div>
+          <div class="aside"><div class="seg" role="group" aria-label="Task">${PROMPT_TASKS.map(([k, l]) => html`<button type="button" data-prompt="${k}" aria-pressed="${String(k === task)}">${l}</button>`)}</div></div></div>
+        <div class="prompt-box ${promptOpen ? "open" : ""}"><pre class="prompt" id="prompt-text" tabindex="0" role="region" aria-label="The prompt">${tp.text}</pre></div>
+        <div class="prompt-actions"><button type="button" class="btn primary small" id="copy-prompt">Copy prompt</button>
+          <button type="button" class="btn ghost small" id="toggle-prompt" aria-expanded="${String(promptOpen)}" aria-controls="prompt-text">${promptOpen ? "Show less" : "Show the whole prompt"}</button>
+          <span class="muted">${Fmt.int(tp.text.length)} characters</span><span class="sr-only" role="status" id="copy-status"></span></div>
+      </section>` : ""}
+      <p class="muted source-note">Release lists from ListenBrainz (MusicBrainz data) and Wikipedia${fm.has_key ? "; similar artists and genres from last.fm" : ""}.
+        <a class="text-link" href="${DOCS}#upcoming-releases" target="_blank" rel="noopener noreferrer">How this works ${icon("external", 14)}</a></p>`);
     view.querySelectorAll("[data-show]").forEach((b) => b.addEventListener("click", () => {
       location.hash = here({ show: b.dataset.show === "all" ? "all" : null });
     }));
     view.querySelectorAll("[data-prompt]").forEach((b) => b.addEventListener("click", () => {
       location.hash = here({ prompt: b.dataset.prompt === "releases" ? null : b.dataset.prompt });
+    }));
+    view.querySelector("#toggle-prompt")?.addEventListener("click", (e) => {
+      promptOpen = !promptOpen;
+      view.querySelector(".prompt-box").classList.toggle("open", promptOpen);
+      e.currentTarget.setAttribute("aria-expanded", String(promptOpen));
+      e.currentTarget.textContent = promptOpen ? "Show less" : "Show the whole prompt";
+    });
+    view.querySelectorAll("[data-quiet]").forEach((b) => b.addEventListener("click", () => {
+      quietOpen = quietOpen === b.dataset.quiet ? null : b.dataset.quiet;
+      view.querySelectorAll("[data-quiet]").forEach((c) => c.setAttribute("aria-expanded", String(c.dataset.quiet === quietOpen)));
+      view.querySelectorAll(".quiet-list").forEach((l) => { l.hidden = l.id !== `quiet-${quietOpen}`; });
     }));
     view.querySelector("#copy-prompt")?.addEventListener("click", async (e) => {
       const b = e.currentTarget, pre = view.querySelector("#prompt-text"), status = view.querySelector("#copy-status");
@@ -1353,7 +1388,7 @@
         b.textContent = "Selected: press Cmd/Ctrl+C";
       }
       status.textContent = b.textContent;
-      copyTimer = setTimeout(() => { b.textContent = "Copy"; status.textContent = ""; }, 2500);
+      copyTimer = setTimeout(() => { b.textContent = "Copy prompt"; status.textContent = ""; }, 2500);
     });
     view.querySelectorAll("[data-to]").forEach((b) => b.addEventListener("click", () => {
       document.getElementById(b.dataset.to).setAttribute("tabindex", "-1");
@@ -1915,7 +1950,7 @@
   function focusKey(el) {
     if (!el || !view.contains(el)) return null;
     if (el.id) return `#${CSS.escape(el.id)}`;
-    for (const a of ["data-sort", "data-kind", "data-period", "data-n", "data-k", "data-year", "data-to", "data-show", "data-prompt"]) {
+    for (const a of ["data-sort", "data-kind", "data-period", "data-n", "data-k", "data-year", "data-to", "data-show", "data-prompt", "data-quiet"]) {
       if (el.hasAttribute(a)) return `[${a}="${CSS.escape(el.getAttribute(a))}"]`;
     }
     return null;

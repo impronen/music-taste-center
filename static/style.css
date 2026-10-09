@@ -56,6 +56,7 @@
   --color-accent-2: light-dark(#7a8a5e, var(--color-accent-2-400));
   --color-accent-2-ink: light-dark(var(--color-accent-2-800), var(--color-accent-2-300));
   --color-divider: color-mix(in srgb, var(--color-text) 16%, transparent);
+  --border-quiet: light-dark(var(--color-neutral-400), var(--color-neutral-600));   /* dashed outline of a quiet card */
   --color-chip: light-dark(#f5ead8, #2a2722);                      /* pills and rows on a card */
   --color-row-hover: light-dark(var(--color-neutral-100), color-mix(in srgb, #f3ece1 8%, transparent));
   --color-track: light-dark(var(--color-neutral-200), #4a443b);    /* empty part of a bar */
@@ -362,15 +363,37 @@ main h1:focus { outline: none; }
 .rows.releases.compact .initial { width: 28px; height: 28px; }
 details.also { margin-top: 14px; }
 .list-h { margin: 18px 0 10px; font: 700 var(--fs-xs) var(--font-body); text-transform: uppercase; letter-spacing: 0.08em; color: var(--color-accent-ink); }
-.card-head + .list-h { margin-top: 0; }
-pre.prompt { margin: 0; max-height: 260px; overflow: auto; padding: 14px 16px; border-radius: var(--radius-md); background: var(--color-canvas);
-  font: var(--fs-sm)/1.55 var(--font-body); white-space: pre-wrap; overflow-wrap: anywhere; }
-#prompt + .jumpbar { margin-top: var(--gap); }
-#prompt .aside { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.card-head + .list-h, .week-head + .list-h { margin-top: 0; }
 details.also > summary { cursor: pointer; }
 details.also[open] > summary { margin-bottom: 10px; }
-.jumpbar .count { margin-left: 4px; padding: 1px 7px; border-radius: var(--pill); background: var(--tint-sage); color: var(--color-accent-2-ink); font-size: var(--fs-xs); }
 .upcoming-bar .btn { margin-left: auto; }
+.status-line .pill { white-space: normal; }  /* long notes wrap on phones */
+.status-line { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: var(--fs-sm); color: var(--color-ink-2); }
+.jumpbar .count { margin-left: 4px; min-width: 24px; padding: 1px 7px; border-radius: var(--pill); background: var(--color-accent); color: var(--color-on-accent); font-size: var(--fs-xs); font-weight: 700; }
+.jumpbar .quiet-note { align-self: center; padding-left: 6px; font-size: var(--fs-sm); color: var(--color-ink-3); }
+/* a week of releases: label, date and counts on one line */
+.week-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; margin-bottom: 16px; }
+.week-head h2 { font-size: var(--fs-card); }
+.week-head .date { font-size: var(--fs-md); color: var(--color-ink-2); }
+.week-head .count-text { margin-left: auto; font-size: var(--fs-sm); color: var(--color-ink-2); }
+/* weeks with nothing for you: one light card */
+.card.quiet { background: transparent; border: 1px dashed var(--border-quiet); }
+.card.quiet h2 { font-size: var(--fs-lg); margin-bottom: 4px; }
+.card.quiet > p { font-size: var(--fs-sm); color: var(--color-ink-2); margin-bottom: 12px; }
+.card.quiet .chip { border: 0; }
+.card.quiet .chip[aria-expanded="true"] { background: var(--color-hover); color: var(--color-hover-ink); }
+.quiet-list { margin-top: 18px; }
+/* the research prompt: collapsed to a few lines with a fade */
+.prompt-box { padding: 16px; border-radius: var(--radius-md); background: var(--color-bg); }
+pre.prompt { margin: 0; font: var(--fs-sm)/1.6 var(--font-body); white-space: pre-wrap; overflow-wrap: anywhere; }
+pre.prompt:focus-visible { outline: none; }  /* the box shows the focus: the fade would hide the bottom of a ring */
+.prompt-box:has(pre.prompt:focus-visible) { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+.prompt-box:not(.open) pre.prompt { max-height: 140px; overflow: hidden; -webkit-mask-image: linear-gradient(#000 55%, transparent); mask-image: linear-gradient(#000 55%, transparent); }
+.prompt-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 16px; }
+.prompt-actions .muted { font-size: var(--fs-xs); }
+#prompt .aside { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+#prompt .aside .seg { background: var(--color-bg); }
+.source-note { margin-top: var(--gap); font-size: var(--fs-sm); }
 
 /* taste gap (Insights): rows with a loved bar and a played bar under the name */
 .taste-gap { margin-top: var(--section); scroll-margin-top: 96px; }
