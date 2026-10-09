@@ -31,7 +31,7 @@ class ApiTests(unittest.TestCase):
 
     def test_endpoints(self):
         for url in ["/api/overview", "/api/timeline", "/api/top/artist", "/api/top/track?start=2019-03-01&end=2019-06-30",
-                    "/api/top/album", "/api/clock", "/api/eras", "/api/insights", "/api/graph?n=20", "/api/imports",
+                    "/api/top/album", "/api/clock", "/api/eras", "/api/insights", "/api/insights/binges?limit=30", "/api/graph?n=20", "/api/imports",
                     "/api/recent", "/api/search?q=k%C3%A4r", "/"]:
             self.assertEqual(self.client.get(url).status_code, 200, url)
         a = self.client.get("/api/top/artist?limit=1").json()[0]
@@ -41,6 +41,8 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(self.client.get("/api/top/genre").status_code, 404)
         self.assertEqual(self.client.get("/api/top/artist?start=2019-1-1").status_code, 422)
         self.assertEqual(self.client.get("/api/artists/999999").status_code, 404)
+        self.assertEqual(self.client.get("/api/insights/nope").status_code, 404)
+        self.assertEqual(self.client.get("/api/insights/binges?limit=0").status_code, 422)
         self.assertEqual(self.client.post("/api/import", content=b"").status_code, 400)
 
     def test_like_wildcards_are_literal(self):
