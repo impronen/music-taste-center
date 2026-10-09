@@ -1,10 +1,12 @@
 import tempfile
 import unittest
+from contextlib import closing
 from datetime import date, timedelta
 from pathlib import Path
 
 from fastapi.testclient import TestClient
 
+from mtc import db, updater
 from mtc.api import create_app
 from tests import synthetic
 
@@ -111,6 +113,17 @@ class ApiTests(unittest.TestCase):
         fast = c.get("/api/library", params={"limit": 500}).json()["items"]
         slow = c.get("/api/library", params={"start": lo, "end": end, "limit": 500}).json()["items"]
         self.assertEqual({a["id"]: (a["plays"], a["tracks"]) for a in fast}, {a["id"]: (a["plays"], a["tracks"]) for a in slow})
+        # with a few loves, the loved column over the whole span equals the all-time one too
+        tops = c.get("/api/library", params={"kind": "track", "limit": 4}).json()["items"]
+        with closing(db.connect(Path(self.tmp.name) / "api.db")) as conn:
+            updater.store_loved(conn, [(t["artist"], t["name"], 1_600_000_000) for t in tops])
+        fast = c.get("/api/library", params={"limit": 500}).json()["items"]
+        slow = c.get("/api/library", params={"start": lo, "end": end, "limit": 500}).json()["items"]
+        self.assertEqual(sum(a["loved"] for a in fast), 4)
+        cols = ("loved", "loved_rate")
+        self.assertEqual({a["id"]: tuple(a[k] for k in cols) for a in fast}, {a["id"]: tuple(a[k] for k in cols) for a in slow})
+        by_loved = c.get("/api/library", params={"sort": "loved", "limit": 5, "offset": 5}).json()
+        self.assertEqual(by_loved["total"], everything["total"])
         # one artist exactly (not a name match), and the artist's name comes back for the chip
         a = everything["items"][0]
         one = c.get("/api/library", params={"kind": "track", "artist": a["id"], "limit": 500}).json()
