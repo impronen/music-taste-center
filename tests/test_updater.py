@@ -1,5 +1,6 @@
-"""The startup scrobble updater: what it asks last.fm for, the daily cap and cooldown gate, and failing safely.
-All HTTP goes through a fake user.getRecentTracks; nothing touches the network."""
+"""The startup scrobble updater: what it asks last.fm for, the daily cap and cooldown gate, and failing safely,
+plus the loved tracks it refreshes on each run.
+All HTTP goes through a fake user.getRecentTracks / user.getLovedTracks; nothing touches the network."""
 import json
 import tempfile
 import threading
@@ -11,11 +12,12 @@ from unittest import mock
 
 from fastapi.testclient import TestClient
 
-from mtc import config, db, derive, ingest, settings, updater
+from mtc import config, db, derive, ingest, insights, maintenance, settings, updater
 from mtc.__main__ import main
 from mtc.api import create_app
 from mtc.ingest import Scrobble
 from mtc.lastfm import LastFm
+from mtc.webapi import ApiError
 
 T0 = 1_700_000_000 - 1_700_000_000 % 60
 DAY = 86400
@@ -28,12 +30,34 @@ def track(ts, artist, title, album="", mbid=""):
             "date": {"uts": str(ts), "#text": "x"}}
 
 
-def fake_recent(scrobbles, queries=None, fail_page=None, now_playing=True, bare=False):
+def loved_answer(q, loved, loved_queries, loved_fail, bare=False):
+    """user.getLovedTracks: newest first, paged; loved is [(ts, artist, title)]."""
+    if loved_queries is not None:
+        loved_queries.append(q)
+    if loved_fail:
+        return 500, b""
+    if bare:
+        return 200, b"{}"
+    page, limit = int(q["page"]), int(q["limit"])
+    rows = sorted(loved, reverse=True)
+    items = [{"name": t, "mbid": "", "date": {"uts": str(ts), "#text": "x"}, "artist": {"name": a, "mbid": ""}}
+             for ts, a, t in rows[(page - 1) * limit: page * limit]]
+    body = {"lovedtracks": {"track": items[0] if len(items) == 1 else items,
+                            "@attr": {"page": str(page), "totalPages": str(-(-len(rows) // limit)), "total": str(len(rows))}}}
+    return 200, json.dumps(body).encode()
+
+
+def fake_recent(scrobbles, queries=None, fail_page=None, now_playing=True, bare=False,
+                loved=(), loved_queries=None, loved_fail=False):
     """scrobbles: [(ts, artist, title)]. Answers like user.getRecentTracks: newest first, paged,
-    `from` honoured, a dateless "now playing" entry first on page 1."""
+    `from` honoured, a dateless "now playing" entry first on page 1. `queries` records only those
+    calls; user.getLovedTracks calls go to `loved_queries`."""
     def transport(url, headers, timeout):
         q = dict(urllib.parse.parse_qsl(urllib.parse.urlsplit(url).query))
-        assert q["method"] == "user.getRecentTracks" and headers["User-Agent"].startswith("TasteCenter/")
+        assert headers["User-Agent"].startswith("TasteCenter/")
+        if q["method"] == "user.getLovedTracks":
+            return loved_answer(q, loved, loved_queries, loved_fail, bare)
+        assert q["method"] == "user.getRecentTracks"
         if queries is not None:
             queries.append(q)
         page, limit = int(q["page"]), int(q["limit"])
@@ -262,6 +286,97 @@ class StartupTests(Base):
                 s = c.get("/api/updater").json()
         self.assertIn("username", s["skipped"])
         self.assertEqual((s["runs_today"], self.calls), (0, []))
+
+
+class LovedTests(Base):
+    def loved(self):
+        return {tuple(r) for r in self.conn.execute("SELECT artist, title, loved_at FROM loved_tracks")}
+
+    def test_page_parsing_handles_a_single_track_and_a_missing_block(self):
+        lf = client([], loved=[(T0, "A", "One")])
+        self.assertEqual(lf.loved_tracks_page("me", 1), ([("A", "One", T0)], 1, 1, 1))
+        with self.assertRaises(ApiError):
+            client([], bare=True).loved_tracks_page("me", 1)
+
+    def test_each_run_replaces_the_loved_tracks_and_bumps_the_version_only_on_change(self):
+        self.seed(1)
+        first = [(T0, "Old", "o0"), (T0 + 60, "Elsewhere", "Never scrobbled")]
+        r = updater.run_once(self.conn, client([], loved=first), "me", now=T0 + DAY)
+        self.assertEqual((r["state"], r["loved"], r["changed"]), ("done", 2, True))
+        self.assertEqual(self.loved(), {("Old", "o0", T0), ("Elsewhere", "Never scrobbled", T0 + 60)})
+        version = db.versions(self.conn)
+        r = updater.run_once(self.conn, client([], loved=first), "me", now=T0 + DAY, force=True)
+        self.assertEqual((r["loved"], r["changed"]), (2, False))
+        self.assertEqual(db.versions(self.conn), version)  # nothing changed, caches stay warm
+        r = updater.run_once(self.conn, client([], loved=first[:1]), "me", now=T0 + DAY, force=True)  # one unloved
+        self.assertEqual((r["loved"], r["changed"]), (1, True))
+        self.assertEqual(self.loved(), {("Old", "o0", T0)})
+        self.assertGreater(db.versions(self.conn), version)
+
+    def test_pages_through_all_loved_tracks(self):
+        loved = [(T0 + i, "A", f"t{i}") for i in range(5)]
+        queries = []
+        with mock.patch.object(updater, "LOVED_PAGE_SIZE", 2):
+            r = updater.run_once(self.conn, client([], loved=loved, loved_queries=queries), "me", now=T0)
+        self.assertEqual([q["page"] for q in queries], ["1", "2", "3"])
+        self.assertEqual(r["loved"], 5)
+
+    def test_an_answer_with_loved_tracks_missing_keeps_the_old_list(self):
+        loved = [(T0 + i, "A", f"t{i}") for i in range(30)]
+        updater.run_once(self.conn, client([], loved=loved), "me", now=T0)
+
+        def short(user, page, limit):  # the right totals, but only one entry on the page
+            return [("A", "t0", T0)], 1, 1, 30
+        lf = client([])
+        with mock.patch.object(lf, "loved_tracks_page", short):
+            r = updater.run_once(self.conn, lf, "me", now=T0 + DAY)
+        self.assertEqual(r["state"], "done")
+        self.assertIn("1 of 30", r["loved_error"])
+        self.assertEqual(len(self.loved()), 30)
+
+    def test_a_loved_tracks_failure_keeps_the_scrobbles_and_the_old_list(self):
+        updater.run_once(self.conn, client([], loved=[(T0, "A", "t")]), "me", now=T0)
+        upstream = [(T0 + 60, "New", "n")]
+        r = updater.run_once(self.conn, client(upstream, loved_fail=True), "me", now=T0 + DAY)
+        self.assertEqual((r["state"], r["added"]), ("done", 1))
+        self.assertIn("gave up", r["loved_error"])
+        self.assertEqual(self.loved(), {("A", "t", T0)})
+
+    def test_loved_tracks_resolve_by_name_through_spellings_merges_and_later_imports(self):
+        ingest.ingest_records(self.conn, [Scrobble("Band", "Song", T0), Scrobble("Band", "Song", T0 + 60),
+                                          Scrobble("Bnad", "Other", T0 + 120), Scrobble("Band", "Plain", T0 + 180)],
+                              source="csv")
+        derive.rebuild(self.conn)
+        r = updater.store_loved(self.conn, [("Band", "Song", T0 + 500), ("BAND", "song", T0 + 400),  # one track, twice
+                                            ("Band", "Other", T0 + 600), ("Band", "Later", T0 + 700)])
+        self.assertEqual(r["loved"], 3)  # spellings that normalize alike count once, earliest date
+        band = self.conn.execute("SELECT id FROM artists WHERE name = 'Band'").fetchone()[0]
+        song = self.conn.execute("SELECT id FROM tracks WHERE title = 'Song'").fetchone()[0]
+        self.assertEqual(insights.track(self.conn, song)["loved_at"], T0 + 400)
+        self.assertEqual(insights.artist(self.conn, band)["n_loved"], 1)  # "Other" is still under the misspelling
+        maintenance.merge_artists(self.conn, self.conn.execute("SELECT id FROM artists WHERE name = 'Bnad'").fetchone()[0], band)
+        self.assertEqual(insights.artist(self.conn, band)["n_loved"], 2)
+        ingest.ingest_records(self.conn, [Scrobble("Band", "Later", T0 + 800)], source="csv")  # scrobbled after loving
+        derive.rebuild(self.conn)
+        detail = insights.artist(self.conn, band)
+        self.assertEqual(detail["n_loved"], 3)
+        self.assertEqual({t["name"]: t["loved_at"] for t in detail["tracks"]},
+                         {"Song": T0 + 400, "Other": T0 + 600, "Later": T0 + 700, "Plain": None})
+        unloved = insights.insight_list(self.conn, "unloved")
+        self.assertEqual(([t["name"] for t in unloved["items"]], unloved["loved_count"]), (["Plain"], 3))
+
+    def test_loved_then_left_and_unloved_insights(self):
+        old, new = T0, T0 + 400 * DAY
+        ingest.ingest_records(self.conn, [Scrobble("A", "Gone", old + i * 60) for i in range(3)]
+                              + [Scrobble("A", "Still", new + i * 60) for i in range(2)]
+                              + [Scrobble("A", "Plain", new + 600)], source="csv")
+        derive.rebuild(self.conn)
+        self.assertEqual(insights.insights(self.conn)["unloved"], [])  # nothing loved: no card to fill
+        updater.store_loved(self.conn, [("A", "Gone", old), ("A", "Still", old)])
+        cards = insights.insights(self.conn)
+        self.assertEqual([(t["name"], t["plays"]) for t in cards["loved_left"]], [("Gone", 3)])
+        self.assertEqual([t["name"] for t in cards["unloved"]], ["Plain"])
+        self.assertEqual(cards["loved_count"], 2)
 
 
 if __name__ == "__main__":

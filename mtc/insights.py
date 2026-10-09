@@ -13,6 +13,10 @@ from . import db
 DAY = 86400
 
 
+# Loved tracks that are in the library, one row per track (two loved spellings can meet in one).
+LOVED = "SELECT track_id, MIN(loved_at) AS loved_at FROM loved WHERE track_id IS NOT NULL GROUP BY track_id"
+
+
 def _rows(cur) -> list[dict]:
     return [dict(r) for r in cur]
 
@@ -433,9 +437,12 @@ def artist(conn: sqlite3.Connection, artist_id: int) -> dict | None:
     peak = max(info["monthly"], key=lambda r: r["plays"])
     info["peak_month"] = peak
     info["tracks"] = _rows(conn.execute(
-        "SELECT t.id, t.title AS name, COUNT(*) AS plays, MIN(s.ts) AS first_ts, MAX(s.ts) AS last_ts"
-        " FROM scrobbles s JOIN tracks t ON t.id = s.track_id WHERE s.artist_id = ?"
+        "SELECT t.id, t.title AS name, COUNT(*) AS plays, MIN(s.ts) AS first_ts, MAX(s.ts) AS last_ts,"
+        f" MIN(lv.loved_at) AS loved_at FROM scrobbles s JOIN tracks t ON t.id = s.track_id"
+        f" LEFT JOIN ({LOVED}) lv ON lv.track_id = t.id WHERE s.artist_id = ?"
         " GROUP BY t.id ORDER BY plays DESC, t.title LIMIT 50", (artist_id,)))
+    info["n_loved"] = conn.execute(f"SELECT COUNT(*) FROM ({LOVED}) lv JOIN tracks t ON t.id = lv.track_id"
+                                   " WHERE t.artist_id = ?", (artist_id,)).fetchone()[0]
     info["albums"] = _rows(conn.execute(
         "SELECT al.id, al.title AS name, COUNT(*) AS plays, COUNT(DISTINCT s.track_id) AS n_tracks,"
         " MIN(s.ts) AS first_ts, i.release_date, i.image_url FROM scrobbles s JOIN albums al ON al.id = s.album_id"
@@ -464,8 +471,9 @@ def album(conn: sqlite3.Connection, album_id: int) -> dict | None:
         return None
     info = dict(row)
     info["tracks"] = _rows(conn.execute(
-        "SELECT t.id, t.title AS name, COUNT(*) AS plays, MIN(s.ts) AS first_ts, MAX(s.ts) AS last_ts"
-        " FROM scrobbles s JOIN tracks t ON t.id = s.track_id WHERE s.album_id = ?"
+        "SELECT t.id, t.title AS name, COUNT(*) AS plays, MIN(s.ts) AS first_ts, MAX(s.ts) AS last_ts,"
+        f" MIN(lv.loved_at) AS loved_at FROM scrobbles s JOIN tracks t ON t.id = s.track_id"
+        f" LEFT JOIN ({LOVED}) lv ON lv.track_id = t.id WHERE s.album_id = ?"
         " GROUP BY t.id ORDER BY plays DESC", (album_id,)))
     info["plays"] = sum(t["plays"] for t in info["tracks"])
     meta = conn.execute("SELECT * FROM album_info WHERE album_id = ?", (album_id,)).fetchone()
@@ -484,6 +492,8 @@ def track(conn: sqlite3.Connection, track_id: int) -> dict | None:
     agg = conn.execute(
         "SELECT COUNT(*), MIN(ts), MAX(ts), COUNT(DISTINCT lday) FROM scrobbles WHERE track_id = ?", (track_id,)).fetchone()
     info.update(plays=agg[0], first_ts=agg[1], last_ts=agg[2], n_days=agg[3])
+    info["loved_at"] = conn.execute(f"SELECT loved_at FROM ({LOVED}) WHERE track_id = ?", (track_id,)).fetchone()
+    info["loved_at"] = info["loved_at"][0] if info["loved_at"] else None
     info["yearly"] = _rows(conn.execute(
         "SELECT substr(lday, 1, 4) AS year, COUNT(*) AS plays FROM scrobbles WHERE track_id = ? GROUP BY 1", (track_id,)))
     info["best_day"] = dict(conn.execute(
@@ -614,6 +624,30 @@ def _gateways(conn, hi: int, limit: int, offset: int) -> list[dict]:
         " GROUP BY st.gateway_id ORDER BY downstream_plays DESC, a.id LIMIT ? OFFSET ?", (limit, offset)))
 
 
+def _loved_left(conn, hi: int, limit: int, offset: int) -> list[dict]:
+    """Loved tracks not played in the past year, most played first."""
+    return _rows(conn.execute(
+        "SELECT t.id, t.title AS name, a.id AS artist_id, a.name AS artist, COUNT(*) AS plays,"
+        " MAX(s.ts) AS last_ts, lv.loved_at"
+        f" FROM ({LOVED}) lv JOIN scrobbles s ON s.track_id = lv.track_id"
+        " JOIN tracks t ON t.id = lv.track_id JOIN artists a ON a.id = t.artist_id"
+        " GROUP BY t.id HAVING MAX(s.ts) < ? ORDER BY plays DESC, t.id LIMIT ? OFFSET ?",
+        (hi - 365 * DAY, limit, offset)))
+
+
+def _unloved(conn, hi: int, limit: int, offset: int) -> list[dict]:
+    """Your most played tracks that aren't loved. Empty until something is loved at all, since
+    otherwise it would just repeat the top tracks."""
+    if conn.execute("SELECT 1 FROM loved_tracks LIMIT 1").fetchone() is None:
+        return []
+    return _rows(conn.execute(
+        "SELECT t.id, t.title AS name, a.id AS artist_id, a.name AS artist, x.plays FROM ("
+        " SELECT track_id, COUNT(*) AS plays FROM scrobbles GROUP BY track_id) x"
+        " JOIN tracks t ON t.id = x.track_id JOIN artists a ON a.id = t.artist_id"
+        f" WHERE x.track_id NOT IN (SELECT track_id FROM ({LOVED}))"
+        " ORDER BY x.plays DESC, t.id LIMIT ? OFFSET ?", (limit, offset)))
+
+
 def _rediscover(conn, hi: int, limit: int, offset: int) -> list[dict]:
     return rediscover(conn, limit + offset)[offset:]
 
@@ -628,6 +662,8 @@ INSIGHT_KINDS = {
     "gateways": ("gateways", _gateways),
     "binges": ("binges", _binges),
     "one-track": ("one_track", _one_track),
+    "loved-left": ("loved_left", _loved_left),
+    "unloved": ("unloved", _unloved),
     "deep-dives": ("deep_dives", _deep_dives),
 }
 
@@ -637,7 +673,7 @@ def insights(conn: sqlite3.Connection) -> dict:
     lo, hi = _span(conn)
     if hi is None:
         return {}
-    out = {"reference_ts": hi}
+    out = {"reference_ts": hi, "loved_count": _loved_count(conn)}
     for kind, (key, query) in INSIGHT_KINDS.items():
         out[key] = query(conn, hi, 15 if kind == "rediscover" else 12, 0)
     return out
@@ -647,9 +683,15 @@ def insight_list(conn: sqlite3.Connection, kind: str, limit: int = 50, offset: i
     """One insight in full, a page at a time; has_more says whether another page exists."""
     lo, hi = _span(conn)
     if hi is None:
-        return {"kind": kind, "reference_ts": None, "items": [], "has_more": False}
+        return {"kind": kind, "reference_ts": None, "items": [], "has_more": False, "loved_count": 0}
     items = INSIGHT_KINDS[kind][1](conn, hi, limit + 1, offset)
-    return {"kind": kind, "reference_ts": hi, "items": items[:limit], "has_more": len(items) > limit}
+    return {"kind": kind, "reference_ts": hi, "items": items[:limit], "has_more": len(items) > limit,
+            "loved_count": _loved_count(conn)}
+
+
+def _loved_count(conn: sqlite3.Connection) -> int:
+    """How many tracks are loved on last.fm (as of the last update), in the library or not."""
+    return conn.execute("SELECT COUNT(*) FROM loved_tracks").fetchone()[0]
 
 
 def rediscover(conn: sqlite3.Connection, limit: int = 15) -> list[dict]:
