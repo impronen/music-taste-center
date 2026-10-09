@@ -8,6 +8,9 @@ What to fetch: everything after the newest stored scrobble, minus a day of overl
 scrobbles can arrive late). Overlap is harmless: ingest ignores duplicates. last.fm pages come
 newest first, so a run reads all its pages *before* ingesting anything; a failure half way
 changes nothing and the next run starts from the same point.
+
+Each run also refreshes the loved tracks (user.getLovedTracks), replacing the whole list. That
+part failing doesn't fail the run: the scrobbles are already in, and the next run tries again.
 """
 import json
 import threading
@@ -25,6 +28,8 @@ KEEP_S = 2 * 24 * 3600  # attempts older than this can't affect the gate
 OVERLAP_S = 24 * 3600
 PAGE_SIZE = 200  # getRecentTracks maximum
 MAX_PAGES = 2000  # 400 000 scrobbles; a guard against a paging loop, not a real limit
+LOVED_PAGE_SIZE = 1000
+MAX_LOVED_PAGES = 200
 
 ATTEMPTS_KEY = "updater_attempts"  # JSON list of unix seconds
 LAST_KEY = "updater_last"  # JSON: result of the latest attempt
@@ -84,6 +89,46 @@ def fetch_new(client, user: str, since: int | None, stop: threading.Event | None
             raise ApiError(f"more than {MAX_PAGES} pages; stopping")
 
 
+def fetch_loved(client, user: str, stop: threading.Event | None = None) -> list[tuple[str, str, int]]:
+    """Every loved track as (artist, title, loved_at). The result replaces the whole list, so an
+    answer with entries missing (a short or empty page) fails instead of unloving them."""
+    out, seen, page = [], 0, 1
+    while True:
+        if stop is not None and stop.is_set():
+            raise Stopped()
+        records, total_pages, entries, total = client.loved_tracks_page(user, page, LOVED_PAGE_SIZE)
+        out.extend(records)
+        seen += entries
+        if page >= total_pages:
+            # a few can go missing when tracks are unloved while we page; more means a bad answer
+            if seen < total - max(5, total // 50):
+                raise ApiError(f"last.fm sent {seen} of {total} loved tracks; keeping the old list")
+            return out
+        page += 1
+        if page > MAX_LOVED_PAGES:
+            raise ApiError(f"more than {MAX_LOVED_PAGES} pages of loved tracks; stopping")
+
+
+def store_loved(conn, loved: list[tuple[str, str, int]]) -> dict:
+    """Replace the loved tracks with `loved`. Spellings that normalize to the same track are kept
+    once, with the earliest date. Bumps the data version only when the list actually changed."""
+    rows: dict[tuple[str, str], tuple[str, str, str, str, int]] = {}
+    for artist, title, ts in loved:
+        k = (ingest.key(artist), ingest.key(title))
+        if k not in rows or ts < rows[k][4]:
+            rows[k] = (*k, artist, title, ts)
+    with conn:
+        before = {tuple(r) for r in conn.execute(
+            "SELECT artist_key, title_key, artist, title, loved_at FROM loved_tracks")}
+        changed = before != set(rows.values())
+        if changed:
+            conn.execute("DELETE FROM loved_tracks")
+            conn.executemany("INSERT INTO loved_tracks(artist_key, title_key, artist, title, loved_at)"
+                             " VALUES (?, ?, ?, ?, ?)", rows.values())
+            db.bump(conn, "scrobbles_version")
+    return {"loved": len(rows), "changed": changed}
+
+
 def _claim(conn, now: int, force: bool) -> dict | None:
     """Check the gate and record this attempt in one write transaction, so the CLI and the server
     can't both slip under the limit. Returns the gate when the run isn't allowed, else None."""
@@ -124,6 +169,14 @@ def run_once(conn, client, user: str, *, now: float | None = None, force: bool =
         if added or conn.execute("SELECT 1 FROM scrobbles WHERE session_id IS NULL LIMIT 1").fetchone():
             derive.rebuild(conn)
         result.update(state="done", read=len(records), added=added)
+        try:
+            result.update(store_loved(conn, fetch_loved(client, user, stop)))
+        except Stopped:  # the scrobbles are in, so the run still counts
+            result.update(loved_error="stopped")
+        except ApiError as exc:  # the next run tries again
+            result.update(loved_error=str(exc))
+        except Exception as exc:
+            result.update(loved_error=f"{type(exc).__name__}: {exc}")
     except Stopped:
         result.update(state="stopped")
         _refund(conn, now)

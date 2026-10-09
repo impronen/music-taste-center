@@ -132,3 +132,21 @@ class LastFm(JsonApi):
                 artist_mbid=(t.get("artist") or {}).get("mbid") or None, track_mbid=t.get("mbid") or None,
                 album_mbid=(t.get("album") or {}).get("mbid") or None))
         return out, to_int((rt.get("@attr") or {}).get("totalPages")) or 0
+
+    def loved_tracks_page(self, user: str, page: int, limit: int = 1000) -> tuple[list[tuple[str, str, int]], int, int, int]:
+        """One page of user.getLovedTracks, newest first: ([(artist, title, loved_at)], total pages,
+        entries on this page including unusable ones, total loved tracks)."""
+        lt = self.call("user.getLovedTracks", user=user, limit=str(limit), page=str(page)).get("lovedtracks")
+        if not isinstance(lt, dict):  # an odd answer must not look like "you unloved everything"
+            raise ApiError("last.fm answered without a lovedtracks block")
+        out, entries = [], as_list(lt.get("track"))
+        for t in entries:
+            if not isinstance(t, dict):
+                continue
+            ts = to_int((t.get("date") or {}).get("uts"))
+            artist = clean((t.get("artist") or {}).get("name") or (t.get("artist") or {}).get("#text"))
+            title = clean(t.get("name"))
+            if ts and artist and title:
+                out.append((artist, title, ts))
+        attr = lt.get("@attr") or {}
+        return out, to_int(attr.get("totalPages")) or 0, len(entries), to_int(attr.get("total")) or 0

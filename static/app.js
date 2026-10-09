@@ -60,6 +60,7 @@
     upload: '<path d="M12 3v12"/><path d="m17 8-5-5-5 5"/><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>',
     arrow: '<path d="M5 12h14"/><path d="m12 5 7 7-7 7"/>',
     more: '<circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/>',
+    heart: '<path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"/>',
     external: '<path d="M7 7h10v10"/><path d="M7 17 17 7"/>',
   };
   const icon = (name, size = 18) => raw(`<svg class="icon" viewBox="0 0 24 24" aria-hidden="true" style="width:${size}px;height:${size}px">${ICONS[name]}</svg>`);
@@ -99,6 +100,8 @@
   const artistHref = (it) => `#/artist/${it.id}`;
   const trackHref = (it) => `#/track/${it.id}`;
   const albumHref = (it) => `#/album/${it.id}`;
+  // a track name with a heart when it's loved on last.fm (rankList's name option)
+  const lovedName = (t) => html`${t.name}${t.loved_at ? html` <span class="loved" title="Loved on ${Fmt.date(t.loved_at)}">${icon("heart", 14)}<span class="sr-only">(loved on ${Fmt.date(t.loved_at)})</span></span>` : ""}`;
 
   /* card(title, body, { sub, cls, aside, foot, id }) */
   function card(title, body, o = {}) {
@@ -622,7 +625,8 @@
         <div class="vel-facts table-wrap" id="vel-facts"></div>`, { cls: "canvas", id: "velocity",
         sub: "Cumulative plays: a steeper line is a faster pace. Compare up to six artists." })}
       <div class="grid cols-3">
-        ${card("Top tracks", rankList(a.tracks.slice(0, 6), { href: trackHref }))}
+        ${card("Top tracks", rankList(a.tracks.slice(0, 6), { href: trackHref, name: lovedName }),
+          a.n_loved ? { sub: `${Fmt.int(a.n_loved)} loved on last.fm` } : {})}
         ${card("Albums", a.albums.length ? rankList(a.albums.slice(0, 6), { href: albumHref, nobar: true, cover: (t) => ({ name: t.name, url: t.image_url }),
           sub: (t) => `${t.release_date ? `${year(t.release_date)} · ` : ""}${t.n_tracks} tracks` }) : html`<p class="empty">No albums.</p>`)}
         ${card("Played alongside", a.related.length ? html`<div class="chips">${a.related.slice(0, 10).map((r) => {
@@ -665,14 +669,15 @@
         ${tile("Tracks heard", Fmt.int(al.tracks.length), meta?.n_tracks ? `of ${meta.n_tracks} on the album` : "")}
         ${meta?.release_date ? tile("Released", Fmt.release(meta.release_date), `${meta.release_type ?? ""}${meta.release_date_source === "tag" ? " · from tags" : ""}`, "sage", true) : ""}
       </div>
-      ${card("Tracks", rankList(al.tracks, { href: trackHref, sub: (t) => `last played ${Fmt.date(t.last_ts)}` }))}`);
+      ${card("Tracks", rankList(al.tracks, { href: trackHref, name: lovedName, sub: (t) => `last played ${Fmt.date(t.last_ts)}` }))}`);
   }
 
   async function trackView(id) {
     const seq = rendering;
     const t = await api(`/api/tracks/${id}`);
     paint(seq, html`
-      <section class="hero no-cover"><div><span class="kicker">Track · <a href="#/artist/${t.artist_id}">${t.artist}</a></span><h1>${t.name}</h1></div></section>
+      <section class="hero no-cover"><div><span class="kicker">Track · <a href="#/artist/${t.artist_id}">${t.artist}</a></span><h1>${t.name}</h1>
+        ${t.loved_at ? html`<div class="chips tags"><span class="chip loved-chip">${icon("heart", 14)} Loved on ${Fmt.date(t.loved_at)}</span></div>` : ""}</div></section>
       <div class="tiles">
         ${tile("Plays", Fmt.int(t.plays), `on ${Fmt.int(t.n_days)} days`, "accent")}
         ${tile("First played", Fmt.date(t.first_ts), "", "", true)}
@@ -1033,6 +1038,7 @@
   // ---------- insights ----------
   const insightRow = (href, name, meta, key, pos) => html`<li class="link-row"><a href="${href}">${pos ? html`<span class="num muted">${pos}</span>` : ""}
     <span class="grow"><b>${name}</b> <span class="meta">${meta}</span></span><span class="key">${key}</span></a></li>`;
+  const NO_LOVED = "No loved tracks yet. Love tracks on last.fm and they show up after the next update.";
   // kind (URL slug, API kind) -> title, subtitle, card tint, payload key, row renderer, empty text by years of history
   const INSIGHTS = [
     { kind: "rising", title: "On the rise", sub: "Last 90 days vs your usual pace for them", cls: "sage-soft", key: "rising",
@@ -1056,6 +1062,12 @@
     { kind: "one-track", title: "One-track artists", sub: "One song is almost all you play", cls: "", key: "one_track",
       row: (r) => [artistHref(r), r.name, r.track, Fmt.pct(r.share)],
       empty: () => "No artist is just one song for you." },
+    { kind: "loved-left", title: "Loved, then left", sub: "Tracks you loved on last.fm but haven't played in a year", cls: "accent-soft", key: "loved_left",
+      row: (r, ref) => [trackHref(r), r.name, `${r.artist} · ${Fmt.int(r.plays)} plays`, Fmt.ago(r.last_ts, ref).replace(" ago", "")],
+      empty: (years, ctx) => (!ctx.loved_count ? NO_LOVED : years < 1 ? "Needs a year of history." : "You still play everything you've loved.") },
+    { kind: "unloved", title: "Not loved (yet)", sub: "Your most played tracks without a heart on last.fm", cls: "", key: "unloved",
+      row: (r) => [trackHref(r), r.name, r.artist, `${Fmt.int(r.plays)} plays`],
+      empty: (years, ctx) => (!ctx.loved_count ? NO_LOVED : "You've loved every track you play.") },
     { kind: "deep-dives", title: "Deep dives", sub: "Catalogues you've explored the furthest", cls: "", key: "deep_dives",
       row: (r) => [artistHref(r), r.name, `${Fmt.int(r.plays)} plays`, `${Fmt.int(r.n_tracks)} tracks`],
       empty: () => "Nothing yet." },
@@ -1075,7 +1087,7 @@
     const sections = INSIGHTS.map((d) => {
       const items = i[d.key];
       const body = items.length ? html`<ul class="rows">${items.slice(0, shown).map((r) => insightRow(...d.row(r, ref)))}</ul>`
-        : html`<p class="empty box">${d.empty(years)}</p>`;
+        : html`<p class="empty box">${d.empty(years, i)}</p>`;
       return [d, body, items.length > shown ? seeAll(d.kind, d.title) : ""];
     });
     const tiles = 8;
@@ -1119,7 +1131,7 @@
         <p class="lead">${d.sub.replace(/\.$/, "")}. ${!data.has_more ? `All ${Fmt.int(items.length)}` : n < max ? `The top ${Fmt.int(n)}`
           : `The top ${Fmt.int(max)}, where the list stops`}, up to ${Fmt.date(ov.last_ts)}.</p></div></div>
       ${card("", items.length ? html`<ul class="rows">${items.map((r, k) => insightRow(...d.row(r, data.reference_ts), k + 1))}</ul>`
-        : html`<p class="empty box">${d.empty(years)}</p>`, {
+        : html`<p class="empty box">${d.empty(years, data)}</p>`, {
         cls: d.cls ?? "",
         foot: data.has_more && n < max ? html`<button type="button" class="btn secondary small" id="more">Show ${step} more</button>` : "",
       })}`);

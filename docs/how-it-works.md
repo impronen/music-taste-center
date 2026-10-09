@@ -23,7 +23,7 @@ The details behind the pages: what is measured, how, and what is sent to the int
 | **Cleanup** | Merge artists that are spelled in more than one way, with suggested duplicates and name rules that fix future imports |
 | **Rhythms** | How genres (or places) move through the year, the week and the day: a genre × month heatmap, what stands out each season, time of day, weekdays vs weekends, seasonal artists (with "coming up"), genre drift per year, and how varied your mix is |
 | **Decades** | Release decades, the age of the music you play, how long you took to find albums, and older records (see [Decades](#decades)) |
-| **Insights** | Rediscover (recommendations from your own past), on the rise, forgotten favourites, obsessions, staying power, gateways, binges, one-track artists, deep dives; "See all" on a card opens the full list (`#/insights/binges` etc.), 50 more at a time up to 500 |
+| **Insights** | Rediscover (recommendations from your own past), on the rise, forgotten favourites, obsessions, staying power, gateways, binges, one-track artists, loved then left, not loved (yet), deep dives; "See all" on a card opens the full list (`#/insights/binges` etc.), 50 more at a time up to 500 |
 | **Import** | Add a CSV (a scrobble is identified by time, artist and track, so rows already stored are skipped), connect your last.fm account, and fetch tags, covers and release dates |
 
 ## Artist velocity
@@ -119,6 +119,7 @@ When the server starts it pulls your new scrobbles from last.fm in a background 
 
 - **At most 3 runs per calendar day, 4 hours apart.** The day is the local one (`MTC_TZ`) and resets at midnight; the 4-hour cooldown also holds across midnight. Each attempt, successful or not, is timestamped in the database (`meta`, key `updater_attempts`), so restarting the server a few times in a row doesn't hammer the API. A start with no username or key doesn't count.
 - **What it fetches:** everything after your newest stored scrobble, minus a day of overlap for late offline scrobbles (`user.getRecentTracks`, 200 per page, the "now playing" track skipped). All pages are read before anything is stored, so a failure half way changes nothing and the next run starts from the same point. Duplicates are ignored, so the overlap is harmless.
+- **Loved tracks:** each run then replaces the list of tracks you've loved on last.fm (`user.getLovedTracks`, newest first, 1 000 per page) in `loved_tracks`. They're kept by artist and title, not by track id, and matched to your library when read (the `loved` view, which follows merge name rules), so a track you loved before scrobbling it, or an artist you merge later, still lines up. If this step fails, the run still counts as done with a `loved_error`, and the old list stays. Loved tracks show as a heart on track, album and artist pages and feed two Insights cards.
 - **See it:** `GET /api/updater` (last result, runs today, next allowed time) or `python -m mtc update --status`.
 - **Run it by hand:** `python -m mtc update` (same limit; `--force` ignores it).
 - **Turn it off:** `python -m mtc serve --no-update`, or `MTC_AUTO_UPDATE=0`. `create_app` leaves it off unless `auto_update=True` is passed, so tests never reach the network.

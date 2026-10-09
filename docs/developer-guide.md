@@ -17,7 +17,7 @@ mtc/
   derive.py      sessions, artist stats, gateways, co-listening links (rebuilt after each import)
   enrich.py      resumable metadata fetch (artists, albums, release dates)
   jobs.py        background fetch for the UI's button (one at a time, progress, stop)
-  updater.py     the startup scrobble updater (daily limit and cooldown)
+  updater.py     the startup scrobble updater (daily limit and cooldown), also refreshes loved tracks
   lastfm.py      last.fm client (read-only methods, JSON quirks)
   musicbrainz.py MusicBrainz client (release-group dates)
   webapi.py      shared throttled HTTP client with retries; transport injectable for tests

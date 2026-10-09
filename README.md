@@ -65,7 +65,7 @@ Choose whichever suits you. You can use both: the app skips scrobbles it already
 
 The app now downloads your history in the background. **It shows no progress and nothing appears until the whole download is finished**; for a large library that takes a few minutes. Reload the page after a while. Libraries of up to about 400,000 scrobbles download this way; for a bigger one, use Option B.
 
-From then on, every time you start the app it fetches the scrobbles you've added since. It does this at most three times a day, at least four hours apart. If you restart the app sooner than that, it just skips the update. To force one, run `.venv/bin/python -m mtc update --force` in a terminal opened in the app's folder (see [Install and start](#install-and-start); on Windows, `.venv\Scripts\python -m mtc update --force`).
+From then on, every time you start the app it fetches the scrobbles you've added since. It also refreshes your loved tracks, shown with a heart. It does this at most three times a day, at least four hours apart. If you restart the app sooner than that, it just skips the update. To force one, run `.venv/bin/python -m mtc update --force` in a terminal opened in the app's folder (see [Install and start](#install-and-start); on Windows, `.venv\Scripts\python -m mtc update --force`).
 
 ### Option B: import a file you already have
 
@@ -96,7 +96,7 @@ It works through your most-played artists and albums first, in the background, w
 | **Eras** | Each year in review: top artists, the artist that defined it, and the biggest discovery |
 | **Rhythms** | Genres (or places) through the year, the week and the day, seasonal artists, and how varied your taste is |
 | **Decades** | Release decades, the age of the music you play, how long you took to find albums, and older records |
-| **Insights** | Rediscover, on the rise, forgotten favourites, obsessions, staying power, gateways, binges and more |
+| **Insights** | Rediscover, on the rise, forgotten favourites, obsessions, staying power, gateways, binges, loved tracks you've left behind and more |
 | **Cleanup** (broom icon) | Merge duplicate spellings of an artist; the fix sticks for future imports |
 | **Import** | Add scrobbles, connect your account, and fetch genres, covers and release dates |
 

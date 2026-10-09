@@ -228,7 +228,7 @@ class RetryMigrationTests(unittest.TestCase):
                 migrate(conn)
                 again = {r[0] for r in conn.execute("SELECT album_id FROM album_info WHERE mb_fetched_at IS NULL")}
                 self.assertEqual(again, {2, 3, 4})  # plain titles, matched-but-undated, errors and dated ones are left
-                self.assertEqual(conn.execute("PRAGMA user_version").fetchone()[0], 4)
+                self.assertGreaterEqual(conn.execute("PRAGMA user_version").fetchone()[0], 4)
                 self.assertEqual(conn.execute("SELECT release_date FROM album_info WHERE album_id = 7").fetchone()[0], "2001")
             finally:
                 conn.close()
