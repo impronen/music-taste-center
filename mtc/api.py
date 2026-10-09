@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager, closing
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
-from fastapi import Depends, FastAPI, HTTPException, Query, Request
+from fastapi import Depends, FastAPI, HTTPException, Path as PathParam, Query, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
@@ -17,6 +17,7 @@ from .webapi import Fatal, NotFound
 
 MAX_UPLOAD_BYTES = 300 * 1024 * 1024
 DATE = r"^\d{4}-\d{2}-\d{2}$"
+SQLITE_INT_MAX = 2**63 - 1  # a bigger id overflows SQLite (500) instead of not matching
 
 
 class FetchRequest(BaseModel):
@@ -38,6 +39,12 @@ class MergeRequest(BaseModel):
 class AliasRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=500)
     target_id: int
+
+
+class LovedRuleRequest(BaseModel):
+    artist: str = Field(..., min_length=1, max_length=1000)
+    title: str = Field(..., min_length=1, max_length=1000)
+    track_id: int = Field(..., ge=1, le=SQLITE_INT_MAX)
 
 
 class DismissRequest(BaseModel):
@@ -350,6 +357,26 @@ def create_app(db_path: str | Path | None = None, *, lastfm_factory: Callable | 
     @app.delete("/api/maintenance/aliases/{alias_id}")
     def alias_remove(alias_id: int, c=Conn):
         return {"removed": found(maintenance.remove_alias(c, alias_id) or None)}
+
+    @app.get("/api/loved/unmatched")
+    def loved_unmatched(c=Conn):
+        """Loved tracks that don't match the library (with why and likely matches), the loved-title
+        rules that link others, and how many tracks are loved in all."""
+        return {"total": c.execute("SELECT COUNT(*) FROM loved_tracks").fetchone()[0],
+                "items": maintenance.unmatched_loved(c), "rules": maintenance.loved_rules(c)}
+
+    @app.post("/api/loved/rules")
+    def loved_rule_add(req: LovedRuleRequest, c=Conn):
+        try:
+            return maintenance.add_loved_rule(c, req.artist, req.title, req.track_id)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from None
+        except LookupError as exc:
+            raise HTTPException(404, str(exc)) from None
+
+    @app.delete("/api/loved/rules/{rule_id}")
+    def loved_rule_remove(rule_id: int = PathParam(..., ge=1, le=SQLITE_INT_MAX), c=Conn):
+        return {"removed": found(maintenance.remove_loved_rule(c, rule_id) or None)}
 
     @app.get("/api/imports")
     def import_log(c=Conn):

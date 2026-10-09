@@ -22,7 +22,7 @@ mtc/
   musicbrainz.py MusicBrainz client (release-group dates)
   webapi.py      shared throttled HTTP client with retries; transport injectable for tests
   tags.py        tag normalization and classification
-  maintenance.py artist merges, name rules (artist_aliases) and duplicate suggestions
+  maintenance.py artist merges, name rules (artist_aliases), duplicate suggestions, unmatched loved tracks (loved_title_rules)
   rhythms.py     cyclical patterns: seasons, time of day/week, seasonal artists, drift, diversity
   decades.py     release decades, album age, discovery lag, decade rhythms and genres
   velocity.py    weekly cumulative plays per artist and their pace facts (/api/velocity)

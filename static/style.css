@@ -574,6 +574,12 @@ td.strong { font-weight: 700; }
 .rule-add { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) auto; gap: 10px; align-items: center; margin-top: 12px; }
 .rules > li { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) auto auto auto; gap: 14px; }
 .rules .to { color: var(--color-accent-ink); font-weight: 700; }
+.loved-unmatched > li { flex-wrap: wrap; gap: 8px 14px; }
+.lm-main { display: grid; gap: 2px; min-width: 0; flex: 1 1 260px; }
+.lm-main b { overflow-wrap: anywhere; }
+.lm-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.lm-actions .btn { white-space: normal; text-align: left; }
+.lm-head { margin: 16px 0 8px; }
 dialog { border: 0; padding: 0; border-radius: 32px; background: var(--color-canvas); color: var(--color-text); box-shadow: var(--shadow-lg); width: min(460px, calc(100vw - 32px)); }
 dialog::backdrop { background: color-mix(in srgb, var(--color-neutral-900) 50%, transparent); }
 .dialog-body { padding: 26px; display: grid; gap: 14px; }
