@@ -124,11 +124,11 @@
   // a track name with a heart when it's loved on last.fm (rankList's name option)
   const lovedName = (t) => html`${t.name}${t.loved_at ? html` <span class="loved" title="Loved on ${Fmt.date(t.loved_at)}">${icon("heart", 14)}<span class="sr-only">(loved on ${Fmt.date(t.loved_at)})</span></span>` : ""}`;
 
-  /* card(title, body, { sub, cls, aside, foot, id }) */
+  /* card(title, body, { sub, cls, aside, foot, id, h3 }); h3 for cards under a section's own h2 */
   function card(title, body, o = {}) {
     if (typeof o === "string" || o instanceof Raw) o = { sub: o };
     return html`<section class="card ${o.cls ?? ""}" ${o.id ? raw(`id="${esc(o.id)}"`) : ""}>
-      ${title ? html`<div class="card-head"><div><h2>${title}</h2>${o.sub ? html`<p>${o.sub}</p>` : ""}</div>${o.aside ? html`<div class="aside">${o.aside}</div>` : ""}</div>` : ""}
+      ${title ? html`<div class="card-head"><div>${o.h3 ? html`<h3>${title}</h3>` : html`<h2>${title}</h2>`}${o.sub ? html`<p>${o.sub}</p>` : ""}</div>${o.aside ? html`<div class="aside">${o.aside}</div>` : ""}</div>` : ""}
       ${body}${o.foot ? html`<div class="card-foot">${o.foot}</div>` : ""}</section>`;
   }
   const tile = (label, value, sub = "", cls = "", small = false) => html`<div class="tile ${cls}"><div class="label">${label}</div>
@@ -1109,9 +1109,77 @@
     empty: (years) => (years < 1 ? "Needs a year of history." : "Nothing to rediscover: you still play everything you used to pair with your favourites.") };
   const seeAll = (kind, label) => html`<a class="more" href="#/insights/${kind}">See all ${label.toLowerCase()} →</a>`;
 
+  // ---------- taste gap: loved tracks vs plays ----------
+  // Ratios: one decimal from 0,1× up; below that two significant digits, so 0,018× doesn't read as 0,0×.
+  const sig2 = new Intl.NumberFormat("fi-FI", { maximumSignificantDigits: 2 });
+  const ratioText = (x) => `${x < 0.1 ? sig2.format(x) : Fmt.dec(x)}×`;
+  /* One row: name, "x % of loves · y % of plays", the smoothed ratio, and two bars (loved, played)
+     scaled to the largest share in the list. The text carries the numbers; the bars are decoration. */
+  function gapRows(items, { href, name, meta }) {
+    const top = Math.max(...items.flatMap((x) => [x.loved_share, x.play_share]), 0.0001);
+    const w = (v) => `${((v / top) * 100).toFixed(1)}%`;
+    const inner = (x) => html`<span class="grow"><b>${name(x)}</b> <span class="meta">${meta(x)}</span></span>
+      <span class="key">${ratioText(x.ratio)}</span>
+      <span class="gap-bars" aria-hidden="true"><span class="loved"><i style="width:${w(x.loved_share)}"></i></span>
+        <span class="played"><i style="width:${w(x.play_share)}"></i></span></span>`;
+    return html`<ul class="rows gap-rows">${items.map((x) => (href
+      ? html`<li class="link-row"><a href="${href(x)}">${inner(x)}</a></li>` : html`<li>${inner(x)}</li>`))}</ul>`;
+  }
+  const gapShares = (x) => `${Fmt.pct(x.loved_share)} of loves · ${Fmt.pct(x.play_share)} of plays`;
+  const gapLegend = html`<span class="gap-legend" aria-hidden="true"><span class="loved">Loved</span><span class="played">Played</span></span>`;
+  const gapEmpty = (text) => html`<p class="empty box">${text}</p>`;
+  const tooFew = (n) => gapEmpty(`Needs more loved tracks to compare (now ${Fmt.int(n)}).`);
+
+  function tasteGapSection(g) {
+    if (!g?.loved.total) return "";
+    const lv = g.loved, r = g.rules;
+    const head = html`<div class="section-head"><h2 id="taste-gap-title">What you love vs what you play</h2>
+      <p class="secondary">Your loved tracks on last.fm against your plays. The ratio is a share among loved tracks divided by the same share of plays,
+        with small counts pulled towards 1×.</p>
+      <div class="head-chips"><span class="pill accent">${Fmt.int(lv.matched)} of ${Fmt.int(lv.total)} loves in your library</span>
+        ${lv.matched ? html`<span class="pill sage">${Fmt.int(lv.with_genre)} with genres · ${Fmt.int(lv.with_year)} dated</span>` : ""}
+        ${gapLegend}</div></div>`;
+    if (!lv.matched) {
+      return html`<section class="taste-gap" id="taste-gap" tabindex="-1" aria-labelledby="taste-gap-title">${head}
+        ${gapEmpty("None of your loved tracks match a track you've scrobbled yet.")}</section>`;
+    }
+    const sub = (title, body, o) => card(title, body, { ...o, h3: true });
+    const gn = g.genres;
+    const genreCard = (title, subText, side, cls, none) => sub(title, !lv.with_genre
+      ? html`<p class="empty box">Needs genre tags: <a class="text-link" href="#/import">fetch them on the Import page</a>.</p>`
+      : gn[side].length ? gapRows(gn[side], { href: (x) => `#/tag/${x.id}`, name: (x) => x.name, meta: gapShares })
+      : !gn.enough[side] ? tooFew(gn.loved) : gapEmpty(none), { cls, sub: subText });
+    const rule = `Counts genres with at least ${Fmt.pct(r.min_genre_share)} of loves or plays and ${Fmt.int(r.min_genre_loved)} loved tracks' worth, loved or expected.`;
+    const d = g.decades;
+    const decadeBody = !g.plays.with_year ? html`<p class="empty box">Needs release dates: <a class="text-link" href="#/import">fetch them on the Import page</a>.</p>`
+      : !d.enough ? gapEmpty(`Needs ${Fmt.int(r.min_dated_loved)} loved tracks with a release year (now ${Fmt.int(d.loved)}).`)
+      : gapRows(d.items, { name: (x) => x.label, meta: gapShares });
+    const ar = g.artists;
+    const artistMeta = (x) => `${Fmt.int(x.loved)} loved · ${Fmt.int(x.plays)} plays`;
+    const artistCard = (title, subText, side, cls, none) => sub(title, ar[side].length
+      ? gapRows(ar[side], { href: artistHref, name: (x) => x.name, meta: artistMeta })
+      : !ar.enough[side] ? tooFew(ar.loved) : gapEmpty(none), { cls, sub: subText });
+    return html`<section class="taste-gap" id="taste-gap" tabindex="-1" aria-labelledby="taste-gap-title">${head}
+      <div class="grid cols-2">
+        ${genreCard("Loved more than played", `Genres with a bigger share of your loves than of your plays. ${rule}`, "over", "sage-soft",
+          "No genre stands out among your loves.")}
+        ${genreCard("Played more than loved", "Genres you play a lot but rarely love.", "under", "accent-soft",
+          "You love every big genre about as much as you play it.")}
+      </div>
+      <div class="grid cols-3">
+        ${sub("Decades", decadeBody, { cls: "canvas",
+          sub: d.enough ? `Release decade of loved tracks vs plays, from ${Fmt.pct(d.coverage)} of matched loves and ${Fmt.pct(d.play_coverage)} of plays.`
+            : "Release decade of loved tracks vs plays." })}
+        ${artistCard("Artists you love more than you play", `At least ${Fmt.int(r.min_artist_loved)} loved tracks, a bigger share of loves than of plays.`,
+          "over", "sage-soft", "No artist's loves outrun their plays.")}
+        ${artistCard("Big artists, few loves", "Artists whose plays would suggest more loved tracks than they have.",
+          "under", "accent-soft", "Your big artists get their share of loves.")}
+      </div></section>`;
+  }
+
   async function insightsView() {
     const seq = rendering;
-    const [i, ov] = await Promise.all([api("/api/insights"), api("/api/overview")]);
+    const [i, ov, gap] = await Promise.all([api("/api/insights"), api("/api/overview"), api("/api/loved/gap").catch(() => null)]);
     if (!i.reference_ts) return emptyState(seq);
     const ref = i.reference_ts;
     const years = (ov.last_ts - ov.first_ts) / (365.25 * 86400);
@@ -1126,6 +1194,7 @@
     paint(seq, html`
       <div class="page-head"><div><h1>Insights</h1><p class="lead">Patterns in your history, up to your latest scrobble on ${Fmt.date(ov.last_ts)}.</p></div></div>
       <nav class="jumpbar" aria-label="Jump to a section"><button type="button" data-to="rediscover">Rediscover</button>
+        ${gap?.loved.total ? html`<button type="button" data-to="taste-gap">Love vs play</button>` : ""}
         ${INSIGHTS.map((d) => html`<button type="button" data-to="${d.kind}">${d.title}</button>`)}</nav>
       <section class="card solid feature" id="rediscover" tabindex="-1">
         <div><h2>Rediscover</h2><p>${REDISCOVER.sub}</p>
@@ -1135,6 +1204,7 @@
             <span class="why">because you're into ${r.because.slice(0, 2).map((b, k) => html`${k ? " and " : ""}<b>${b.name}</b>`)}${lovedCount(r.loved)}</span></a>`)}</div>`
           : html`<p>${REDISCOVER.empty(years)}</p>`}
       </section>
+      ${tasteGapSection(gap)}
       <div class="columns-3">${sections.map(([d, body, foot]) => card(d.title, body, { id: d.kind, cls: d.cls, sub: d.sub, foot }))}</div>`);
     view.querySelectorAll("[data-to]").forEach((b) => b.addEventListener("click", () => {
       const el = document.getElementById(b.dataset.to);

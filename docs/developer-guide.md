@@ -26,6 +26,7 @@ mtc/
   rhythms.py     cyclical patterns: seasons, time of day/week, seasonal artists, drift, diversity
   decades.py     release decades, album age, discovery lag, decade rhythms and genres
   velocity.py    weekly cumulative plays per artist and their pace facts (/api/velocity)
+  taste_gap.py   loved tracks vs plays: genres, decades and artists over- and under-represented among loves (/api/loved/gap)
   insights.py    all read queries
   settings.py    the gitignored data/settings.json (API key, username, optional birth year)
   api.py         FastAPI JSON endpoints (/api/docs) + static UI

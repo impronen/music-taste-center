@@ -269,7 +269,7 @@ main h1:focus { outline: none; }
 .card.solid { background: var(--color-accent); color: var(--color-on-accent); }
 .card-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-start; gap: 12px; margin-bottom: 16px; }
 .card-head > div:first-child { min-width: 0; flex: 1 1 220px; }
-.card-head h2 { font-size: var(--fs-card); }
+.card-head h2, .card-head h3 { font-size: var(--fs-card); }
 .card-head p { margin-top: 4px; color: var(--color-ink-2); font-size: var(--fs-sm); }
 .card-head .aside { flex: none; }
 .card.fill { display: flex; flex-direction: column; }
@@ -353,6 +353,23 @@ main h1:focus { outline: none; }
 .rows .meta { color: var(--color-ink-2); font-size: var(--fs-sm); }
 .rows .num { min-width: 3ch; text-align: right; font-variant-numeric: tabular-nums; }
 .rows b { font-weight: 700; }
+
+/* taste gap (Insights): rows with a loved bar and a played bar under the name */
+.taste-gap { margin-top: var(--section); scroll-margin-top: 96px; }
+.taste-gap > * + * { margin-top: var(--gap); }
+.section-head p { margin-top: 6px; max-width: 70ch; }
+.taste-gap .head-chips .pill { white-space: normal; }
+.gap-rows > li, .gap-rows > li.link-row > a { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px 10px; align-items: center; }
+.gap-rows > li.link-row { display: block; }
+.gap-rows .grow b, .gap-rows .grow .meta { display: block; overflow: hidden; text-overflow: ellipsis; }
+.gap-bars { grid-column: 1 / -1; display: grid; gap: 3px; }
+.gap-bars > span { display: block; height: 6px; border-radius: var(--pill); background: var(--color-track); overflow: hidden; }
+.gap-bars i { display: block; height: 100%; border-radius: var(--pill); }
+.gap-bars .loved i, .gap-legend .loved::before { background: var(--color-accent); }
+.gap-bars .played i, .gap-legend .played::before { background: var(--bar-sage); }
+.gap-legend { display: inline-flex; align-items: center; gap: 12px; font-size: var(--fs-xs); font-weight: 600; color: var(--color-ink-2); }
+.gap-legend > span { display: inline-flex; align-items: center; gap: 6px; }
+.gap-legend > span::before { content: ""; width: 14px; height: 6px; border-radius: var(--pill); }
 .time { flex: none; padding: 2px 9px; border-radius: var(--pill); background: var(--tint-accent); color: var(--color-accent-ink); font-weight: 700; font-size: var(--fs-xs); font-variant-numeric: tabular-nums; }
 .day-sep { list-style: none; margin: 8px 0 0 4px; font-size: var(--fs-xs); font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--color-accent-ink); }
 
