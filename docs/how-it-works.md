@@ -11,6 +11,7 @@ The details behind the pages: what is measured, how, and what is sent to the int
 - [What you love vs what you play](#what-you-love-vs-what-you-play)
 - [Cleaning up duplicate artists](#cleaning-up-duplicate-artists)
 - [The live updater](#the-live-updater)
+- [Upcoming releases](#upcoming-releases)
 
 ## The pages in detail
 
@@ -25,7 +26,8 @@ The details behind the pages: what is measured, how, and what is sent to the int
 | **Rhythms** | How genres (or places) move through the year, the week and the day: a genre × month heatmap, what stands out each season, time of day, weekdays vs weekends, seasonal artists (with "coming up"), genre drift per year, and how varied your mix is |
 | **Decades** | Release decades, the age of the music you play, how long you took to find albums, and older records (see [Decades](#decades)) |
 | **Insights** | Rediscover (recommendations from your own past), on the rise, forgotten favourites, obsessions, staying power, gateways, binges, one-track artists, loved then left, not loved (yet), love at first listen, slow burners, deep dives, and what you love vs what you play (see [below](#what-you-love-vs-what-you-play)); "See all" on a card opens the full list (`#/insights/binges` etc.), 50 more at a time up to 500 |
-| **Import** | Add a CSV (a scrobble is identified by time, artist and track, so rows already stored are skipped), connect your last.fm account, and fetch tags, covers and release dates |
+| **Upcoming** | New releases for this Friday and the six after it, by artists you play first (see [Upcoming releases](#upcoming-releases)) |
+| **Import** (upload icon) | Add a CSV (a scrobble is identified by time, artist and track, so rows already stored are skipped), connect your last.fm account, and fetch tags, covers and release dates |
 
 ## Artist velocity
 
@@ -139,3 +141,14 @@ When the server starts it pulls your new scrobbles from last.fm in a background 
 - **Turn it off:** `python -m mtc serve --no-update`, or `MTC_AUTO_UPDATE=0`. `create_app` leaves it off unless `auto_update=True` is passed, so tests never reach the network.
 
 The code is `mtc/updater.py` and `LastFm.recent_tracks_page`; everything goes through `ingest.ingest_records` with `source="lastfm-api"`. Open pages notice the new scrobbles on the next page change (the `X-Data-Version` header).
+
+## Upcoming releases
+
+The Upcoming page lists what comes out on this Friday and the six after it, by the artists you play first. Nothing here is sent about you: the app asks two public lists for everything coming out and does the matching on your machine.
+
+- **Sources.** [ListenBrainz fresh releases](https://listenbrainz.org/explore/fresh-releases/) (MusicBrainz data: albums, EPs and singles, a few thousand over the seven weeks, thinning out after about six) and Wikipedia's *List of (year) albums* (fewer, bigger releases, a good part of which MusicBrainz doesn't have yet, each with the news article it cites). Each is stored in `upcoming_releases` and replaced when the page refreshes it, which it does by itself when the list is more than 12 hours old (or with **Check again**). A source that fails keeps its last list and the page says so.
+- **Weeks.** A release week runs from Saturday to Friday and is labelled by its Friday, so a Wednesday release counts towards that week's Friday.
+- **Your artists.** A release is yours when its artist is in your library with at least 3 plays, matched by MusicBrainz artist id (filled by the metadata fetch on the Import page), else by name, through your name rules, and by each linked name of a Wikipedia credit like "A and B". A name match is skipped when your artist's known MusicBrainz id shows the release is by another artist of the same name. A release in both sources is shown once, and ListenBrainz's artist ids decide whose it is.
+- **Order.** Yours are ranked by how much you play the artist: log(1 + all-time plays) + 1,5 × log(1 + plays in the 12 months up to your latest scrobble) + 0,5 × loved tracks (at most 6). So a current favourite comes before an old one with more plays.
+- **The rest.** Each week also lists the rest of Wikipedia's releases under *Also out*, and counts the other albums and EPs ListenBrainz knows, with a link there. Singles are hidden unless you pick **With singles**.
+- **Data.** `GET /api/upcoming` (the stored lists) and `POST /api/upcoming/refresh` (fetch again; one at a time).
