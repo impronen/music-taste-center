@@ -37,7 +37,7 @@
 
   /* type scale: body 15, secondary 14, minimum 13 */
   --fs-xs: 13px; --fs-sm: 14px; --fs-md: 15px; --fs-lg: 18px;
-  --fs-card: 24px; --fs-stat: 34px; --fs-h1: 56px; --fs-hero: 64px;
+  --fs-card: 24px; --fs-section: 32px; --fs-stat: 34px; --fs-h1: 56px; --fs-hero: 64px;
   --gap: 16px; --section: 24px; --card-pad: 24px; --row-h: 44px;
 }
 
@@ -76,6 +76,7 @@
   --bar-peak: light-dark(var(--color-accent-700), var(--color-accent-200));
   --bar-sage-base: light-dark(var(--color-accent-2-300), var(--color-accent-2-800));
   --bar-sage: light-dark(var(--color-accent-2-600), var(--color-accent-2-400));
+  --bar-played: var(--color-neutral-500);   /* "played" next to "loved" (accent), both themes */
   --baseline: light-dark(var(--color-neutral-300), #5a5349);
   /* clusters / categorical (validated, same order in both themes) */
   --series-1: light-dark(#c67139, #ce7a41);
@@ -396,10 +397,24 @@ pre.prompt:focus-visible { outline: none; }  /* the box shows the focus: the fad
 .source-note { margin-top: var(--gap); font-size: var(--fs-sm); }
 
 /* taste gap (Insights): rows with a loved bar and a played bar under the name */
-.taste-gap { margin-top: var(--section); scroll-margin-top: 96px; }
-.taste-gap > * + * { margin-top: var(--gap); }
+/* a titled section of a page (Insights: Your patterns, Loved tracks) */
+.page-section { margin-top: var(--section); scroll-margin-top: 96px; }
+.page-section > * + * { margin-top: var(--gap); }
 .section-head p { margin-top: 6px; max-width: 70ch; }
-.taste-gap .head-chips .pill { white-space: normal; }
+.page-section > .section-head h2 { font-size: var(--fs-section); }
+.section-head.split { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 12px 24px; }
+.section-head.split .head-chips { margin-top: 0; }
+.section-head .head-chips .pill { white-space: normal; }
+.jumpbar .n { margin-left: 6px; font-size: var(--fs-xs); font-weight: 500; color: var(--color-ink-3); }
+.jumpbar button:hover .n { color: inherit; }
+.row-heart { flex: none; display: inline-flex; }
+/* no loved tracks: one card with a round heart */
+.card.no-loved { display: flex; flex-wrap: wrap; align-items: center; gap: 16px 24px; }
+.card.no-loved > div { flex: 1 1 320px; }
+.card.no-loved h3 { margin-bottom: 4px; }
+.card.no-loved p { font-size: var(--fs-sm); }
+.heart-badge { flex: none; width: 56px; height: 56px; border-radius: 50%; display: grid; place-items: center; background: var(--tint-accent); color: var(--color-accent-ink); }
+.heart-badge svg.icon { fill: currentColor; }
 .gap-rows > li, .gap-rows > li.link-row > a { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px 10px; align-items: center; }
 .gap-rows > li.link-row { display: block; }
 .gap-rows .grow b, .gap-rows .grow .meta { display: block; overflow: hidden; text-overflow: ellipsis; }
@@ -407,7 +422,7 @@ pre.prompt:focus-visible { outline: none; }  /* the box shows the focus: the fad
 .gap-bars > span { display: block; height: 6px; border-radius: var(--pill); background: var(--color-track); overflow: hidden; }
 .gap-bars i { display: block; height: 100%; border-radius: var(--pill); }
 .gap-bars .loved i, .gap-legend .loved::before { background: var(--color-accent); }
-.gap-bars .played i, .gap-legend .played::before { background: var(--bar-sage); }
+.gap-bars .played i, .gap-legend .played::before { background: var(--bar-played); }
 .gap-legend { display: inline-flex; align-items: center; gap: 12px; font-size: var(--fs-xs); font-weight: 600; color: var(--color-ink-2); }
 .gap-legend > span { display: inline-flex; align-items: center; gap: 6px; }
 .gap-legend > span::before { content: ""; width: 14px; height: 6px; border-radius: var(--pill); }
@@ -587,10 +602,14 @@ td.strong { font-weight: 700; }
 .season-card .body { flex: 1; padding-bottom: 14px; }
 
 /* ---------- insights ---------- */
-.feature { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 2fr); gap: 24px; align-items: start; scroll-margin-top: 96px; }
-.feature h2 { font-size: 30px; }
+.feature { display: grid; gap: 16px; scroll-margin-top: 96px; }
+.feature-head { max-width: 62ch; }
+.feature > .card-foot { margin-top: 0; }
+/* the link sits on a chip like the tiles: light text on the accent card is too faint */
+.feature .card-foot a.more { display: inline-block; padding: 6px 14px; border-radius: var(--pill); background: var(--color-bg); color: var(--color-accent-ink); }
+.feature h2 { font-size: var(--fs-section); }
 .feature p { margin-top: 8px; }
-.feature .tiles-2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.feature .tiles-2 { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 10px; }
 .feature .tile-link { display: block; padding: 12px 16px; border-radius: 18px; background: var(--color-bg); color: var(--color-text); min-width: 0; }
 .feature .tile-link:hover { box-shadow: var(--shadow-md); color: var(--color-text); }
 .feature .tile-link .top-line { display: flex; justify-content: space-between; gap: 8px; }
