@@ -12,7 +12,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 
-from . import config, db, decades, velocity, derive, enrich, fsutil, ingest, insights, jobs, maintenance, rhythms, settings, updater
+from . import config, db, decades, velocity, derive, enrich, fsutil, ingest, insights, jobs, maintenance, rhythms, settings, taste_gap, updater
 from .webapi import Fatal, NotFound
 
 MAX_UPLOAD_BYTES = 300 * 1024 * 1024
@@ -184,6 +184,11 @@ def create_app(db_path: str | Path | None = None, *, lastfm_factory: Callable | 
         if kind not in insights.INSIGHT_KINDS:
             raise HTTPException(404, "unknown insight")
         return insights.insight_list(c, kind, limit, offset)
+
+    @app.get("/api/loved/gap")
+    def loved_gap(c=Conn):
+        """Genres, decades and artists over- and under-represented among loved tracks vs plays."""
+        return taste_gap.taste_gap(c)
 
     @app.get("/api/graph")
     def graph(n: int = Query(120, ge=10, le=400), per_node: int = Query(6, ge=1, le=20), c=Conn):

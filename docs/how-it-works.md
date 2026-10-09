@@ -8,6 +8,7 @@ The details behind the pages: what is measured, how, and what is sent to the int
 - [Tags, covers, genres and release dates](#tags-covers-genres-and-release-dates)
 - [Rhythms](#rhythms)
 - [Decades](#decades)
+- [What you love vs what you play](#what-you-love-vs-what-you-play)
 - [Cleaning up duplicate artists](#cleaning-up-duplicate-artists)
 - [The live updater](#the-live-updater)
 
@@ -23,7 +24,7 @@ The details behind the pages: what is measured, how, and what is sent to the int
 | **Cleanup** | Merge artists that are spelled in more than one way, with suggested duplicates and name rules that fix future imports; link loved tracks whose title doesn't match |
 | **Rhythms** | How genres (or places) move through the year, the week and the day: a genre × month heatmap, what stands out each season, time of day, weekdays vs weekends, seasonal artists (with "coming up"), genre drift per year, and how varied your mix is |
 | **Decades** | Release decades, the age of the music you play, how long you took to find albums, and older records (see [Decades](#decades)) |
-| **Insights** | Rediscover (recommendations from your own past), on the rise, forgotten favourites, obsessions, staying power, gateways, binges, one-track artists, loved then left, not loved (yet), love at first listen, slow burners, deep dives; "See all" on a card opens the full list (`#/insights/binges` etc.), 50 more at a time up to 500 |
+| **Insights** | Rediscover (recommendations from your own past), on the rise, forgotten favourites, obsessions, staying power, gateways, binges, one-track artists, loved then left, not loved (yet), love at first listen, slow burners, deep dives, and what you love vs what you play (see [below](#what-you-love-vs-what-you-play)); "See all" on a card opens the full list (`#/insights/binges` etc.), 50 more at a time up to 500 |
 | **Import** | Add a CSV (a scrobble is identified by time, artist and track, so rows already stored are skipped), connect your last.fm account, and fetch tags, covers and release dates |
 
 ## Artist velocity
@@ -100,6 +101,17 @@ The Decades page looks at *when the music you play was released*. It needs relea
 - **Decades through the year and day.** The Rhythms method with decades as the rows: decade × season, time of day and weekday/weekend heatmaps, each compared with that same year's decade mix. A heatmap where nothing differs from usual says so instead of drawing a blank grid.
 - **What each decade sounds like.** A decade × genre map comparing each decade's genre mix with your overall mix, plus the signature genres of each decade. Needs genre tags.
 
+## What you love vs what you play
+
+The Insights page compares your loved tracks on last.fm with your plays, to show what is over- and under-represented among your loves. It appears once you have loved tracks (see [The live updater](#the-live-updater)), and counts only loved tracks that match a track in your library. Each part says how many loved tracks it is based on.
+
+- **Genres.** A loved track counts as its artist's genre mix (the same top-5 split as the genre profile), and plays are split the same way, so a loved track of an artist tagged 70 % jazz and 30 % soul adds 0,7 to jazz. Each genre's share of your loves is compared with its share of your plays. *Loved more than played* lists the genres most over-represented among loves; *Played more than loved* the ones you play a lot but rarely love. Only artists with genre tags count, on both sides.
+- **Decades.** A loved track is dated by the album you played it from most (a tie goes to the earliest release), and plays by their own album, with the release dates of the [Decades](#decades) page. Needs 10 loved tracks with a release year.
+- **Artists.** Loved tracks per artist against plays per artist: artists whose loves outrun their plays, and big artists with few or no loves.
+- **The ratio** is the share among loves divided by the share of plays, smoothed so small counts can't give silly numbers: with E the number of loves expected from the play share, it is (loves + 5) / (E + 5) for genres and decades, and (loves + 2) / (E + 2) for artists. 1,0× means as loved as played.
+- **Minimum support.** A genre is compared only with at least 1 % of your loves or of your plays and 10 loved tracks' worth, loved or expected, so a genre you play a lot but never love still shows up, and so does a niche genre you love far beyond its plays. An artist needs 3 loved tracks to count as loved more than played, and enough plays to expect 3 loves to count as played more than loved. The lists show ratios of at least 1,25× (or at most 0,8×). When you have too few loved tracks for a list to reach these minimums at all, it says so instead of reporting that nothing stands out.
+- **Data.** `GET /api/loved/gap`, cached until the next import, merge, name rule, tag or release-date fetch, or loved-tracks update.
+
 ## Cleaning up duplicate artists
 
 last.fm data has spelling variants of the same artist ("Sunn 0)))" with a zero vs "Sunn O)))"). On the **Cleanup** page, or via **More → Merge a duplicate spelling…** on an artist page, merge the wrong spelling into the right one:
@@ -121,7 +133,7 @@ When the server starts it pulls your new scrobbles from last.fm in a background 
 
 - **At most 3 runs per calendar day, 4 hours apart.** The day is the local one (`MTC_TZ`) and resets at midnight; the 4-hour cooldown also holds across midnight. Each attempt, successful or not, is timestamped in the database (`meta`, key `updater_attempts`), so restarting the server a few times in a row doesn't hammer the API. A start with no username or key doesn't count.
 - **What it fetches:** everything after your newest stored scrobble, minus a day of overlap for late offline scrobbles (`user.getRecentTracks`, 200 per page, the "now playing" track skipped). All pages are read before anything is stored, so a failure half way changes nothing and the next run starts from the same point. Duplicates are ignored, so the overlap is harmless.
-- **Loved tracks:** each run then replaces the list of tracks you've loved on last.fm (`user.getLovedTracks`, newest first, 1 000 per page) in `loved_tracks`. They're kept by artist and title, not by track id, and matched to your library when read (the `loved` view, which follows merge name rules), so a track you loved before scrobbling it, or an artist you merge later, still lines up. If this step fails, the run still counts as done with a `loved_error`, and the old list stays. Loved tracks show as a heart on track, album and artist pages and feed four Insights cards and lift loved artists in Rediscover. Love timing compares the love date with the track's scrobbles: plays over before the love (a scrobble's time is when the play started, so a play that started under 10 minutes before the love counts as the one being listened to) and the time since the first play. last.fm keeps only the latest love date, so a track unloved and loved again counts from the second time. A track first played in the history's first 30 days only gets "at least" figures and never counts as a first-listen love, since its listening may predate the history.
+- **Loved tracks:** each run then replaces the list of tracks you've loved on last.fm (`user.getLovedTracks`, newest first, 1 000 per page) in `loved_tracks`. They're kept by artist and title, not by track id, and matched to your library when read (the `loved` view, which follows merge name rules), so a track you loved before scrobbling it, or an artist you merge later, still lines up. If this step fails, the run still counts as done with a `loved_error`, and the old list stays. Loved tracks show as a heart on track, album and artist pages and feed four Insights cards, lift loved artists in Rediscover, and drive the [love vs play comparison](#what-you-love-vs-what-you-play). Love timing compares the love date with the track's scrobbles: plays over before the love (a scrobble's time is when the play started, so a play that started under 10 minutes before the love counts as the one being listened to) and the time since the first play. last.fm keeps only the latest love date, so a track unloved and loved again counts from the second time. A track first played in the history's first 30 days only gets "at least" figures and never counts as a first-listen love, since its listening may predate the history.
 - **See it:** `GET /api/updater` (last result, runs today, next allowed time) or `python -m mtc update --status`.
 - **Run it by hand:** `python -m mtc update` (same limit; `--force` ignores it).
 - **Turn it off:** `python -m mtc serve --no-update`, or `MTC_AUTO_UPDATE=0`. `create_app` leaves it off unless `auto_update=True` is passed, so tests never reach the network.

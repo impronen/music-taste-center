@@ -145,6 +145,7 @@ def add_alias(conn: sqlite3.Connection, name: str, target_id: int) -> dict:
     if conn.execute("SELECT 1 FROM artists WHERE id = ?", (target_id,)).fetchone() is None:
         raise LookupError("artist not found")
     with conn:
+        db.bump(conn, "scrobbles_version")  # loved tracks under this spelling now resolve to the target
         conn.execute(
             "INSERT INTO artist_aliases(name_key, name, artist_id, scrobbles, created_at) VALUES (?, ?, ?, 0, ?)"
             " ON CONFLICT(name_key) DO UPDATE SET artist_id = excluded.artist_id",
@@ -155,7 +156,10 @@ def add_alias(conn: sqlite3.Connection, name: str, target_id: int) -> dict:
 def remove_alias(conn: sqlite3.Connection, alias_id: int) -> bool:
     """Stop applying a rule. Scrobbles merged earlier stay merged."""
     with conn:
-        return conn.execute("DELETE FROM artist_aliases WHERE id = ?", (alias_id,)).rowcount > 0
+        removed = conn.execute("DELETE FROM artist_aliases WHERE id = ?", (alias_id,)).rowcount > 0
+        if removed:
+            db.bump(conn, "scrobbles_version")  # loved tracks under that spelling stop resolving
+        return removed
 
 
 # ---------------------------------------------------------------- finding duplicates
