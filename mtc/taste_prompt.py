@@ -11,11 +11,12 @@ The profile leans on recent listening and on genres more than on artist names:
 - Tasks: "releases" (new albums on the coming Fridays, with what the Upcoming page already found),
   "discover" (artists to explore) or "profile" (the profile alone).
 """
+import math
 import sqlite3
 from collections import Counter
 from datetime import date, datetime, timedelta
 
-from . import config, releases, taste_gap
+from . import config, releases, tags, taste_gap
 from .insights import LOVED, _artist_genre_shares
 from .rhythms import _cached
 
@@ -29,6 +30,7 @@ MIN_TOP_SHARE = 0.005     # a genre listed under "now" rounds to at least 1 %
 MIN_COVERAGE = 0.5        # rising and fading need genre tags on this share of recent listening
 MIN_TREND_PLAYS = 10      # ...and this many weighted plays of the genre (now for rising, all time for fading)
 DISCOVERY_DAYS = 180
+SEEDS = 150               # most played artists now whose similar artists releases.py looks up
 TASKS = ("releases", "discover", "profile")
 # place tags that name the same scene
 PLACE_NAMES = {"usa": "american", "uk": "british", "finland": "finnish", "suomi": "finnish",
@@ -115,6 +117,14 @@ def _profile(conn) -> dict | None:
             " WHERE s.first_ts > ? AND s.prehistory = 0 AND s.plays >= 5 ORDER BY s.plays DESC LIMIT 8", (recent_start,))],
         "staples": [names[a] for a, _ in ever.most_common(8)],
     }
+    # for releases.py: the genre mix now (shares among tagged artists) and the most played artists now
+    out["genre_vector"] = {tags.fold(tag_names[t]): v for t, v in g_now.items()}  # by folded tag name
+    # how distinctive each genre is: log(1 + tagged artists / artists with it among their top tags),
+    # so "rock" on half your artists counts far less than "indie folk" on a few
+    df = Counter(t for tw in genre.values() for t, _ in tw)
+    out["genre_idf"] = {tags.fold(tag_names[t]): math.log(1 + len(genre) / n) for t, n in df.items()}
+    keys = dict(conn.execute("SELECT id, name_key FROM artists"))
+    out["seeds"] = [{"name": names[a], "key": keys[a], "weight": w / total} for a, w in now.most_common(SEEDS)]
     out["loved"] = [f"{r[0]} – {r[1]}" for r in conn.execute(
         f"SELECT a.name, t.title FROM ({LOVED}) lv JOIN tracks t ON t.id = lv.track_id JOIN artists a ON a.id = t.artist_id"
         " ORDER BY lv.loved_at DESC LIMIT 8")]
@@ -194,7 +204,7 @@ def build(conn: sqlite3.Connection, task: str = "releases", today: date | None =
 
 
 def _known_releases(conn, today: date, until: date) -> list[str]:
-    weeks = releases.upcoming(conn, today)["weeks"]
+    weeks = releases.upcoming(conn, today, with_new=False)["weeks"]
     out = []
     for w in weeks:
         if w["friday"] > until.isoformat():

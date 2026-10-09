@@ -94,6 +94,18 @@ class LastFm(JsonApi):
     def artist_tags(self, artist: str) -> list[tuple[str, int]]:
         return tag_list(self.call("artist.getTopTags", artist=artist).get("toptags"))
 
+    def similar_artists(self, artist: str, limit: int = 250) -> list[tuple[str, str | None, float]]:
+        """[(name, mbid, match 0-1)] by last.fm's similarity, most similar first."""
+        out = []
+        for a in as_list((self.call("artist.getSimilar", artist=artist, limit=str(limit)).get("similarartists") or {}).get("artist")):
+            if isinstance(a, dict) and a.get("name"):
+                try:
+                    match = float(a.get("match") or 0)
+                except (TypeError, ValueError):
+                    match = 0.0
+                out.append((a["name"], a.get("mbid") or None, match))
+        return out
+
     def album_info(self, artist: str, album: str) -> dict:
         al = self.call("album.getInfo", artist=artist, album=album).get("album") or {}
         tracks = (al.get("tracks") or {}).get("track") if isinstance(al.get("tracks"), dict) else None

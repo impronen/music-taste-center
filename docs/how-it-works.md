@@ -27,7 +27,7 @@ The details behind the pages: what is measured, how, and what is sent to the int
 | **Rhythms** | How genres (or places) move through the year, the week and the day: a genre × month heatmap, what stands out each season, time of day, weekdays vs weekends, seasonal artists (with "coming up"), genre drift per year, and how varied your mix is |
 | **Decades** | Release decades, the age of the music you play, how long you took to find albums, and older records (see [Decades](#decades)) |
 | **Insights** | Rediscover (recommendations from your own past), on the rise, forgotten favourites, obsessions, staying power, gateways, binges, one-track artists, loved then left, not loved (yet), love at first listen, slow burners, deep dives, and what you love vs what you play (see [below](#what-you-love-vs-what-you-play)); "See all" on a card opens the full list (`#/insights/binges` etc.), 50 more at a time up to 500 |
-| **Upcoming** | New releases for this Friday and the six after it, by artists you play first (see [Upcoming releases](#upcoming-releases)), and a research prompt about your taste for any AI assistant (see [The research prompt](#the-research-prompt)) |
+| **Upcoming** | New releases for this Friday and the six after it: by new artists similar to the ones you play, and by your own artists (see [Upcoming releases](#upcoming-releases)), and a research prompt about your taste for any AI assistant (see [The research prompt](#the-research-prompt)) |
 | **Import** (upload icon) | Add a CSV (a scrobble is identified by time, artist and track, so rows already stored are skipped), connect your last.fm account, and fetch tags, covers and release dates |
 
 ## Artist velocity
@@ -145,14 +145,19 @@ The code is `mtc/updater.py` and `LastFm.recent_tracks_page`; everything goes th
 
 ## Upcoming releases
 
-The Upcoming page lists what comes out on this Friday and the six after it, by the artists you play first. Nothing here is sent about you: the app asks two public lists for everything coming out and does the matching on your machine.
+The Upcoming page lists what comes out on this Friday and the six after it: first releases by artists new to you that are similar to the ones you play, then releases by your own artists. The release lists come from two public sources and the matching happens on your machine; last.fm is asked about artists by name only.
 
 - **Sources.** [ListenBrainz fresh releases](https://listenbrainz.org/explore/fresh-releases/) (MusicBrainz data: albums, EPs and singles, a few thousand over the seven weeks, thinning out after about six) and Wikipedia's *List of (year) albums* (fewer, bigger releases, a good part of which MusicBrainz doesn't have yet, each with the news article it cites). Each is stored in `upcoming_releases` and replaced when the page refreshes it, which it does by itself when the list is more than 12 hours old (or with **Check again**). A source that fails keeps its last list and the page says so.
 - **Weeks.** A release week runs from Saturday to Friday and is labelled by its Friday, so a Wednesday release counts towards that week's Friday.
 - **Your artists.** A release is yours when its artist is in your library with at least 3 plays, matched by MusicBrainz artist id (filled by the metadata fetch on the Import page), else by name, through your name rules, and by each linked name of a Wikipedia credit like "A and B". A name match is skipped when your artist's known MusicBrainz id shows the release is by another artist of the same name. A release in both sources is shown once, and ListenBrainz's artist ids decide whose it is.
 - **Order.** Yours are ranked by how much you play the artist: log(1 + all-time plays) + 1,5 × log(1 + plays in the 12 months up to your latest scrobble) + 0,5 × loved tracks (at most 6). So a current favourite comes before an old one with more plays.
 - **The rest.** Each week also lists the rest of Wikipedia's releases under *Also out*, and counts the other albums and EPs ListenBrainz knows, with a link there. Singles are hidden unless you pick **With singles**.
-- **Data.** `GET /api/upcoming` (the stored lists) and `POST /api/upcoming/refresh` (fetch again; one at a time).
+- **New to you.** Needs your last.fm API key. For your 150 most played artists now (plays weighted as in [the research prompt](#the-research-prompt): halving every 3 months), the app asks last.fm for up to 250 similar artists each, and for the genre tags of the artists with upcoming albums and EPs (up to 400 a refresh, similar ones first). Both are kept for 30 days, so only the first refresh is slow (a few minutes, in the background, with progress on the page). An artist last.fm fails on is tried again a day later; when last.fm doesn't answer three times in a row, the refresh stops that part, keeps what it has and says so. A release by an artist with fewer than 3 plays of yours scores on two things:
+  - *similarity*: for each of your artists that last.fm lists it as similar to, last.fm's match (0–1) × that artist's share of your recent listening, summed, and scaled so the most similar release of the seven weeks is 1;
+  - *genre fit*: the cosine similarity between its last.fm genre tags and your genre mix now (0–1; spellings like post-rock and post rock count as one tag), with each genre weighted by how distinctive it is in your library (log(1 + tagged artists / artists with that genre among their top tags)), so a broad tag like rock that half your artists carry counts far less than indie folk.
+
+  The score is half of each. A release is shown when it's similar to at least one of your artists or has a genre fit of at least 0,4; each week shows the top 15, with "Like …" (the three artists of yours it's most similar to) and the genres it shares with you.
+- **Data.** `GET /api/upcoming` (the stored lists) and `POST /api/upcoming/refresh` (fetch again in the background; one at a time).
 
 ## The research prompt
 

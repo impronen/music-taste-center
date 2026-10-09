@@ -16,13 +16,15 @@ scrobble, and loved tracks. Releases are grouped by release week, Saturday to Fr
 the Friday.
 """
 import html
+import json
+import logging
 import math
 import re
 import threading
 import time
 from datetime import date, datetime, timedelta
 
-from . import config, db
+from . import config, db, tags
 from .ingest import key
 from .insights import LOVED_BY_ARTIST
 from .musicbrainz import edition_free_title
@@ -34,6 +36,15 @@ TYPES = ("Album", "EP", "Single")
 RECENT_DAYS = 365
 MIN_PLAYS = 3                   # an artist played less isn't "yours" (and a name clash costs less)
 SOURCES = ("listenbrainz", "wikipedia")
+CACHE_DAYS = 30                 # similar artists and tags are looked up again after this
+SIMILAR_LIMIT = 250             # similar artists per seed (more than 100 doubles the releases found)
+TAG_BUDGET = 400                # tag lookups per refresh, at last.fm's pace about 3 minutes
+TAGS_KEPT = 10                  # genre tags kept per artist
+MIN_GENRE_FIT = 0.4             # a new artist not similar to any of yours needs this genre fit
+SIMILARITY_WEIGHT = 0.5         # score = this × similarity (best = 1) + the rest × genre fit
+NEW_PER_WEEK = 15
+RETRY_DAYS = 1                  # an artist last.fm failed on is tried again after this
+MAX_FAILURES = 3                # failures in a row that end the last.fm part of a refresh
 MONTHS = ("January", "February", "March", "April", "May", "June", "July", "August", "September",
           "October", "November", "December")
 
@@ -263,33 +274,166 @@ COLUMNS = ("source", "release_date", "artist", "title", "release_type", "artist_
            "cover_url", "source_url", "genre", "label")
 
 
-def refresh(conn, lb: ListenBrainz, wiki: Wikipedia, today: date | None = None) -> dict:
-    """Fetch both sources (network first, then one short write per source). A source that fails
-    keeps its previous rows and records the error. Raises Busy when a refresh is already running."""
+def refresh(conn, lb: ListenBrainz, wiki: Wikipedia, today: date | None = None, lastfm=None) -> dict:
+    """Fetch the release lists, then (with a last.fm client) the similar artists and tags behind
+    "new to you". Raises Busy when a refresh is already running."""
     if not _refreshing.acquire(blocking=False):
         raise Busy("already checking for new releases")
     try:
-        first, last = window(today or local_today())
-        result = {}
-        for source, fetch in (("listenbrainz", lambda: _from_listenbrainz(lb, first, last)),
-                              ("wikipedia", lambda: _from_wikipedia(wiki, first, last))):
-            try:
-                rows = fetch()
-            except (ApiError, KeyError, TypeError) as exc:  # KeyError/TypeError: an unexpected answer
-                with conn:
-                    db.set_meta(conn, f"upcoming_{source}_error", str(exc) or type(exc).__name__)
-                result[source] = {"ok": False, "error": str(exc)}
-                continue
-            with conn:
-                conn.execute("DELETE FROM upcoming_releases WHERE source = ?", (source,))
-                conn.executemany(f"INSERT INTO upcoming_releases({', '.join(COLUMNS)}) VALUES ({', '.join('?' * len(COLUMNS))})",
-                                 [tuple({**r, "source": source}.get(c) for c in COLUMNS) for r in rows])
-                db.set_meta(conn, f"upcoming_{source}_at", str(int(time.time())))
-                db.set_meta(conn, f"upcoming_{source}_error", "")
-            result[source] = {"ok": True, "releases": len(rows)}
-        return result
+        return _refresh(conn, lb, wiki, today, lastfm)
     finally:
         _refreshing.release()
+
+
+def start(db_path, make_clients, make_lastfm) -> None:
+    """Run a refresh in a background thread with its own connection (the first one takes minutes:
+    150 similar-artist lookups and a few hundred tag lookups at last.fm's pace). The page polls
+    `refreshing` and shows `progress`. Raises Busy when one is already running."""
+    global _thread
+    if not _refreshing.acquire(blocking=False):
+        raise Busy("already checking for new releases")
+
+    def run():
+        try:
+            conn = db.connect(db_path)
+            try:
+                _refresh(conn, *make_clients(), None, make_lastfm())
+            finally:
+                conn.close()
+        except Exception:
+            logging.getLogger("uvicorn.error").exception("refreshing upcoming releases failed")
+        finally:
+            _refreshing.release()
+    try:
+        _thread = threading.Thread(target=run, name="upcoming-refresh", daemon=True)
+        _thread.start()
+    except Exception:
+        _refreshing.release()
+        raise
+
+
+_thread: threading.Thread | None = None
+
+
+def join(timeout: float | None = None) -> None:
+    """Wait for a background refresh (tests)."""
+    if _thread is not None:
+        _thread.join(timeout)
+
+
+def _progress(conn, text: str) -> None:
+    with conn:
+        db.set_meta(conn, "upcoming_progress", text)
+
+
+def _refresh(conn, lb, wiki, today, lastfm) -> dict:
+    first, last = window(today or local_today())
+    result = {}
+    _progress(conn, "Checking ListenBrainz and Wikipedia")
+    for source, fetch in (("listenbrainz", lambda: _from_listenbrainz(lb, first, last)),
+                          ("wikipedia", lambda: _from_wikipedia(wiki, first, last))):
+        try:
+            rows = fetch()
+        except (ApiError, KeyError, TypeError) as exc:  # KeyError/TypeError: an unexpected answer
+            with conn:
+                db.set_meta(conn, f"upcoming_{source}_error", str(exc) or type(exc).__name__)
+            result[source] = {"ok": False, "error": str(exc)}
+            continue
+        with conn:
+            conn.execute("DELETE FROM upcoming_releases WHERE source = ?", (source,))
+            conn.executemany(f"INSERT INTO upcoming_releases({', '.join(COLUMNS)}) VALUES ({', '.join('?' * len(COLUMNS))})",
+                             [tuple({**r, "source": source}.get(c) for c in COLUMNS) for r in rows])
+            db.set_meta(conn, f"upcoming_{source}_at", str(int(time.time())))
+            db.set_meta(conn, f"upcoming_{source}_error", "")
+        result[source] = {"ok": True, "releases": len(rows)}
+    if result["listenbrainz"]["ok"] or result["wikipedia"]["ok"]:
+        with conn:
+            db.set_meta(conn, "upcoming_last_day", last.isoformat())
+    if lastfm is not None:
+        with conn:
+            db.set_meta(conn, "upcoming_lastfm_tried_at", str(int(time.time())))
+        try:
+            result["lastfm"] = _refresh_lastfm(conn, lastfm, today)
+            with conn:
+                db.set_meta(conn, "upcoming_lastfm_at", str(int(time.time())))
+                db.set_meta(conn, "upcoming_lastfm_error", "")
+        except ApiError as exc:  # Fatal: a bad key or suspended access; the rest keeps what it has
+            with conn:
+                db.set_meta(conn, "upcoming_lastfm_error", str(exc) or type(exc).__name__)
+            result["lastfm"] = {"ok": False, "error": str(exc)}
+    _progress(conn, "")
+    return result
+
+
+def _refresh_lastfm(conn, lastfm, today) -> dict:
+    """Similar artists of the seeds not looked up in CACHE_DAYS, then tags of the artists of new
+    releases not looked up in CACHE_DAYS (the ones similar to your artists first, then by date),
+    at most TAG_BUDGET of them. Saved one artist at a time, so a stopped run keeps its work."""
+    from . import taste_prompt
+    p = taste_prompt.profile(conn)
+    if p is None:
+        return {"ok": True, "similar": 0, "tags": 0}
+    cutoff = time.time() - CACHE_DAYS * 86400
+    fetched = dict(conn.execute("SELECT seed_key, fetched_at FROM similar_seeds"))
+    todo = [s for s in p["seeds"] if fetched.get(s["key"], 0) < cutoff]
+    done = len(p["seeds"]) - len(todo)
+    n_similar, failures = 0, 0
+    for i, seed in enumerate(todo):
+        _progress(conn, f"Finding artists similar to yours: {done + i} of {len(p['seeds'])}")
+        try:
+            similar = lastfm.similar_artists(seed["name"], SIMILAR_LIMIT)
+            failures = 0
+        except Fatal:
+            raise
+        except NotFound:
+            similar = []
+        except ApiError as exc:
+            failures = _failed(failures, exc)
+            with conn:  # counted as looked up for a day, then tried again
+                conn.execute("INSERT INTO similar_seeds(seed_key, fetched_at) VALUES (?, ?)"
+                             " ON CONFLICT(seed_key) DO UPDATE SET fetched_at = excluded.fetched_at",
+                             (seed["key"], int(time.time() - (CACHE_DAYS - RETRY_DAYS) * 86400)))
+            continue
+        with conn:
+            conn.execute("DELETE FROM similar_artists WHERE seed_key = ?", (seed["key"],))
+            conn.executemany("INSERT OR IGNORE INTO similar_artists(seed_key, name, name_key, mbid, match) VALUES (?, ?, ?, ?, ?)",
+                             [(seed["key"], n, key(n), m, x) for n, m, x in similar if key(n) != seed["key"]])
+            conn.execute("INSERT INTO similar_seeds(seed_key, fetched_at) VALUES (?, ?)"
+                         " ON CONFLICT(seed_key) DO UPDATE SET fetched_at = excluded.fetched_at", (seed["key"], int(time.time())))
+        n_similar += 1
+    have = dict(conn.execute("SELECT name_key, fetched_at FROM release_artist_tags"))
+    similar_keys = {r[0] for r in conn.execute("SELECT DISTINCT name_key FROM similar_artists")}
+    cands = sorted(_candidates(conn, today), key=lambda c: (c["key"] not in similar_keys, c["release_date"]))
+    todo = list({c["key"]: c for c in cands if have.get(c["key"], 0) < cutoff}.values())[:TAG_BUDGET]
+    n_tags, failures = 0, 0
+    for i, c in enumerate(todo):
+        _progress(conn, f"Reading the genres of new artists: {i} of {len(todo)}")
+        try:
+            raw = lastfm.artist_tags(c["artist"])
+            failures = 0
+        except Fatal:
+            raise
+        except NotFound:
+            raw = []
+        except ApiError as exc:
+            failures = _failed(failures, exc)
+            continue
+        found = [(tags.normalize(t), w) for t, w in raw if tags.classify(t) == "genre"][:TAGS_KEPT]
+        with conn:
+            conn.execute("INSERT INTO release_artist_tags(name_key, tags, fetched_at) VALUES (?, ?, ?) ON CONFLICT(name_key)"
+                         " DO UPDATE SET tags = excluded.tags, fetched_at = excluded.fetched_at",
+                         (c["key"], json.dumps(found), int(time.time())))
+        n_tags += 1
+    return {"ok": True, "similar": n_similar, "tags": n_tags}
+
+
+def _failed(failures: int, exc: Exception) -> int:
+    """Count one more failure in a row; after MAX_FAILURES last.fm is down (or we're offline), so
+    stop instead of spending minutes on retries for every remaining artist."""
+    failures += 1
+    if failures >= MAX_FAILURES:
+        raise ApiError(f"last.fm isn't answering ({exc})")
+    return failures
 
 
 def refreshing() -> bool:
@@ -348,14 +492,8 @@ def _status(conn) -> dict:
     return out
 
 
-def upcoming(conn, today: date | None = None) -> dict:
-    """The cached releases by release week: yours ranked by fit, the rest of Wikipedia's list, and
-    how many more albums and EPs ListenBrainz has that week."""
-    today = today or local_today()
-    first, last = window(today)
-    status = _status(conn)
-    ats = [s["at"] for s in status.values()]
-    stale = any(a is None or time.time() - a > STALE_AFTER_S for a in ats)
+def _merged(conn, first: date, last: date) -> list[dict]:
+    """The cached releases in the window, one entry per release, with their library artists."""
     match = _artist_lookup(conn)
     merged: list[dict] = []
     by_credit: dict[tuple, list[dict]] = {}  # ListenBrainz releases by (credit as written, title)
@@ -367,7 +505,7 @@ def upcoming(conn, today: date | None = None) -> dict:
         if day is None:
             continue
         title = key(edition_free_title(r["title"]))
-        ids = match(r["artist"], r["artist_mbids"], r.pop("artist_parts"))
+        ids = match(r["artist"], r["artist_mbids"], r["artist_parts"])
         who = (tuple(ids) or key(r["artist"]), title)
         if r["source"] == "wikipedia":
             # Wikipedia's row of a ListenBrainz release adds its news link, genre and label. The same
@@ -377,7 +515,7 @@ def upcoming(conn, today: date | None = None) -> dict:
             if same:
                 m = min(same, key=lambda m: TYPES.index(m["release_type"]))  # an album before an EP
                 m["sources"].append("wikipedia")
-                for c in ("source_url", "genre", "label"):
+                for c in ("source_url", "genre", "label", "artist_parts"):
                     m[c] = m[c] or r[c]
                 continue
         entry = {**r, "artist_ids": ids, "sources": [r["source"]], "friday": release_friday(day).isoformat()}
@@ -385,30 +523,144 @@ def upcoming(conn, today: date | None = None) -> dict:
         if r["source"] == "listenbrainz":
             by_credit.setdefault((key(r["artist"]), title), []).append(entry)
             by_artist.setdefault(who, []).append(entry)
+    return merged
+
+
+def _not_yours(merged: list[dict], facts: dict) -> list[dict]:
+    """Releases (albums and EPs, or on Wikipedia's list) whose artists aren't yours: the pool for
+    "new to you", with the name key their tags are cached under."""
+    return [{**m, "key": key(m["artist"])} for m in merged
+            if not any(i in facts for i in m["artist_ids"]) and (m["release_type"] in ("Album", "EP") or "wikipedia" in m["sources"])]
+
+
+def _candidates(conn, today: date | None) -> list[dict]:
+    merged = _merged(conn, *window(today or local_today()))
+    return _not_yours(merged, _artist_facts(conn, {i for m in merged for i in m["artist_ids"]}))
+
+
+def _cosine(a: dict, b: dict) -> float:
+    dot = sum(v * b.get(k, 0) for k, v in a.items())
+    na, nb = math.sqrt(sum(v * v for v in a.values())), math.sqrt(sum(v * v for v in b.values()))
+    return dot / (na * nb) if na and nb else 0.0
+
+
+def _new_to_you(conn, cands: list[dict]) -> list[dict]:
+    """Score each candidate by similarity to the artists you play now (last.fm's match × how much
+    you play the seed, summed over seeds, scaled so the best candidate is 1) and by genre fit (the
+    cosine between its last.fm genre tags and your genre mix now). Keeps those similar to at least
+    one of your artists, or with a genre fit of at least MIN_GENRE_FIT."""
+    from . import taste_prompt
+    p = taste_prompt.profile(conn)
+    if p is None or not cands:
+        return []
+    seeds = {s["key"]: s for s in p["seeds"]}
+    links: dict[str, list] = {}
+    for seed_key, name_key, mbid, match in conn.execute("SELECT seed_key, name_key, mbid, match FROM similar_artists"):
+        if seed_key in seeds:
+            links.setdefault(name_key, []).append((seeds[seed_key], match))
+            if mbid:
+                links.setdefault("mbid:" + mbid, []).append((seeds[seed_key], match))
+    tag_cache = {k: json.loads(t) for k, t in conn.execute("SELECT name_key, tags FROM release_artist_tags")}
+    idf = p["genre_idf"]
+    rare = max(idf.values(), default=1.0)  # a tag none of your artists has counts as the rarest
+    you = {t: v * idf[t] for t, v in p["genre_vector"].items()}
+    out = []
+    for c in cands:
+        keys = [c["key"], *(key(x) for x in (c["artist_parts"] or "").split("\n") if x),
+                *("mbid:" + m for m in (c["artist_mbids"] or "").split())]
+        found: dict[str, tuple[float, dict]] = {}  # seed -> (its weight × match, seed), once per seed
+        for k in keys:
+            for seed, match in links.get(k, []):
+                if seed["weight"] * match > found.get(seed["key"], (0.0, None))[0]:
+                    found[seed["key"]] = (seed["weight"] * match, seed)
+        similarity = sum(v for v, _ in found.values())
+        like = [s["name"] for _, s in sorted(found.values(), key=lambda x: -x[0])[:3]]
+        cand_tags, shown_as = {}, {}
+        for t, w in tag_cache.get(c["key"]) or []:  # spellings of one tag merge (highest weight)
+            f = tags.fold(t)
+            cand_tags[f] = max(cand_tags.get(f, 0), w * idf.get(f, rare))
+            shown_as.setdefault(f, t)
+        genre_fit = _cosine(cand_tags, you)
+        shared = [shown_as[f] for f in sorted((f for f in cand_tags if f in you), key=lambda f: -cand_tags[f] * you[f])[:3]]
+        if similarity > 0 or genre_fit >= MIN_GENRE_FIT:
+            out.append({**c, "similarity": similarity, "genre_fit": round(genre_fit, 3), "like": like, "genres": shared,
+                        "tagged": c["key"] in tag_cache})
+    top = max((o["similarity"] for o in out), default=0) or 1
+    for o in out:
+        o["score"] = round(SIMILARITY_WEIGHT * o["similarity"] / top + (1 - SIMILARITY_WEIGHT) * o["genre_fit"], 4)
+        o["similarity"] = round(o["similarity"] / top, 4)
+    return out
+
+
+def _lastfm_status(conn) -> dict:
+    at = db.get_meta(conn, "upcoming_lastfm_at")
+    from . import taste_prompt
+    p = taste_prompt.profile(conn)
+    seeds = [s["key"] for s in p["seeds"]] if p else []
+    fresh = {r[0] for r in conn.execute("SELECT seed_key FROM similar_seeds WHERE fetched_at >= ?",
+                                        (int(time.time() - CACHE_DAYS * 86400),))}
+    return {"at": int(at) if at else None, "error": db.get_meta(conn, "upcoming_lastfm_error") or None,
+            "seeds": len(seeds), "seeds_done": sum(s in fresh for s in seeds)}
+
+
+def upcoming(conn, today: date | None = None, has_lastfm: bool = False, with_new: bool = True) -> dict:
+    """The cached releases by release week: new to you (similar to your artists or fitting your
+    genres), yours ranked by fit, the rest of Wikipedia's list, and how many more albums and EPs
+    ListenBrainz has that week. `has_lastfm`: a last.fm key is saved, so "new to you" can be filled."""
+    today = today or local_today()
+    first, last = window(today)
+    status = _status(conn)
+    lastfm = _lastfm_status(conn)
+    stale = any(s["at"] is None or time.time() - s["at"] > STALE_AFTER_S for s in status.values())
+    if (db.get_meta(conn, "upcoming_last_day") or "") < last.isoformat():  # a new week came into view (on Saturdays)
+        stale = True
+    tried = int(db.get_meta(conn, "upcoming_lastfm_tried_at") or 0)
+    if has_lastfm and time.time() - tried > STALE_AFTER_S and (
+            lastfm["seeds_done"] < lastfm["seeds"] or not lastfm["at"] or time.time() - lastfm["at"] > STALE_AFTER_S):
+        stale = True  # not after a recent try that failed: that waits for "Check again" or 12 hours
+    merged = _merged(conn, first, last)
     facts = _artist_facts(conn, {i for m in merged for i in m["artist_ids"]})
-    weeks = {(first + timedelta(days=6 + 7 * w)).isoformat(): {"mine": [], "also": [], "more": 0} for w in range(WEEKS_AHEAD + 1)}
+    picked: dict[str, list] = {}
+    for n in _new_to_you(conn, _not_yours(merged, facts)) if with_new else []:
+        picked.setdefault(n["friday"], []).append(n)
+    weeks = {(first + timedelta(days=6 + 7 * w)).isoformat(): {"new": [], "mine": [], "also": [], "more": 0} for w in range(WEEKS_AHEAD + 1)}
+    for f, items in picked.items():
+        if f in weeks:
+            items.sort(key=lambda n: (-n["score"], n["release_date"], n["key"], TYPES.index(n["release_type"] or "Album")))
+            once = {(n["key"], key(edition_free_title(n["title"]))): n for n in reversed(items)}  # an album before its EP
+            items = [n for n in items if once[(n["key"], key(edition_free_title(n["title"])))] is n]
+            weeks[f]["new"] = [_public(n) for n in items[:NEW_PER_WEEK]]
+    shown = {(n["friday"], key(n["artist"]), key(n["title"])) for w in weeks.values() for n in w["new"]}
     for m in merged:
         week = weeks.get(m["friday"])
         if week is None:
             continue
-        m.pop("artist_mbids")
-        artists = [facts[i] for i in m.pop("artist_ids") if i in facts]
+        artists = [facts[i] for i in m["artist_ids"] if i in facts]
         if artists:
             best = max(artists, key=fit)
-            week["mine"].append({**m, "artists": [{k: a[k] for k in ("id", "name", "plays", "recent_plays", "loved", "image_url")}
-                                                  for a in artists], "fit": round(fit(best), 3)})
+            week["mine"].append({**_public(m), "artists": [{k: a[k] for k in ("id", "name", "plays", "recent_plays", "loved", "image_url")}
+                                                           for a in artists], "fit": round(fit(best), 3)})
+        elif (m["friday"], key(m["artist"]), key(m["title"])) in shown:
+            continue
         elif "wikipedia" in m["sources"]:
-            week["also"].append(m)
+            week["also"].append(_public(m))
         elif m["release_type"] in ("Album", "EP"):
             week["more"] += 1
     for w in weeks.values():
         w["mine"].sort(key=lambda m: (-m["fit"], m["release_date"], key(m["artist"])))
         w["also"].sort(key=lambda m: (m["release_date"], key(m["artist"])))
     return {"first": first.isoformat(), "last": last.isoformat(), "today": today.isoformat(),
-            "sources": status, "stale": stale, "refreshing": refreshing(),
+            "sources": status, "lastfm": {**lastfm, "has_key": has_lastfm}, "stale": stale, "refreshing": refreshing(),
+            "progress": (db.get_meta(conn, "upcoming_progress") or None) if refreshing() else None,
             "weeks": [{"friday": f, **w} for f, w in weeks.items()]}
+
+
+_INTERNAL = ("artist_ids", "artist_mbids", "artist_parts", "key", "tagged")
+
+
+def _public(m: dict) -> dict:
+    return {k: v for k, v in m.items() if k not in _INTERNAL}
 
 
 def clients() -> tuple[ListenBrainz, Wikipedia]:
     return ListenBrainz(), Wikipedia()
-

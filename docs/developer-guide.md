@@ -21,7 +21,7 @@ mtc/
   lastfm.py      last.fm client (read-only methods, JSON quirks)
   musicbrainz.py MusicBrainz client (release-group dates)
   taste_prompt.py your taste as a research prompt for any AI agent: recency-weighted genres first (/api/taste-prompt)
-  releases.py    upcoming releases: ListenBrainz and Wikipedia clients, the cached lists, matching to library artists (/api/upcoming)
+  releases.py    upcoming releases: ListenBrainz and Wikipedia clients, the cached lists, matching to library artists, "new to you" from last.fm similar artists and tags (/api/upcoming)
   webapi.py      shared throttled HTTP client with retries; transport injectable for tests
   tags.py        tag normalization and classification
   maintenance.py artist merges, name rules (artist_aliases), duplicate suggestions, unmatched loved tracks (loved_title_rules)

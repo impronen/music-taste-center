@@ -1,6 +1,7 @@
 """Upcoming releases: parsing Wikipedia's album table, the refresh over fake ListenBrainz and
 Wikipedia transports, and matching releases to library artists (fictional names throughout)."""
 import json
+import time
 import tempfile
 import unittest
 import urllib.parse
@@ -10,6 +11,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from mtc import db, derive, ingest, maintenance, releases, updater
+from mtc.webapi import Fatal, NotFound
 from mtc.api import create_app
 from mtc.ingest import Scrobble
 
@@ -284,25 +286,167 @@ class UpcomingTest(unittest.TestCase):
         self.refresh()
         self.assertFalse(releases.upcoming(self.conn, today=TODAY)["stale"])
 
+    def test_stale_when_a_new_week_comes_into_view(self):
+        self.refresh()
+        self.assertFalse(releases.upcoming(self.conn, today=TODAY)["stale"])
+        self.assertTrue(releases.upcoming(self.conn, today=date(2026, 10, 10))["stale"])  # Saturday: one more week
+
     def test_one_refresh_at_a_time(self):
         with releases._refreshing:
             with self.assertRaises(releases.Busy):
                 self.refresh()
 
 
+class FakeLastFm:
+    """last.fm's similar artists and tags, counting calls."""
+    SIMILAR = {"Velvet Orchard": [("Stranger", None, 0.9), ("Moss Choir", None, 0.5), ("Velvet Orchard", None, 1.0)],
+               "Copper Lantern": [("Stranger", None, 0.4)]}
+    TAGS = {"Stranger": [("Dream Pop", 100), ("seen live", 80)], "Nobody Known": [("dream pop", 100), ("folk", 60)]}
+
+    def __init__(self, fatal=False):
+        self.calls, self.fatal = [], fatal
+
+    def similar_artists(self, artist, limit=250):
+        self.calls.append(("similar", artist))
+        if self.fatal:
+            raise Fatal("last.fm error 10: Invalid API key")
+        if artist == "Sundial":
+            raise NotFound("no such artist")
+        return self.SIMILAR.get(artist, [])
+
+    def artist_tags(self, artist):
+        self.calls.append(("tags", artist))
+        return self.TAGS.get(artist, [])
+
+
+class NewToYouTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.conn, self.ids = library_db(Path(self.tmp.name) / "n.db")
+        with self.conn:  # genre tags (library_db already made artist_info rows, so not add_tags)
+            for name, genre in (("Velvet Orchard", "dream pop"), ("Copper Lantern", "folk"), ("Sundial", "rock")):
+                tag_id = self.conn.execute("INSERT INTO tags(name, kind) VALUES (?, 'genre')", (genre,)).lastrowid
+                self.conn.execute("INSERT INTO artist_tags VALUES (?, ?, 100)", (self.ids[name], tag_id))
+            db.bump(self.conn, "tags_version")
+
+    def tearDown(self):
+        self.conn.close()
+        self.tmp.cleanup()
+
+    def refresh(self, lastfm):
+        return releases.refresh(self.conn, lb_client(), wiki_client(), today=TODAY, lastfm=lastfm)
+
+    def test_similar_and_genre_fit(self):
+        fm = FakeLastFm()
+        result = self.refresh(fm)
+        self.assertEqual(result["lastfm"]["ok"], True)
+        u = releases.upcoming(self.conn, today=TODAY, has_lastfm=True)
+        wk = {w["friday"]: w for w in u["weeks"]}
+        stranger = wk["2026-10-23"]["new"]
+        self.assertEqual([(n["artist"], n["title"]) for n in stranger], [("Stranger", "Unknown")])
+        self.assertEqual(stranger[0]["like"], ["Velvet Orchard", "Copper Lantern"])  # the one you play more first
+        self.assertEqual(stranger[0]["genres"], ["dream pop"])                      # "seen live" isn't a genre
+        self.assertEqual(stranger[0]["similarity"], 1.0)
+        self.assertNotIn("artist_mbids", stranger[0])
+        self.assertEqual(wk["2026-10-23"]["more"], 1)  # Stranger's EP moved from the count to "new"
+        # not similar to anyone, but dream pop fits what you play now: from Wikipedia's list into "new"
+        # (folk, played two years ago, barely counts any more)
+        first_light = [n for n in wk["2026-10-16"]["new"] if n["title"] == "First Light"]
+        self.assertEqual((first_light[0]["like"], first_light[0]["genres"]), ([], ["dream pop", "folk"]))
+        self.assertGreaterEqual(first_light[0]["genre_fit"], releases.MIN_GENRE_FIT)
+        self.assertNotIn("First Light", [a["title"] for a in wk["2026-10-16"]["also"]])
+        # an artist's own name in its similar list is dropped, and a library artist is never "new"
+        self.assertFalse(any(n["artist"] == "Velvet Orchard" for w in u["weeks"] for n in w["new"]))
+        self.assertEqual((u["lastfm"]["seeds_done"], u["lastfm"]["seeds"]), (5, 5))  # all five; "not found" counts as looked up
+        self.assertFalse(u["stale"])
+
+    def test_tag_spellings_match(self):
+        with self.conn:  # the library spells it "dream-pop"; last.fm says "Dream Pop" and "dreampop"
+            self.conn.execute("UPDATE tags SET name = 'dream-pop' WHERE name = 'dream pop'")
+            db.bump(self.conn, "tags_version")
+        fm = FakeLastFm()
+        fm.TAGS = {**FakeLastFm.TAGS, "Stranger": [("Dream Pop", 100), ("dreampop", 40)]}
+        self.refresh(fm)
+        wk = {w["friday"]: w for w in releases.upcoming(self.conn, today=TODAY, has_lastfm=True)["weeks"]}
+        stranger = wk["2026-10-23"]["new"][0]
+        self.assertEqual((stranger["genres"], stranger["genre_fit"]), (["dream pop"], 1.0))  # stored normalized
+
+    def test_failing_artist_is_retried_after_a_day(self):
+        class Flaky(FakeLastFm):
+            def similar_artists(self, artist, limit=250):
+                if artist == "Harbor Lights":
+                    raise releases.ApiError("gave up after 5 attempts: last.fm error 8")
+                return super().similar_artists(artist, limit)
+        self.refresh(Flaky())
+        u = releases.upcoming(self.conn, today=TODAY, has_lastfm=True)
+        self.assertEqual(u["lastfm"]["seeds_done"], u["lastfm"]["seeds"])  # counted for now: no refresh loop
+        self.assertFalse(u["stale"])
+        at = self.conn.execute("SELECT fetched_at FROM similar_seeds WHERE seed_key = 'harbor lights'").fetchone()[0]
+        self.assertLess(at, time.time() - (releases.CACHE_DAYS - releases.RETRY_DAYS - 0.01) * 86400)
+
+    def test_last_fm_down_stops_early(self):
+        class Down(FakeLastFm):
+            def similar_artists(self, artist, limit=250):
+                self.calls.append(("similar", artist))
+                raise releases.ApiError("network: timed out")
+        fm = Down()
+        result = self.refresh(fm)
+        self.assertEqual(len(fm.calls), releases.MAX_FAILURES)
+        self.assertFalse(result["lastfm"]["ok"])
+        self.assertIn("isn't answering", releases.upcoming(self.conn, today=TODAY, has_lastfm=True)["lastfm"]["error"])
+
+    def test_without_a_key(self):
+        self.refresh(FakeLastFm())
+        u = releases.upcoming(self.conn, today=TODAY)
+        self.assertFalse(u["lastfm"]["has_key"])  # the page then hides "new to you" and asks for a key
+        self.assertTrue(all(w["new"] == [] for w in releases.upcoming(self.conn, today=TODAY, with_new=False)["weeks"]))
+
+    def test_start_releases_the_lock_when_a_client_fails(self):
+        def broken():
+            raise RuntimeError("no clients")
+        with self.assertLogs("uvicorn.error", level="ERROR"):
+            releases.start(Path(self.tmp.name) / "n.db", broken, lambda: None)
+            releases.join(10)
+        self.assertFalse(releases.refreshing())
+        releases.start(Path(self.tmp.name) / "n.db", lambda: (lb_client(), wiki_client()), lambda: None)
+        releases.join(10)
+        self.assertFalse(releases.refreshing())
+
+    def test_cached_for_a_month(self):
+        self.refresh(FakeLastFm())
+        again = FakeLastFm()
+        self.refresh(again)
+        self.assertEqual(again.calls, [])
+
+    def test_bad_key_keeps_the_release_lists(self):
+        result = self.refresh(FakeLastFm(fatal=True))
+        self.assertFalse(result["lastfm"]["ok"])
+        self.assertTrue(result["listenbrainz"]["ok"])
+        u = releases.upcoming(self.conn, today=TODAY, has_lastfm=True)
+        self.assertIn("Invalid API key", u["lastfm"]["error"])
+        self.assertFalse(u["stale"])  # tried just now: no automatic retry until "Check again" or 12 hours
+        self.assertEqual(sum(len(w["new"]) for w in u["weeks"]), 0)  # nothing looked up, nothing scored
+
+
 class ApiTest(unittest.TestCase):
     def test_endpoints(self):
         with tempfile.TemporaryDirectory() as tmp:
-            client = TestClient(create_app(Path(tmp) / "a.db", releases_factory=lambda: (lb_client([]), wiki_client({}))))
+            client = TestClient(create_app(Path(tmp) / "a.db", releases_factory=lambda: (lb_client([]), wiki_client({})),
+                                           lastfm_factory=FakeLastFm))
             u = client.get("/api/upcoming").json()
             self.assertEqual(len(u["weeks"]), releases.WEEKS_AHEAD + 1)
             self.assertTrue(u["stale"])
-            r = client.post("/api/upcoming/refresh").json()
+            self.assertEqual(client.post("/api/upcoming/refresh").status_code, 202)
+            releases.join(10)
+            r = client.get("/api/upcoming").json()
             self.assertFalse(r["stale"])
-            self.assertEqual(r["result"]["listenbrainz"], {"ok": True, "releases": 0})
+            self.assertFalse(r["refreshing"])
+            self.assertIsNotNone(r["sources"]["listenbrainz"]["at"])
             with releases._refreshing:
                 self.assertEqual(client.post("/api/upcoming/refresh").status_code, 409)
             self.assertEqual(client.post("/api/upcoming/refresh", headers={"origin": "https://evil.example"}).status_code, 403)
+            routes = [r for r in client.app.routes if getattr(r, "path", "") == "/api/upcoming/refresh"]
+            self.assertEqual(len(routes), 1)
 
 
 if __name__ == "__main__":
