@@ -15,6 +15,18 @@ DAY = 86400
 
 # Loved tracks that are in the library, one row per track (two loved spellings can meet in one).
 LOVED = "SELECT track_id, MIN(loved_at) AS loved_at FROM loved WHERE track_id IS NOT NULL GROUP BY track_id"
+# Per loved track: when it was loved, its first play, and how many plays were over by then.
+# A scrobble's ts is when the play *started*, and a love usually lands while the track plays,
+# so a play that started under IN_PROGRESS_S before the love is the one being listened to, not
+# a finished one.
+IN_PROGRESS_S = 600
+LOVE_TIMING = ("SELECT lv.track_id, lv.loved_at, MIN(s.ts) AS first_ts, COUNT(*) AS plays,"
+               " SUM(s.ts <= lv.loved_at) - COALESCE(MAX(CASE WHEN s.ts <= lv.loved_at THEN s.ts END)"
+               f" > lv.loved_at - {IN_PROGRESS_S}, 0) AS plays_before"
+               f" FROM ({LOVED}) lv JOIN scrobbles s ON s.track_id = lv.track_id GROUP BY lv.track_id")
+# Plays in the first month of the history may continue listening from before it, so a track
+# first played then can't be called a first listen.
+HISTORY_GRACE = 30 * DAY
 
 
 def _rows(cur) -> list[dict]:
@@ -494,6 +506,7 @@ def track(conn: sqlite3.Connection, track_id: int) -> dict | None:
     info.update(plays=agg[0], first_ts=agg[1], last_ts=agg[2], n_days=agg[3])
     info["loved_at"] = conn.execute(f"SELECT loved_at FROM ({LOVED}) WHERE track_id = ?", (track_id,)).fetchone()
     info["loved_at"] = info["loved_at"][0] if info["loved_at"] else None
+    info["love"] = _love_timing(conn, info) if info["loved_at"] else None
     info["yearly"] = _rows(conn.execute(
         "SELECT substr(lday, 1, 4) AS year, COUNT(*) AS plays FROM scrobbles WHERE track_id = ? GROUP BY 1", (track_id,)))
     info["best_day"] = dict(conn.execute(
@@ -624,6 +637,43 @@ def _gateways(conn, hi: int, limit: int, offset: int) -> list[dict]:
         " GROUP BY st.gateway_id ORDER BY downstream_plays DESC, a.id LIMIT ? OFFSET ?", (limit, offset)))
 
 
+def _love_timing(conn, info: dict) -> dict | None:
+    """How a loved track was loved: after how many finished plays, and how long after the first
+    play. None when the love predates the scrobble history (nothing to compare with).
+    `before_first`: loved over a day before its first scrobble (heard somewhere else first);
+    `just_before`: loved within a day before it; `history_start`: first played in the history's
+    first month, so the figures are lower bounds."""
+    lo = conn.execute("SELECT MIN(ts) FROM scrobbles").fetchone()[0]
+    loved, first = info["loved_at"], info["first_ts"]
+    if lo is None or first is None or loved < lo:
+        return None
+    before, latest = conn.execute("SELECT COUNT(*), MAX(ts) FROM scrobbles WHERE track_id = ? AND ts <= ?",
+                                  (info["id"], loved)).fetchone()
+    if latest is not None and latest > loved - IN_PROGRESS_S:
+        before -= 1  # the play the love was given during
+    return {"plays_before": before, "after_s": max(0, loved - first), "before_first": loved < first - DAY,
+            "just_before": first - DAY <= loved < first, "history_start": first < lo + HISTORY_GRACE}
+
+
+def _instant_love(conn, hi: int, limit: int, offset: int) -> list[dict]:
+    """Tracks loved within their first few plays (and not first played at the very start of the
+    history, which may continue from before it), the most played since first."""
+    lo = conn.execute("SELECT MIN(ts) FROM scrobbles").fetchone()[0]
+    return _rows(conn.execute(
+        "SELECT t.id, t.title AS name, a.id AS artist_id, a.name AS artist, x.plays, x.plays_before, x.first_ts, x.loved_at"
+        f" FROM ({LOVE_TIMING}) x JOIN tracks t ON t.id = x.track_id JOIN artists a ON a.id = t.artist_id"
+        " WHERE x.plays_before <= 2 AND x.loved_at >= x.first_ts - ? AND x.first_ts >= ?"
+        " ORDER BY x.plays DESC, t.id LIMIT ? OFFSET ?", (DAY, lo + HISTORY_GRACE, limit, offset)))
+
+
+def _slow_burners(conn, hi: int, limit: int, offset: int) -> list[dict]:
+    """Loved tracks with the most plays before the love."""
+    return _rows(conn.execute(
+        "SELECT t.id, t.title AS name, a.id AS artist_id, a.name AS artist, x.plays, x.plays_before, x.first_ts, x.loved_at"
+        f" FROM ({LOVE_TIMING}) x JOIN tracks t ON t.id = x.track_id JOIN artists a ON a.id = t.artist_id"
+        " WHERE x.plays_before >= 10 ORDER BY x.plays_before DESC, t.id LIMIT ? OFFSET ?", (limit, offset)))
+
+
 def _loved_left(conn, hi: int, limit: int, offset: int) -> list[dict]:
     """Loved tracks not played in the past year, most played first."""
     return _rows(conn.execute(
@@ -663,6 +713,8 @@ INSIGHT_KINDS = {
     "binges": ("binges", _binges),
     "one-track": ("one_track", _one_track),
     "loved-left": ("loved_left", _loved_left),
+    "instant-love": ("instant_love", _instant_love),
+    "slow-burners": ("slow_burners", _slow_burners),
     "unloved": ("unloved", _unloved),
     "deep-dives": ("deep_dives", _deep_dives),
 }
