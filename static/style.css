@@ -361,6 +361,10 @@ main h1:focus { outline: none; }
 .rows.releases .ext .chip { padding: 4px 10px; font-size: var(--fs-xs); }
 .rows.releases.compact .initial { width: 28px; height: 28px; }
 details.also { margin-top: 14px; }
+pre.prompt { margin: 0; max-height: 260px; overflow: auto; padding: 14px 16px; border-radius: var(--radius-md); background: var(--color-canvas);
+  font: var(--fs-sm)/1.55 var(--font-body); white-space: pre-wrap; overflow-wrap: anywhere; }
+#prompt + .jumpbar { margin-top: var(--gap); }
+#prompt .aside { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 details.also > summary { cursor: pointer; }
 details.also[open] > summary { margin-bottom: 10px; }
 .jumpbar .count { margin-left: 4px; padding: 1px 7px; border-radius: var(--pill); background: var(--tint-sage); color: var(--color-accent-2-ink); font-size: var(--fs-xs); }

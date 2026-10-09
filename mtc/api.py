@@ -12,7 +12,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 
-from . import config, db, decades, velocity, derive, enrich, fsutil, ingest, insights, jobs, maintenance, releases, rhythms, settings, taste_gap, updater
+from . import config, db, decades, velocity, derive, enrich, fsutil, ingest, insights, jobs, maintenance, releases, rhythms, settings, taste_gap, taste_prompt, updater
 from .webapi import Fatal, NotFound
 
 MAX_UPLOAD_BYTES = 300 * 1024 * 1024
@@ -195,6 +195,11 @@ def create_app(db_path: str | Path | None = None, *, lastfm_factory: Callable | 
     def upcoming(c=Conn):
         """Releases of the next few Fridays from the cache, artists in the library first."""
         return releases.upcoming(c)
+
+    @app.get("/api/taste-prompt")
+    def taste_prompt_text(task: str = Query("releases", pattern="^(releases|discover|profile)$"), c=Conn):
+        """Your taste (recent listening and genres weighted more) as a research prompt for any AI agent."""
+        return taste_prompt.build(c, task)
 
     @app.post("/api/upcoming/refresh")
     def upcoming_refresh(c=Conn):
