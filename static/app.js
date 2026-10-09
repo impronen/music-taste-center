@@ -66,6 +66,7 @@
   const icon = (name, size = 18) => raw(`<svg class="icon" viewBox="0 0 24 24" aria-hidden="true" style="width:${size}px;height:${size}px">${ICONS[name]}</svg>`);
 
   // ---------- shared bits ----------
+  const DOCS = "https://github.com/impronen/music-taste-center/blob/main/docs/how-it-works.md";
   const link = {
     artist: (id, name) => html`<a href="#/artist/${id}">${name}</a>`,
     track: (id, name) => html`<a href="#/track/${id}">${name}</a>`,
@@ -1059,7 +1060,7 @@
   }
 
   // ---------- insights ----------
-  const insightRow = (href, name, meta, key, pos) => html`<li class="link-row"><a href="${href}">${pos ? html`<span class="num muted">${pos}</span>` : ""}
+  const insightRow = (href, name, meta, key, pos, loved = false) => html`<li class="link-row"><a href="${href}">${pos ? html`<span class="num muted">${pos}</span>` : ""}${loved ? html`<span class="loved row-heart" aria-hidden="true">${icon("heart", 13)}</span>` : ""}
     <span class="grow"><b>${name}</b> <span class="meta">${meta}</span></span><span class="key">${key}</span></a></li>`;
   const NO_LOVED = "No loved tracks yet. Love tracks on last.fm and they show up after the next update.";
   // kind (URL slug, API kind) -> title, subtitle, card tint, payload key, row renderer, empty text by years of history
@@ -1070,13 +1071,13 @@
     { kind: "forgotten", title: "Forgotten favourites", sub: "Big artists you haven't played in over a year", cls: "", key: "forgotten",
       row: (r, ref) => [artistHref(r), r.name, `${Fmt.int(r.plays)} plays`, Fmt.ago(r.last_ts, ref).replace(" ago", "")],
       empty: (years) => (years < 1 ? "Needs a year of history." : "None: you still play all your big artists.") },
-    { kind: "obsessions", title: "Obsessions", sub: "Months where one artist took over", cls: "accent", key: "obsessions",
+    { kind: "obsessions", title: "Obsessions", sub: "Months where one artist took over", cls: "", key: "obsessions",
       row: (r) => [artistHref(r), r.name, Fmt.month(r.month), Fmt.pct(r.share)],
       empty: () => "No month was dominated by one artist." },
     { kind: "staying-power", title: "Staying power", sub: "Played in the most different years", cls: "", key: "staying_power",
       row: (r) => [artistHref(r), r.name, `${Fmt.int(r.plays)} plays`, `${r.n_years} yrs`],
       empty: () => "Needs at least two years of history." },
-    { kind: "gateways", title: "Gateways", sub: "Artists you played right before discovering others", cls: "accent-soft", key: "gateways",
+    { kind: "gateways", title: "Gateways", sub: "Artists you played right before discovering others", cls: "", key: "gateways",
       row: (r) => [artistHref(r), r.name, `led to ${Fmt.int(r.led_to)} · ${Fmt.int(r.downstream_plays)} plays`, Fmt.int(r.led_to)],
       empty: () => "Needs discoveries after your first month." },
     { kind: "binges", title: "Binges", sub: "Most plays of one track in a single day", cls: "sage", key: "binges",
@@ -1085,17 +1086,17 @@
     { kind: "one-track", title: "One-track artists", sub: "One song is almost all you play", cls: "", key: "one_track",
       row: (r) => [artistHref(r), r.name, r.track, Fmt.pct(r.share)],
       empty: () => "No artist is just one song for you." },
-    { kind: "loved-left", title: "Loved, then left", sub: "Tracks you loved on last.fm but haven't played in a year", cls: "accent-soft", key: "loved_left",
+    { kind: "loved-left", title: "Loved, then left", sub: "Tracks you loved on last.fm but haven't played in a year", cls: "", key: "loved_left", section: "loved", heart: true,
       row: (r, ref) => [trackHref(r), r.name, `${r.artist} · ${Fmt.int(r.plays)} plays`, Fmt.ago(r.last_ts, ref).replace(" ago", "")],
       empty: (years, ctx) => (!ctx.loved_count ? NO_LOVED : years < 1 ? "Needs a year of history." : "You still play everything you've loved.") },
-    { kind: "unloved", title: "Not loved (yet)", sub: "Your most played tracks without a heart on last.fm", cls: "", key: "unloved",
+    { kind: "unloved", title: "Not loved (yet)", sub: "Your most played tracks without a heart on last.fm", cls: "", key: "unloved", section: "loved",
       row: (r) => [trackHref(r), r.name, r.artist, `${Fmt.int(r.plays)} plays`],
       empty: (years, ctx) => (!ctx.loved_count ? NO_LOVED : "You've loved every track you play.") },
-    { kind: "instant-love", title: "Love at first listen", sub: "Loved within the first few plays, most played since", cls: "sage-soft", key: "instant_love",
+    { kind: "instant-love", title: "Love at first listen", sub: "Loved within the first few plays, most played since", cls: "", key: "instant_love", section: "loved", heart: true,
       row: (r) => [trackHref(r), r.name, `${r.artist} · ${r.plays_before ? `loved after ${nPlays(r.plays_before)}`
         : r.loved_at < r.first_ts ? "loved before the first play" : "loved on the first listen"}`, nPlays(r.plays)],
       empty: (years, ctx) => (!ctx.loved_count ? NO_LOVED : "No track was loved within its first few plays.") },
-    { kind: "slow-burners", title: "Slow burners", sub: "Loved only after many plays", cls: "", key: "slow_burners",
+    { kind: "slow-burners", title: "Slow burners", sub: "Loved only after many plays", cls: "", key: "slow_burners", section: "loved", heart: true,
       row: (r) => [trackHref(r), r.name, `${r.artist} · ${r.loved_at - r.first_ts < 86400 ? "loved the same day" : `loved ${span(r.loved_at - r.first_ts)} in`}`, nPlays(r.plays_before)],
       empty: (years, ctx) => (!ctx.loved_count ? NO_LOVED : "No loved track took ten plays or more.") },
     { kind: "deep-dives", title: "Deep dives", sub: "Catalogues you've explored the furthest", cls: "", key: "deep_dives",
@@ -1103,10 +1104,12 @@
       empty: () => "Nothing yet." },
   ];
   // " · ♥ 3 loved" after a Rediscover reason when the artist has loved tracks (they weigh in the rank)
-  const lovedCount = (n) => (n > 0 ? html` · <span class="loved count" title="${Fmt.int(n)} loved on last.fm">${icon("heart", 14)} ${Fmt.int(n)} loved<span class="sr-only"> ${n === 1 ? "track" : "tracks"}</span></span>` : "");
+  const lovedBadge = (n) => html`<span class="loved count" title="${Fmt.int(n)} loved on last.fm">${icon("heart", 14)} ${Fmt.int(n)} loved<span class="sr-only"> ${n === 1 ? "track" : "tracks"}</span></span>`;
+  const lovedCount = (n) => (n > 0 ? html` · ${lovedBadge(n)}` : "");
   const REDISCOVER = { kind: "rediscover", title: "Rediscover", sub: "Artists you used to play alongside your current favourites, untouched for a year.",
     row: (r, ref) => [artistHref(r), r.name, html`because you're into ${r.because.slice(0, 2).map((b, k) => html`${k ? " and " : ""}${b.name}`)}${lovedCount(r.loved)}`, Fmt.ago(r.last_ts, ref)],
     empty: (years) => (years < 1 ? "Needs a year of history." : "Nothing to rediscover: you still play everything you used to pair with your favourites.") };
+  const REDISCOVER_SHOWN = 15; // /api/insights returns at most this many (insights.py)
   const seeAll = (kind, label) => html`<a class="more" href="#/insights/${kind}">See all ${label.toLowerCase()} →</a>`;
 
   // ---------- taste gap: loved tracks vs plays ----------
@@ -1130,27 +1133,21 @@
   const gapEmpty = (text) => html`<p class="empty box">${text}</p>`;
   const tooFew = (n) => gapEmpty(`Needs more loved tracks to compare (now ${Fmt.int(n)}).`);
 
-  function tasteGapSection(g) {
+  // how many taste-gap cards tasteGapCards draws (the jump bar counts them)
+  const lovedViews = (g) => (!g?.loved.total ? 0 : !g.loved.matched ? 0 : 5);
+  /* The taste-gap cards of the Loved tracks section: genres (loved more / played more), then decades and
+     artists. The method behind the numbers is in docs/how-it-works.md, not on the page. */
+  function tasteGapCards(g) {
     if (!g?.loved.total) return "";
-    const lv = g.loved, r = g.rules;
-    const head = html`<div class="section-head"><h2 id="taste-gap-title">What you love vs what you play</h2>
-      <p class="secondary">Your loved tracks on last.fm against your plays. The ratio is a share among loved tracks divided by the same share of plays,
-        with small counts pulled towards 1×.</p>
-      <div class="head-chips"><span class="pill accent">${Fmt.int(lv.matched)} of ${Fmt.int(lv.total)} loves in your library</span>
-        ${lv.matched ? html`<span class="pill sage">${Fmt.int(lv.with_genre)} with genres · ${Fmt.int(lv.with_year)} dated</span>` : ""}
-        ${gapLegend}</div></div>`;
-    if (!lv.matched) {
-      return html`<section class="taste-gap" id="taste-gap" tabindex="-1" aria-labelledby="taste-gap-title">${head}
-        ${gapEmpty("None of your loved tracks match a track you've scrobbled yet.")}</section>`;
-    }
+    const lv = g.loved;
+    if (!lv.matched) return gapEmpty("None of your loved tracks match a track you've scrobbled yet.");
     const sub = (title, body, o) => card(title, body, { ...o, h3: true });
     const gn = g.genres;
     const genreCard = (title, subText, side, cls, none) => sub(title, !lv.with_genre
       ? html`<p class="empty box">Needs genre tags: <a class="text-link" href="#/import">fetch them on the Import page</a>.</p>`
       : gn[side].length ? gapRows(gn[side], { href: (x) => `#/tag/${x.id}`, name: (x) => x.name, meta: gapShares })
       : !gn.enough[side] ? tooFew(gn.loved) : gapEmpty(none), { cls, sub: subText });
-    const rule = `Counts genres with at least ${Fmt.pct(r.min_genre_share)} of loves or plays and ${Fmt.int(r.min_genre_loved)} loved tracks' worth, loved or expected.`;
-    const d = g.decades;
+    const r = g.rules, d = g.decades;
     const decadeBody = !g.plays.with_year ? html`<p class="empty box">Needs release dates: <a class="text-link" href="#/import">fetch them on the Import page</a>.</p>`
       : !d.enough ? gapEmpty(`Needs ${Fmt.int(r.min_dated_loved)} loved tracks with a release year (now ${Fmt.int(d.loved)}).`)
       : gapRows(d.items, { name: (x) => x.label, meta: gapShares });
@@ -1159,22 +1156,19 @@
     const artistCard = (title, subText, side, cls, none) => sub(title, ar[side].length
       ? gapRows(ar[side], { href: artistHref, name: (x) => x.name, meta: artistMeta })
       : !ar.enough[side] ? tooFew(ar.loved) : gapEmpty(none), { cls, sub: subText });
-    return html`<section class="taste-gap" id="taste-gap" tabindex="-1" aria-labelledby="taste-gap-title">${head}
-      <div class="grid cols-2">
-        ${genreCard("Loved more than played", `Genres with a bigger share of your loves than of your plays. ${rule}`, "over", "sage-soft",
+    return html`<div class="grid cols-2">
+        ${genreCard("Loved more than played", "Genres with a bigger share of your loves than of your plays.", "over", "accent-soft",
           "No genre stands out among your loves.")}
-        ${genreCard("Played more than loved", "Genres you play a lot but rarely love.", "under", "accent-soft",
+        ${genreCard("Played more than loved", "Genres you play a lot but rarely love.", "under", "",
           "You love every big genre about as much as you play it.")}
       </div>
       <div class="grid cols-3">
-        ${sub("Decades", decadeBody, { cls: "canvas",
-          sub: d.enough ? `Release decade of loved tracks vs plays, from ${Fmt.pct(d.coverage)} of matched loves and ${Fmt.pct(d.play_coverage)} of plays.`
-            : "Release decade of loved tracks vs plays." })}
-        ${artistCard("Artists you love more than you play", `At least ${Fmt.int(r.min_artist_loved)} loved tracks, a bigger share of loves than of plays.`,
-          "over", "sage-soft", "No artist's loves outrun their plays.")}
-        ${artistCard("Big artists, few loves", "Artists whose plays would suggest more loved tracks than they have.",
-          "under", "accent-soft", "Your big artists get their share of loves.")}
-      </div></section>`;
+        ${sub("Decades", decadeBody, { sub: "Release decade of loved tracks vs plays." })}
+        ${artistCard("Artists you love more than you play", "A bigger share of your loves than of your plays.", "over", "accent-soft",
+          "No artist's loves outrun their plays.")}
+        ${artistCard("Big artists, few loves", "Artists whose plays would suggest more loved tracks than they have.", "under", "",
+          "Your big artists get their share of loves.")}
+      </div>`;
   }
 
   async function insightsView() {
@@ -1184,28 +1178,42 @@
     const ref = i.reference_ts;
     const years = (ov.last_ts - ov.first_ts) / (365.25 * 86400);
     const shown = 6;
-    const sections = INSIGHTS.map((d) => {
+    const listCard = (d) => {
       const items = i[d.key];
-      const body = items.length ? html`<ul class="rows">${items.slice(0, shown).map((r) => insightRow(...d.row(r, ref)))}</ul>`
+      const body = items.length ? html`<ul class="rows">${items.slice(0, shown).map((r) => insightRow(...d.row(r, ref), 0, d.heart))}</ul>`
         : html`<p class="empty box">${d.empty(years, i)}</p>`;
-      return [d, body, items.length > shown ? seeAll(d.kind, d.title) : ""];
-    });
+      return card(d.title, body, { id: d.kind, cls: d.cls, sub: d.sub, h3: true, foot: items.length > shown ? seeAll(d.kind, d.title) : "" });
+    };
+    const patterns = INSIGHTS.filter((d) => d.section !== "loved"), lovedLists = INSIGHTS.filter((d) => d.section === "loved");
+    const hasLoved = !!(gap?.loved.total || i.loved_count);
     const tiles = 8;
     paint(seq, html`
-      <div class="page-head"><div><h1>Insights</h1><p class="lead">Patterns in your history, up to your latest scrobble on ${Fmt.date(ov.last_ts)}.</p></div></div>
-      <nav class="jumpbar" aria-label="Jump to a section"><button type="button" data-to="rediscover">Rediscover</button>
-        ${gap?.loved.total ? html`<button type="button" data-to="taste-gap">Love vs play</button>` : ""}
-        ${INSIGHTS.map((d) => html`<button type="button" data-to="${d.kind}">${d.title}</button>`)}</nav>
-      <section class="card solid feature" id="rediscover" tabindex="-1">
-        <div><h2>Rediscover</h2><p>${REDISCOVER.sub}</p>
-          ${i.rediscover.length > tiles ? html`<p class="card-foot">${seeAll("rediscover", "rediscoveries")}</p>` : ""}</div>
+      <div class="page-head"><div><h1>Insights</h1><p class="lead">Patterns in your history, up to your latest scrobble on ${Fmt.date(ov.last_ts)}.</p></div>
+        <a class="text-link" href="${DOCS}#the-pages-in-detail" target="_blank" rel="noopener noreferrer">How these are measured ${icon("external", 14)}</a></div>
+      <nav class="jumpbar" aria-label="Jump to a section">
+        <button type="button" data-to="rediscover">Rediscover <span class="n">${Fmt.int(i.rediscover.length)}${i.rediscover.length >= REDISCOVER_SHOWN ? "+" : ""}</span></button>
+        <button type="button" data-to="patterns">Your patterns <span class="n">${patterns.length} lists</span></button>
+        ${hasLoved ? html`<button type="button" data-to="loved">Loved tracks <span class="n">${lovedViews(gap) + lovedLists.length} views</span></button>` : ""}</nav>
+      <section class="card solid feature" id="rediscover" tabindex="-1" aria-labelledby="rediscover-title">
+        <div class="feature-head"><h2 id="rediscover-title">Rediscover</h2><p>${REDISCOVER.sub}</p></div>
         ${i.rediscover.length ? html`<div class="tiles-2">${i.rediscover.slice(0, tiles).map((r) => html`<a class="tile-link" href="#/artist/${r.id}">
             <span class="top-line"><b>${r.name}</b><span class="ago">${Fmt.ago(r.last_ts, ref)}</span></span>
-            <span class="why">because you're into ${r.because.slice(0, 2).map((b, k) => html`${k ? " and " : ""}<b>${b.name}</b>`)}${lovedCount(r.loved)}</span></a>`)}</div>`
+            <span class="why">because you're into ${r.because.slice(0, 2).map((b, k) => html`${k ? " and " : ""}<b>${b.name}</b>`)}</span>
+            ${r.loved > 0 ? html`<span class="why">${lovedBadge(r.loved)}</span>` : ""}</a>`)}</div>`
           : html`<p>${REDISCOVER.empty(years)}</p>`}
+        ${i.rediscover.length > tiles ? html`<p class="card-foot">${seeAll("rediscover", "rediscoveries")}</p>` : ""}
       </section>
-      ${tasteGapSection(gap)}
-      <div class="columns-3">${sections.map(([d, body, foot]) => card(d.title, body, { id: d.kind, cls: d.cls, sub: d.sub, foot }))}</div>`);
+      <section class="page-section" id="patterns" tabindex="-1" aria-labelledby="patterns-title">
+        <div class="section-head"><h2 id="patterns-title">Your patterns</h2><p class="secondary">How you play: streaks, returns, and where discoveries came from.</p></div>
+        <div class="columns-3">${patterns.map(listCard)}</div>
+      </section>
+      <section class="page-section" id="loved" tabindex="-1" aria-labelledby="loved-title">
+        <div class="section-head split"><div><h2 id="loved-title">Loved tracks</h2><p class="secondary">Your hearts on last.fm, set against what you actually play.</p></div>
+          ${gap?.loved.total ? html`<div class="head-chips"><span class="pill accent">${Fmt.int(gap.loved.matched)} of ${Fmt.int(gap.loved.total)} loves in your library</span>${gap.loved.matched ? gapLegend : ""}</div>` : ""}</div>
+        ${hasLoved ? html`${gap ? tasteGapCards(gap) : gapEmpty("Couldn't load the comparison of loves and plays. Try again later.")}<div class="columns-3">${lovedLists.map(listCard)}</div>`
+          : html`<div class="card accent-soft no-loved"><span class="heart-badge" aria-hidden="true">${icon("heart", 24)}</span>
+              <div><h3>No loved tracks yet</h3><p>Love tracks on last.fm and this section fills in after the next update: what you love vs what you play, love at first listen, slow burners and more.</p></div></div>`}
+      </section>`);
     view.querySelectorAll("[data-to]").forEach((b) => b.addEventListener("click", () => {
       const el = document.getElementById(b.dataset.to);
       el.setAttribute("tabindex", "-1");
@@ -1232,7 +1240,7 @@
       <div class="page-head"><div><a class="kicker" href="#/insights">← Insights</a><h1>${d.title}</h1>
         <p class="lead">${d.sub.replace(/\.$/, "")}. ${!data.has_more ? `All ${Fmt.int(items.length)}` : n < max ? `The top ${Fmt.int(n)}`
           : `The top ${Fmt.int(max)}, where the list stops`}, up to ${Fmt.date(ov.last_ts)}.</p></div></div>
-      ${card("", items.length ? html`<ul class="rows">${items.map((r, k) => insightRow(...d.row(r, data.reference_ts), k + 1))}</ul>`
+      ${card("", items.length ? html`<ul class="rows">${items.map((r, k) => insightRow(...d.row(r, data.reference_ts), k + 1, d.heart))}</ul>`
         : html`<p class="empty box">${d.empty(years, data)}</p>`, {
         cls: d.cls ?? "",
         foot: data.has_more && n < max ? html`<button type="button" class="btn secondary small" id="more">Show ${step} more</button>` : "",
@@ -1255,7 +1263,7 @@
     const days = Math.round((new Date(iso + "T12:00:00") - new Date(today + "T12:00:00")) / 864e5);
     return days === 0 ? "Out today" : days < 0 ? "Out this week" : days < 7 ? "This Friday" : days < 14 ? "Next Friday" : `In ${Math.round(days / 7)} weeks`;
   };
-  const playsLine = (a) => [nPlays(a.plays), a.recent_plays ? `${Fmt.int(a.recent_plays)} in the last year` : "", a.loved ? `${Fmt.int(a.loved)} loved` : ""].filter(Boolean).join(" · ");
+  const playsLine = (a) => html`${[nPlays(a.plays), a.recent_plays ? `${Fmt.int(a.recent_plays)} in the last year` : ""].filter(Boolean).join(" · ")}${lovedCount(a.loved)}`;
   // why a release by an artist you don't play is listed: similar artists you play, shared genres
   const whyNew = (r) => [r.like.length ? `Like ${r.like.join(", ")}` : "", r.genres.length ? r.genres.join(", ") : ""].filter(Boolean).join(" · ");
   function releaseRow(r, mine, why = "") {
@@ -1268,11 +1276,10 @@
     const cover = r.cover_url || (mine && r.artists[0].image_url) || null;
     return html`<li>${initial(r.title, cover, true)}
       <div class="grow"><b>${r.title}</b> <span class="meta">by ${by}</span>
-        <small>${what}${mine ? html`<br>${r.artists.map(playsLine).join(" / ")}` : ""}${why ? html`<br>${why}` : ""}</small></div>
+        <small>${what}${mine ? html`<br>${r.artists.map((a, k) => html`${k ? " / " : ""}${playsLine(a)}`)}` : ""}${why ? html`<br>${why}` : ""}</small></div>
       <span class="ext">${extra}</span></li>`;
   }
   const PROMPT_TASKS = [["releases", "New releases"], ["discover", "New artists"], ["profile", "Taste only"]];
-  const DOCS = "https://github.com/impronen/music-taste-center/blob/main/docs/how-it-works.md";
   const shortDay = (iso) => Fmt.day(iso).replace(/\s\d{4}$/, ""); // "16 Oct"
   let copyTimer = 0;
   let upcomingRefresh = null; // the running refresh, so a re-render doesn't start another
