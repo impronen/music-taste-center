@@ -347,6 +347,7 @@ main h1:focus { outline: none; }
 .rows .grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rows .key { margin-left: auto; font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .rows .meta { color: var(--color-ink-2); font-size: var(--fs-sm); }
+.rows .num { min-width: 3ch; text-align: right; font-variant-numeric: tabular-nums; }
 .rows b { font-weight: 700; }
 .time { flex: none; padding: 2px 9px; border-radius: var(--pill); background: var(--tint-accent); color: var(--color-accent-ink); font-weight: 700; font-size: var(--fs-xs); font-variant-numeric: tabular-nums; }
 .day-sep { list-style: none; margin: 8px 0 0 4px; font-size: var(--fs-xs); font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--color-accent-ink); }

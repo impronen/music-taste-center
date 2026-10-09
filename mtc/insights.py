@@ -540,64 +540,116 @@ def eras(conn: sqlite3.Connection) -> list[dict]:
 # ---------------------------------------------------------------- insight cards
 
 
-def insights(conn: sqlite3.Connection) -> dict:
-    lo, hi = _span(conn)
-    if hi is None:
-        return {}
-    year_ago, q_ago = hi - 365 * DAY, hi - 90 * DAY
-
-    forgotten = _rows(conn.execute(
+def _forgotten(conn, hi: int, limit: int, offset: int) -> list[dict]:
+    """Big artists not played in the past year."""
+    return _rows(conn.execute(
         "SELECT a.id, a.name, st.plays, st.last_ts FROM artist_stats st JOIN artists a ON a.id = st.artist_id"
-        " WHERE st.last_ts < ? AND st.plays >= 20 ORDER BY st.plays DESC LIMIT 12", (year_ago,)))
+        " WHERE st.last_ts < ? AND st.plays >= 20 ORDER BY st.plays DESC, a.id LIMIT ? OFFSET ?",
+        (hi - 365 * DAY, limit, offset)))
 
-    rising = _rows(conn.execute(
+
+def _rising(conn, hi: int, limit: int, offset: int) -> list[dict]:
+    """Last 90 days against the artist's pace in the year before them."""
+    q_ago = hi - 90 * DAY
+    return _rows(conn.execute(
         "SELECT a.id, a.name, r.recent, r.before, (r.recent + 1.0) / (r.before * 90.0 / 365 + 1) AS growth FROM ("
         " SELECT artist_id, SUM(ts > ?) AS recent, SUM(ts <= ? AND ts > ?) AS before"
         " FROM scrobbles WHERE ts > ? GROUP BY artist_id) r JOIN artists a ON a.id = r.artist_id"
-        " WHERE r.recent >= 8 AND growth >= 1.25 ORDER BY growth DESC LIMIT 12",
-        (q_ago, q_ago, q_ago - 365 * DAY, q_ago - 365 * DAY)))
+        " WHERE r.recent >= 8 AND growth >= 1.25 ORDER BY growth DESC, a.id LIMIT ? OFFSET ?",
+        (q_ago, q_ago, q_ago - 365 * DAY, q_ago - 365 * DAY, limit, offset)))
 
-    obsessions = _rows(conn.execute(
+
+def _obsessions(conn, hi: int, limit: int, offset: int) -> list[dict]:
+    """Months where one artist took the biggest share of plays."""
+    return _rows(conn.execute(
         "SELECT t.month, a.id, a.name, t.n AS plays, t.n * 1.0 / t.month_total AS share FROM ("
         " SELECT substr(lday, 1, 7) AS month, artist_id, COUNT(*) AS n,"
         "  SUM(COUNT(*)) OVER (PARTITION BY substr(lday, 1, 7)) AS month_total,"
-        "  ROW_NUMBER() OVER (PARTITION BY substr(lday, 1, 7) ORDER BY COUNT(*) DESC) AS rk"
+        "  ROW_NUMBER() OVER (PARTITION BY substr(lday, 1, 7) ORDER BY COUNT(*) DESC, artist_id) AS rk"
         " FROM scrobbles GROUP BY 1, 2) t JOIN artists a ON a.id = t.artist_id"
-        " WHERE t.rk = 1 AND t.month_total >= 50 ORDER BY share DESC LIMIT 12"))
+        " WHERE t.rk = 1 AND t.month_total >= 50 ORDER BY share DESC, t.month LIMIT ? OFFSET ?", (limit, offset)))
 
-    staying = _rows(conn.execute(
+
+def _staying_power(conn, hi: int, limit: int, offset: int) -> list[dict]:
+    """Artists played in the most different years."""
+    return _rows(conn.execute(
         "SELECT a.id, a.name, st.plays, st.n_years, st.first_ts FROM artist_stats st JOIN artists a ON a.id = st.artist_id"
-        " WHERE st.n_years >= 2 ORDER BY st.n_years DESC, st.plays DESC LIMIT 12"))
+        " WHERE st.n_years >= 2 ORDER BY st.n_years DESC, st.plays DESC, a.id LIMIT ? OFFSET ?", (limit, offset)))
 
-    one_track = _rows(conn.execute(
+
+def _one_track(conn, hi: int, limit: int, offset: int) -> list[dict]:
+    """Artists where one song is at least three quarters of the plays."""
+    return _rows(conn.execute(
         "SELECT a.id, a.name, st.plays, t.title AS track, x.n * 1.0 / st.plays AS share FROM ("
         " SELECT artist_id, track_id, COUNT(*) AS n,"
-        "  ROW_NUMBER() OVER (PARTITION BY artist_id ORDER BY COUNT(*) DESC) AS rk"
+        "  ROW_NUMBER() OVER (PARTITION BY artist_id ORDER BY COUNT(*) DESC, track_id) AS rk"
         " FROM scrobbles GROUP BY artist_id, track_id) x"
         " JOIN artist_stats st ON st.artist_id = x.artist_id JOIN artists a ON a.id = x.artist_id"
         " JOIN tracks t ON t.id = x.track_id"
-        " WHERE x.rk = 1 AND st.plays >= 15 AND x.n * 1.0 / st.plays >= 0.75 ORDER BY st.plays DESC LIMIT 12"))
+        " WHERE x.rk = 1 AND st.plays >= 15 AND x.n * 1.0 / st.plays >= 0.75 ORDER BY st.plays DESC, a.id LIMIT ? OFFSET ?",
+        (limit, offset)))
 
-    binges = _rows(conn.execute(
+
+def _binges(conn, hi: int, limit: int, offset: int) -> list[dict]:
+    """Most plays of one track in a single day."""
+    return _rows(conn.execute(
         "SELECT s.lday AS day, t.id, t.title AS name, a.id AS artist_id, a.name AS artist, COUNT(*) AS plays"
         " FROM scrobbles s JOIN tracks t ON t.id = s.track_id JOIN artists a ON a.id = s.artist_id"
-        " GROUP BY s.lday, s.track_id HAVING plays >= 5 ORDER BY plays DESC LIMIT 12"))
+        " GROUP BY s.lday, s.track_id HAVING plays >= 5 ORDER BY plays DESC, s.lday DESC, t.id LIMIT ? OFFSET ?",
+        (limit, offset)))
 
-    deep_divers = _rows(conn.execute(
+
+def _deep_dives(conn, hi: int, limit: int, offset: int) -> list[dict]:
+    """Artists with the most different tracks played."""
+    return _rows(conn.execute(
         "SELECT a.id, a.name, st.plays, st.n_tracks FROM artist_stats st JOIN artists a ON a.id = st.artist_id"
-        " ORDER BY st.n_tracks DESC LIMIT 12"))
+        " ORDER BY st.n_tracks DESC, st.plays DESC, a.id LIMIT ? OFFSET ?", (limit, offset)))
 
-    gateways = _rows(conn.execute(
+
+def _gateways(conn, hi: int, limit: int, offset: int) -> list[dict]:
+    """Artists played right before discovering others, by the plays those others got."""
+    return _rows(conn.execute(
         "SELECT a.id, a.name, COUNT(*) AS led_to, SUM(st.plays) AS downstream_plays"
         " FROM artist_stats st JOIN artists a ON a.id = st.gateway_id"
-        " GROUP BY st.gateway_id ORDER BY downstream_plays DESC LIMIT 12"))
+        " GROUP BY st.gateway_id ORDER BY downstream_plays DESC, a.id LIMIT ? OFFSET ?", (limit, offset)))
 
-    return {
-        "reference_ts": hi,
-        "rediscover": rediscover(conn),
-        "forgotten": forgotten, "rising": rising, "obsessions": obsessions, "staying_power": staying,
-        "one_track": one_track, "binges": binges, "deep_dives": deep_divers, "gateways": gateways,
-    }
+
+def _rediscover(conn, hi: int, limit: int, offset: int) -> list[dict]:
+    return rediscover(conn, limit + offset)[offset:]
+
+
+# kind (the URL slug) -> (key in the insights() payload, query)
+INSIGHT_KINDS = {
+    "rediscover": ("rediscover", _rediscover),
+    "rising": ("rising", _rising),
+    "forgotten": ("forgotten", _forgotten),
+    "obsessions": ("obsessions", _obsessions),
+    "staying-power": ("staying_power", _staying_power),
+    "gateways": ("gateways", _gateways),
+    "binges": ("binges", _binges),
+    "one-track": ("one_track", _one_track),
+    "deep-dives": ("deep_dives", _deep_dives),
+}
+
+
+def insights(conn: sqlite3.Connection) -> dict:
+    """The first rows of every insight, for the overview page."""
+    lo, hi = _span(conn)
+    if hi is None:
+        return {}
+    out = {"reference_ts": hi}
+    for kind, (key, query) in INSIGHT_KINDS.items():
+        out[key] = query(conn, hi, 15 if kind == "rediscover" else 12, 0)
+    return out
+
+
+def insight_list(conn: sqlite3.Connection, kind: str, limit: int = 50, offset: int = 0) -> dict:
+    """One insight in full, a page at a time; has_more says whether another page exists."""
+    lo, hi = _span(conn)
+    if hi is None:
+        return {"kind": kind, "reference_ts": None, "items": [], "has_more": False}
+    items = INSIGHT_KINDS[kind][1](conn, hi, limit + 1, offset)
+    return {"kind": kind, "reference_ts": hi, "items": items[:limit], "has_more": len(items) > limit}
 
 
 def rediscover(conn: sqlite3.Connection, limit: int = 15) -> list[dict]:
@@ -624,7 +676,7 @@ def rediscover(conn: sqlite3.Connection, limit: int = 15) -> list[dict]:
             if src in core and dst in stale:
                 scores[dst] += score
                 because[dst].append((score, src))
-    ranked = sorted(scores, key=lambda a: scores[a] * math.log1p(stale[a][0]), reverse=True)[:limit]
+    ranked = sorted(scores, key=lambda a: (-scores[a] * math.log1p(stale[a][0]), a))[:limit]
     return [
         {"id": a, "name": names[a], "plays": stale[a][0], "last_ts": stale[a][1], "score": scores[a],
          "because": [{"id": s, "name": names[s]} for _, s in sorted(because[a], reverse=True)[:3]]}

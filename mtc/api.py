@@ -172,6 +172,12 @@ def create_app(db_path: str | Path | None = None, *, lastfm_factory: Callable | 
     def insight_cards(c=Conn):
         return insights.insights(c)
 
+    @app.get("/api/insights/{kind}")
+    def insight_list(kind: str, limit: int = Query(50, ge=1, le=500), offset: int = Query(0, ge=0), c=Conn):
+        if kind not in insights.INSIGHT_KINDS:
+            raise HTTPException(404, "unknown insight")
+        return insights.insight_list(c, kind, limit, offset)
+
     @app.get("/api/graph")
     def graph(n: int = Query(120, ge=10, le=400), per_node: int = Query(6, ge=1, le=20), c=Conn):
         return insights.graph(c, n, per_node)

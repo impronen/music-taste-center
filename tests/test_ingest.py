@@ -127,6 +127,16 @@ class ImportTests(unittest.TestCase):
         self.assertTrue(insights.eras(self.conn))
         cards = insights.insights(self.conn)
         self.assertIn("rediscover", cards)
+        for kind, (key, _) in insights.INSIGHT_KINDS.items():
+            # the full list starts with the card's rows and pages without gaps or repeats
+            full = insights.insight_list(self.conn, kind, limit=500)["items"]
+            if kind in ("binges", "staying-power", "deep-dives"):
+                self.assertGreater(len(full), 12, kind)  # longer than the card, so paging is exercised
+            self.assertEqual(full[:len(cards[key])], cards[key], kind)
+            first = insights.insight_list(self.conn, kind, limit=3)
+            rest = insights.insight_list(self.conn, kind, limit=500, offset=3)["items"]
+            self.assertEqual(first["items"] + rest, full, kind)
+            self.assertEqual(first["has_more"], len(full) > 3, kind)
         g = insights.graph(self.conn, n=15)
         self.assertEqual(len(g["nodes"]), 15)
         self.assertTrue(all("cluster" in n for n in g["nodes"]))

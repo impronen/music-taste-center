@@ -1031,49 +1031,106 @@
   }
 
   // ---------- insights ----------
+  const insightRow = (href, name, meta, key, pos) => html`<li class="link-row"><a href="${href}">${pos ? html`<span class="num muted">${pos}</span>` : ""}
+    <span class="grow"><b>${name}</b> <span class="meta">${meta}</span></span><span class="key">${key}</span></a></li>`;
+  // kind (URL slug, API kind) -> title, subtitle, card tint, payload key, row renderer, empty text by years of history
+  const INSIGHTS = [
+    { kind: "rising", title: "On the rise", sub: "Last 90 days vs your usual pace for them", cls: "sage-soft", key: "rising",
+      row: (r) => [artistHref(r), r.name, `${Fmt.int(r.recent)} plays in 90 d`, `${Fmt.dec(r.growth)}×`],
+      empty: (years) => (years < 1.25 ? "Needs at least 15 months of history." : "Nobody is clearly speeding up right now.") },
+    { kind: "forgotten", title: "Forgotten favourites", sub: "Big artists you haven't played in over a year", cls: "", key: "forgotten",
+      row: (r, ref) => [artistHref(r), r.name, `${Fmt.int(r.plays)} plays`, Fmt.ago(r.last_ts, ref).replace(" ago", "")],
+      empty: (years) => (years < 1 ? "Needs a year of history." : "None: you still play all your big artists.") },
+    { kind: "obsessions", title: "Obsessions", sub: "Months where one artist took over", cls: "accent", key: "obsessions",
+      row: (r) => [artistHref(r), r.name, Fmt.month(r.month), Fmt.pct(r.share)],
+      empty: () => "No month was dominated by one artist." },
+    { kind: "staying-power", title: "Staying power", sub: "Played in the most different years", cls: "", key: "staying_power",
+      row: (r) => [artistHref(r), r.name, `${Fmt.int(r.plays)} plays`, `${r.n_years} yrs`],
+      empty: () => "Needs at least two years of history." },
+    { kind: "gateways", title: "Gateways", sub: "Artists you played right before discovering others", cls: "accent-soft", key: "gateways",
+      row: (r) => [artistHref(r), r.name, `led to ${Fmt.int(r.led_to)} · ${Fmt.int(r.downstream_plays)} plays`, Fmt.int(r.led_to)],
+      empty: () => "Needs discoveries after your first month." },
+    { kind: "binges", title: "Binges", sub: "Most plays of one track in a single day", cls: "sage", key: "binges",
+      row: (r) => [trackHref(r), r.name, `${r.artist} · ${Fmt.day(r.day)}`, `${Fmt.int(r.plays)}×`],
+      empty: () => "No track was played five times in one day." },
+    { kind: "one-track", title: "One-track artists", sub: "One song is almost all you play", cls: "", key: "one_track",
+      row: (r) => [artistHref(r), r.name, r.track, Fmt.pct(r.share)],
+      empty: () => "No artist is just one song for you." },
+    { kind: "deep-dives", title: "Deep dives", sub: "Catalogues you've explored the furthest", cls: "", key: "deep_dives",
+      row: (r) => [artistHref(r), r.name, `${Fmt.int(r.plays)} plays`, `${Fmt.int(r.n_tracks)} tracks`],
+      empty: () => "Nothing yet." },
+  ];
+  const REDISCOVER = { kind: "rediscover", title: "Rediscover", sub: "Artists you used to play alongside your current favourites, untouched for a year.",
+    row: (r, ref) => [artistHref(r), r.name, html`because you're into ${r.because.slice(0, 2).map((b, k) => html`${k ? " and " : ""}${b.name}`)}`, Fmt.ago(r.last_ts, ref)],
+    empty: (years) => (years < 1 ? "Needs a year of history." : "Nothing to rediscover: you still play everything you used to pair with your favourites.") };
+  const seeAll = (kind, label) => html`<a class="more" href="#/insights/${kind}">See all ${label.toLowerCase()} →</a>`;
+
   async function insightsView() {
     const seq = rendering;
     const [i, ov] = await Promise.all([api("/api/insights"), api("/api/overview")]);
     if (!i.reference_ts) return emptyState(seq);
     const ref = i.reference_ts;
     const years = (ov.last_ts - ov.first_ts) / (365.25 * 86400);
-    const rows = (items, render, emptyText) => (items.length ? html`<ul class="rows">${items.slice(0, 6).map(render)}</ul>` : html`<p class="empty box">${emptyText}</p>`);
-    const row = (href, name, meta, key) => html`<li class="link-row"><a href="${href}"><span class="grow"><b>${name}</b> <span class="meta">${meta}</span></span><span class="key">${key}</span></a></li>`;
-    const sections = [
-      ["rising", "On the rise", "Last 90 days vs your usual pace for them", "sage-soft",
-        rows(i.rising, (r) => row(artistHref(r), r.name, `${Fmt.int(r.recent)} plays in 90 d`, `${Fmt.dec(r.growth)}×`), years < 1.25 ? "Needs at least 15 months of history." : "Nobody is clearly speeding up right now.")],
-      ["forgotten", "Forgotten favourites", "Big artists you haven't played in over a year", "",
-        rows(i.forgotten, (r) => row(artistHref(r), r.name, `${Fmt.int(r.plays)} plays`, Fmt.ago(r.last_ts, ref).replace(" ago", "")), years < 1 ? "Needs a year of history." : "None: you still play all your big artists.")],
-      ["obsessions", "Obsessions", "Months where one artist took over", "accent",
-        rows(i.obsessions, (r) => row(artistHref(r), r.name, Fmt.month(r.month), Fmt.pct(r.share)), "No month was dominated by one artist.")],
-      ["staying", "Staying power", "Played in the most different years", "",
-        rows(i.staying_power, (r) => row(artistHref(r), r.name, `${Fmt.int(r.plays)} plays`, `${r.n_years} yrs`), "Needs at least two years of history.")],
-      ["gateways", "Gateways", "Artists you played right before discovering others", "accent-soft",
-        rows(i.gateways, (r) => row(artistHref(r), r.name, `led to ${Fmt.int(r.led_to)} · ${Fmt.int(r.downstream_plays)} plays`, Fmt.int(r.led_to)), "Needs discoveries after your first month.")],
-      ["binges", "Binges", "Most plays of one track in a single day", "sage",
-        rows(i.binges, (r) => row(trackHref(r), r.name, `${r.artist} · ${Fmt.day(r.day)}`, `${Fmt.int(r.plays)}×`), "No track was played five times in one day.")],
-      ["one-track", "One-track artists", "One song is almost all you play", "",
-        rows(i.one_track, (r) => row(artistHref(r), r.name, r.track, Fmt.pct(r.share)), "No artist is just one song for you.")],
-      ["deep-dives", "Deep dives", "Catalogues you've explored the furthest", "",
-        rows(i.deep_dives, (r) => row(artistHref(r), r.name, `${Fmt.int(r.plays)} plays`, `${Fmt.int(r.n_tracks)} tracks`), "Nothing yet.")],
-    ];
+    const shown = 6;
+    const sections = INSIGHTS.map((d) => {
+      const items = i[d.key];
+      const body = items.length ? html`<ul class="rows">${items.slice(0, shown).map((r) => insightRow(...d.row(r, ref)))}</ul>`
+        : html`<p class="empty box">${d.empty(years)}</p>`;
+      return [d, body, items.length > shown ? seeAll(d.kind, d.title) : ""];
+    });
+    const tiles = 8;
     paint(seq, html`
       <div class="page-head"><div><h1>Insights</h1><p class="lead">Patterns in your history, up to your latest scrobble on ${Fmt.date(ov.last_ts)}.</p></div></div>
       <nav class="jumpbar" aria-label="Jump to a section"><button type="button" data-to="rediscover">Rediscover</button>
-        ${sections.map(([id, title]) => html`<button type="button" data-to="${id}">${title}</button>`)}</nav>
+        ${INSIGHTS.map((d) => html`<button type="button" data-to="${d.kind}">${d.title}</button>`)}</nav>
       <section class="card solid feature" id="rediscover" tabindex="-1">
-        <div><h2>Rediscover</h2><p>Artists you used to play alongside your current favourites, untouched for a year.</p></div>
-        ${i.rediscover.length ? html`<div class="tiles-2">${i.rediscover.slice(0, 8).map((r) => html`<a class="tile-link" href="#/artist/${r.id}">
+        <div><h2>Rediscover</h2><p>${REDISCOVER.sub}</p>
+          ${i.rediscover.length > tiles ? html`<p class="card-foot">${seeAll("rediscover", "rediscoveries")}</p>` : ""}</div>
+        ${i.rediscover.length ? html`<div class="tiles-2">${i.rediscover.slice(0, tiles).map((r) => html`<a class="tile-link" href="#/artist/${r.id}">
             <span class="top-line"><b>${r.name}</b><span class="ago">${Fmt.ago(r.last_ts, ref)}</span></span>
             <span class="why">because you're into ${r.because.slice(0, 2).map((b, k) => html`${k ? " and " : ""}<b>${b.name}</b>`)}</span></a>`)}</div>`
-          : html`<p>${years < 1 ? "Needs a year of history." : "Nothing to rediscover: you still play everything you used to pair with your favourites."}</p>`}
+          : html`<p>${REDISCOVER.empty(years)}</p>`}
       </section>
-      <div class="columns-3">${sections.map(([id, title, sub, cls, body]) => card(title, body, { id, cls, sub }))}</div>`);
+      <div class="columns-3">${sections.map(([d, body, foot]) => card(d.title, body, { id: d.kind, cls: d.cls, sub: d.sub, foot }))}</div>`);
     view.querySelectorAll("[data-to]").forEach((b) => b.addEventListener("click", () => {
       const el = document.getElementById(b.dataset.to);
       el.setAttribute("tabindex", "-1");
       scrollToId(b.dataset.to);
     }));
+  }
+
+  // One insight in full; "Show more" grows ?n= so the list stays on one page.
+  let insightFocusFrom = null;
+  async function insightView(kind, params) {
+    const seq = rendering;
+    const d = kind === "rediscover" ? REDISCOVER : INSIGHTS.find((x) => x.kind === kind);
+    if (!d) {
+      paint(seq, html`<div class="page-head"><div><h1>Not found</h1><p class="lead"><a href="#/insights">Back to Insights</a></p></div></div>`);
+      return;
+    }
+    const step = 50, max = 500;
+    const n = Math.min(max, Math.max(step, Math.round((+params.get("n") || step) / step) * step));
+    const [data, ov] = await Promise.all([api(`/api/insights/${kind}?` + qs({ limit: n })), api("/api/overview")]);
+    if (!data.reference_ts) return emptyState(seq);
+    const years = (ov.last_ts - ov.first_ts) / (365.25 * 86400);
+    const items = data.items;
+    paint(seq, html`
+      <div class="page-head"><div><a class="kicker" href="#/insights">← Insights</a><h1>${d.title}</h1>
+        <p class="lead">${d.sub.replace(/\.$/, "")}. ${!data.has_more ? `All ${Fmt.int(items.length)}` : n < max ? `The top ${Fmt.int(n)}`
+          : `The top ${Fmt.int(max)}, where the list stops`}, up to ${Fmt.date(ov.last_ts)}.</p></div></div>
+      ${card("", items.length ? html`<ul class="rows">${items.map((r, k) => insightRow(...d.row(r, data.reference_ts), k + 1))}</ul>`
+        : html`<p class="empty box">${d.empty(years)}</p>`, {
+        cls: d.cls ?? "",
+        foot: data.has_more && n < max ? html`<button type="button" class="btn secondary small" id="more">Show ${step} more</button>` : "",
+      })}`);
+    // after "Show more", focus the first new row (the button may be gone, and the new rows sit above it)
+    if (insightFocusFrom != null) view.querySelectorAll(".rows a")[Math.min(insightFocusFrom, items.length - 1)]?.focus();
+    insightFocusFrom = null;
+    view.querySelector("#more")?.addEventListener("click", (e) => {
+      insightFocusFrom = n;
+      e.currentTarget.blur(); // so route() doesn't put focus back on the button
+      location.hash = `#/insights/${kind}?` + qs({ n: n + step });
+    });
   }
 
   // ---------- cleanup ----------
@@ -1560,6 +1617,7 @@
     [/^\/rhythms$/, rhythmsView],
     [/^\/decades$/, decadesView],
     [/^\/insights$/, insightsView],
+    [/^\/insights\/([a-z-]+)$/, insightView],
     [/^\/import$/, importView],
     [/^\/cleanup$/, cleanupView],
   ];
