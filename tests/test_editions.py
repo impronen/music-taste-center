@@ -48,6 +48,7 @@ class StripTests(unittest.TestCase):
             ("Shake It Off (Taylor's Version)", "Shake It Off (Taylor's Version)"), ("Song - Single Version", "Song - Single Version"),
             ("Without You - Remix", "Without You - Remix"), ("Radioactive", "Radioactive"),
             ("Song - Remastered 2011 (Live)", "Song - Remastered 2011 (Live)"),
+            ("Song (Demo - Remastered)", "Song (Demo - Remastered)"),  # a dash inside a bracket is left alone
             # nothing but a note: kept
             ("Remastered", "Remastered"), ("(Remastered)", "(Remastered)"),
         ]:

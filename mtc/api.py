@@ -37,7 +37,7 @@ class MergeRequest(BaseModel):
 
 
 class EditionMerge(BaseModel):
-    source_ids: list[int] = Field(..., min_length=1, max_length=50)
+    source_ids: list[int] = Field(..., min_length=1, max_length=200)
     target_id: int
 
 
@@ -418,8 +418,9 @@ def create_app(db_path: str | Path | None = None, *, lastfm_factory: Callable | 
                     results.append(editions.merge_albums(c, m.source_ids, m.target_id))
         except (ValueError, LookupError) as exc:
             failure = exc
-        if kind == "tracks" and results:
-            derive.rebuild(c)  # once, whatever merged before a failure
+        finally:
+            if kind == "tracks" and results:
+                derive.rebuild(c)  # once, whatever merged before a failure
         if failure is not None:
             raise HTTPException(404 if isinstance(failure, LookupError) else 400, str(failure)) from None
         return {"merged": results}

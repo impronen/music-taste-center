@@ -44,8 +44,9 @@ def strip_edition(title: str) -> str:
         s = _BRACKETED.sub(lambda m: "" if is_noise(m.group(1)) else m.group(0), s).strip()
         parts = _DASH.split(s)
         if len(parts) > 1 and is_noise(parts[-1]):
-            s = s[: len(s) - len(parts[-1])].rstrip()
-            s = re.sub(r"\s[-–—]$", "", s).strip()
+            head = re.sub(r"\s[-–—]$", "", s[: len(s) - len(parts[-1])].rstrip()).strip()
+            if head.count("(") == head.count(")") and head.count("[") == head.count("]"):  # not a dash inside a bracket
+                s = head
         if s == before:
             break
     return s or " ".join(title.split())

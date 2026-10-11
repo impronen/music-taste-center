@@ -1775,6 +1775,10 @@
       if (!location.hash.startsWith("#/cleanup/editions")) return; // the user moved on
       await editionsView(shown);
       if (message) say(message);
+      // the clicked button is gone: put keyboard focus on the note so it is read and tabbing continues from here
+      const note = document.getElementById("cleanup-msg");
+      note?.setAttribute("tabindex", "-1");
+      note?.focus({ preventScroll: false });
     };
     const merge = async (kind, merges) => {
       const r = await postJson(`/api/maintenance/editions/${kind}`, { merges });
@@ -1802,8 +1806,11 @@
         try { await refresh(await merge(kind, [mergeOf(li)])); } catch (err) { say(err.message, true); }
       });
       li.querySelector(".dismiss").addEventListener("click", async () => {
-        try { await postJson("/api/maintenance/dismiss", { key: g.key }); li.remove(); say(`Kept apart: ${g.artist.name}, ${EDITION_KINDS[kind].items(g).map((x) => x.title).join(" and ")}.`); }
-        catch (err) { say(err.message, true); }
+        try {
+          await postJson("/api/maintenance/dismiss", { key: g.key });
+          data[kind] = data[kind].filter((x) => x !== g); // so "Merge the sure matches" and the counts forget it
+          await refresh(`Kept apart: ${g.artist.name}, ${EDITION_KINDS[kind].items(g).map((x) => x.title).join(" and ")}.`);
+        } catch (err) { say(err.message, true); }
       });
     });
     view.querySelectorAll(".merge-all").forEach((b) => {
