@@ -348,7 +348,13 @@ main h1:focus { outline: none; }
 .rows { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
 .rows > li { display: flex; align-items: center; gap: 10px; min-height: 40px; padding: 8px 14px; border-radius: var(--radius-md); background: var(--color-chip); min-width: 0; }
 .rows > li.link-row { padding: 0; }
-.rows > li.link-row > a { display: flex; align-items: center; gap: 10px; width: 100%; min-width: 0; padding: 8px 14px; border-radius: var(--radius-md); color: var(--color-text); }
+.rows > li.link-row > a { display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0; padding: 8px 14px; border-radius: var(--radius-md); color: var(--color-text); }
+.rows > li.link-row > .hide-btn { margin-right: 8px; }
+.hide-btn { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; padding: 0; border: 0; border-radius: var(--pill); background: transparent; color: var(--color-ink-2); cursor: pointer; }
+.hide-btn:hover, .hide-btn:focus-visible { background: var(--color-hover); color: var(--color-hover-ink); }
+.feature .tile-wrap { position: relative; min-width: 0; }
+.feature .tile-wrap > .hide-btn { position: absolute; right: 8px; bottom: 8px; }
+.feature .tile-wrap .tile-link { box-sizing: border-box; height: 100%; padding-right: 46px; }
 .rows > li.link-row > a:hover { background: var(--color-row-hover); box-shadow: var(--shadow-sm); }
 .rows .grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rows .key { margin-left: auto; font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; }

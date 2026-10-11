@@ -47,6 +47,10 @@ class LovedRuleRequest(BaseModel):
     track_id: int = Field(..., ge=1, le=SQLITE_INT_MAX)
 
 
+class HideRequest(BaseModel):
+    artist_id: int = Field(..., ge=1, le=SQLITE_INT_MAX)
+
+
 class DismissRequest(BaseModel):
     key: str = Field(..., min_length=1, max_length=20000)
 
@@ -185,6 +189,23 @@ def create_app(db_path: str | Path | None = None, *, lastfm_factory: Callable | 
         if kind not in insights.INSIGHT_KINDS:
             raise HTTPException(404, "unknown insight")
         return insights.insight_list(c, kind, limit, offset)
+
+    @app.get("/api/hidden-artists")
+    def hidden_list(c=Conn):
+        """Artists hidden from Rediscover and Forgotten favourites."""
+        return maintenance.hidden_artists(c)
+
+    @app.post("/api/hidden-artists")
+    def hidden_add(req: HideRequest, c=Conn):
+        try:
+            maintenance.hide_artist(c, req.artist_id)
+        except LookupError as exc:
+            raise HTTPException(404, str(exc)) from None
+        return {"ok": True}
+
+    @app.delete("/api/hidden-artists/{artist_id}")
+    def hidden_remove(artist_id: int = PathParam(..., ge=1, le=SQLITE_INT_MAX), c=Conn):
+        return {"removed": found(maintenance.unhide_artist(c, artist_id) or None)}
 
     @app.get("/api/loved/gap")
     def loved_gap(c=Conn):

@@ -576,7 +576,8 @@ def _forgotten(conn, hi: int, limit: int, offset: int) -> list[dict]:
     """Big artists not played in the past year."""
     return _rows(conn.execute(
         "SELECT a.id, a.name, st.plays, st.last_ts FROM artist_stats st JOIN artists a ON a.id = st.artist_id"
-        " WHERE st.last_ts < ? AND st.plays >= 20 ORDER BY st.plays DESC, a.id LIMIT ? OFFSET ?",
+        " WHERE st.last_ts < ? AND st.plays >= 20 AND a.id NOT IN (SELECT artist_id FROM hidden_artists)"
+        " ORDER BY st.plays DESC, a.id LIMIT ? OFFSET ?",
         (hi - 365 * DAY, limit, offset)))
 
 
@@ -772,7 +773,7 @@ def rediscover(conn: sqlite3.Connection, limit: int = 15) -> list[dict]:
     """Recommendations from your own library: artists strongly linked (co-listened) with what
     you play now, but not played in the past year.
 
-    Candidates are artists last played over a year before the newest scrobble, with at least 5
+    Candidates (hidden artists excepted) are artists last played over a year before the newest scrobble, with at least 5
     plays, or with any number of plays when you've loved one of their tracks on last.fm (a love is
     a stronger signal than a handful of plays). Only artists linked to one of your 20 most played
     artists of the last 90 days score at all, so a loved artist still needs links to appear.
@@ -796,7 +797,8 @@ def rediscover(conn: sqlite3.Connection, limit: int = 15) -> list[dict]:
     loved = dict(conn.execute(
         f"SELECT t.artist_id, COUNT(*) FROM ({LOVED}) lv JOIN tracks t ON t.id = lv.track_id GROUP BY t.artist_id"))
     stale = {a: (p, last) for a, p, last in conn.execute(
-        "SELECT artist_id, plays, last_ts FROM artist_stats WHERE last_ts < ? AND (plays >= ? OR artist_id IN"
+        "SELECT artist_id, plays, last_ts FROM artist_stats WHERE last_ts < ?"
+        " AND artist_id NOT IN (SELECT artist_id FROM hidden_artists) AND (plays >= ? OR artist_id IN"
         f" (SELECT t.artist_id FROM ({LOVED}) lv JOIN tracks t ON t.id = lv.track_id))",
         (hi - REDISCOVER_STALE_DAYS * DAY, REDISCOVER_MIN_PLAYS))}
     scores: defaultdict[int, float] = defaultdict(float)
