@@ -6,8 +6,8 @@ Version" are different recordings and stay apart. Tracks are grouped per artist 
 without the noise; the albums they were played on say how sure a pair is (the same album once
 the noise is dropped is strong evidence, different albums is weaker). Albums are grouped the same
 way, with the tracks they share as evidence. A group is safe to merge unattended when it has album
-evidence, or nothing in `hard` (many versions, an album name that sounds like another recording, a
-generic title, a compilation-style or unrelated album). A merge leaves a rule behind (track_aliases,
+evidence for every track, or nothing in `hard` (many versions, an album name that sounds like
+another recording, a generic title, no album information, a compilation-style or unrelated album). A merge leaves a rule behind (track_aliases,
 album_aliases) so later scrobbles of the old title land on the kept one."""
 import re
 import sqlite3
@@ -68,7 +68,9 @@ MAX_SAFE_VARIANTS = 3
 # played from the same album, the albums share their tracks) are safe whatever else they have.
 _OTHER_RECORDING = re.compile(
     r"live|demo|session|unplugged|acoustic|bootleg|rehears|outtake|alternat|instrumental|remix|karaoke|tribute|concert"
-    r"|\bmtv\b|\bbbc\b|\bpeel\b|b-side|rarit|unreleased", re.I)
+    r"|\bmtv\b|\bbbc\b|\bpeel\b|b-side|rarit|unreleased"
+    r"|konsert|akustinen|en vivo|directo|concierto|reimagin|re-?record|stripped|orchestra|symphon|piano|soundtrack|\bost\b"
+    r"|mixtape|medley|\bdub\b", re.I)
 _COMPILATION = re.compile(r"greatest|best of|collection|anthology|essential|hits|compilation|very best|singles|rarities"
                           r"|archive|box|complete|selected|ultimate|definitive", re.I)
 _GENERIC_TRACKS = {"intro", "outro", "interlude", "untitled", "prelude", "overture", "finale", "theme", "prologue",
@@ -128,18 +130,23 @@ def track_groups(conn: sqlite3.Connection) -> list[dict]:
             for a in albums.get(r["id"], []):
                 seen[edition_key(a["title"] or "")].add(r["id"])
         shared = any(len(v) > 1 for k, v in seen.items() if k)
+        # tracks that share an album with another one are anchored; the others are judged on their own albums
+        anchored = {tid for k, v in seen.items() if k and len(v) > 1 for tid in v}
+        outsiders = [r for r in g if r["id"] not in anchored]
         hard = []
-        if not shared:
+        if outsiders:
             if len(g) > MAX_SAFE_VARIANTS:
                 hard.append("more than 3 versions")
-            if any(_OTHER_RECORDING.search(a["title"] or "") for r in g for a in albums.get(r["id"], [])):
+            if any(_OTHER_RECORDING.search(a["title"] or "") for r in outsiders for a in albums.get(r["id"], [])):
                 hard.append("an album name suggests another recording")
             if ek in _GENERIC_TRACKS:
                 hard.append("a very generic title")
+            if any(not albums.get(r["id"]) for r in outsiders):
+                hard.append("no album information")
         out.append({"key": gkey, "artist": {"id": g[0]["artist_id"], "name": names.get(g[0]["artist_id"], "")},
                     "tracks": tracks, "target_id": tracks[0]["id"], "evidence": "same-album" if shared else "other-albums",
                     "hard": hard, "plays": sum(t["plays"] for t in tracks)})
-    out.sort(key=lambda x: (x["evidence"] != "same-album", bool(x["hard"]), -x["plays"], x["key"]))
+    out.sort(key=lambda x: (bool(x["hard"]), x["evidence"] != "same-album", -x["plays"], x["key"]))
     return out
 
 
@@ -183,13 +190,13 @@ def album_groups(conn: sqlite3.Connection) -> list[dict]:
                 hard.append("more than 3 versions")
             if any(_COMPILATION.search(a["title"]) for a in albums):
                 hard.append("a compilation-style title")
-            if overlap == 0 and min(a["n_tracks"] for a in albums) >= 5:
+            if overlap == 0 and min(a["n_tracks"] for a in albums) >= 3:
                 hard.append("the albums share no tracks")
         out.append({"key": gkey, "artist": {"id": g[0]["artist_id"], "name": names.get(g[0]["artist_id"], "")},
                     "albums": albums, "target_id": albums[0]["id"], "overlap": round(overlap, 2),
                     "evidence": "same-tracks" if overlap >= OVERLAP_MIN else "few-shared-tracks",
                     "hard": hard, "plays": sum(a["plays"] for a in albums)})
-    out.sort(key=lambda x: (x["evidence"] != "same-tracks", bool(x["hard"]), -x["plays"], x["key"]))
+    out.sort(key=lambda x: (bool(x["hard"]), x["evidence"] != "same-tracks", -x["plays"], x["key"]))
     return out
 
 
