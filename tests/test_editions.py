@@ -188,6 +188,15 @@ class EditionTests(unittest.TestCase):
         self.assertEqual(client.delete(f"/api/maintenance/editions/tracks/rules/{rid}").status_code, 404)
         self.assertEqual(client.delete("/api/maintenance/editions/nope/rules/1").status_code, 422)
 
+    def test_one_request_can_merge_more_than_five_hundred_groups(self):
+        ingest.ingest_records(self.conn, [r for i in range(600) for r in (S(f"Song {i}", 200 + i * 2), S(f"Song {i} - Remastered 2011", 201 + i * 2, "Midnight (Remastered 2011)"))], source="t")
+        client = TestClient(create_app(self.path))
+        groups = [g for g in client.get("/api/maintenance/editions").json()["tracks"] if g["evidence"] == "same-album"]
+        self.assertGreater(len(groups), 600)
+        merges = [{"source_ids": [t["id"] for t in g["tracks"] if t["id"] != g["target_id"]], "target_id": g["target_id"]} for g in groups]
+        r = client.post("/api/maintenance/editions/tracks", json={"merges": merges})
+        self.assertEqual((r.status_code, len(r.json()["merged"])), (200, len(groups)))
+
     def test_dismissed_groups_are_left_out(self):
         key = next(g["key"] for g in editions.track_groups(self.conn) if g["key"].endswith(":echo"))
         maintenance.dismiss(self.conn, key)
