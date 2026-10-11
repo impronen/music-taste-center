@@ -1721,17 +1721,17 @@
   // ranks groups by how sure it is: the album the tracks were played from, or the tracks two albums share.
   const EDITION_KINDS = {
     tracks: {
-      title: "Tracks", items: (g) => g.tracks, strong: (g) => g.evidence === "same-album", href: (id) => `#/track/${id}`,
+      title: "Tracks", items: (g) => g.tracks, safe: (g) => !g.hard.length, href: (id) => `#/track/${id}`,
       sub: "One artist, the same title once notes like “Remastered 2011” are dropped. Live, acoustic and remix versions stay apart.",
       none: "No remastered duplicates found.",
-      why: (g) => (g.evidence === "same-album" ? "Played from the same album" : "Played from different albums, check before merging"),
+      why: (g) => (g.evidence === "same-album" ? "Played from the same album" : "Played from different albums"),
       detail: (t) => `${Fmt.int(t.plays)} ${t.plays === 1 ? "play" : "plays"}${t.albums.length ? ` · ${t.albums.map((a) => a.title).join(", ")}${t.n_albums > t.albums.length ? ", …" : ""}` : ""}`,
     },
     albums: {
-      title: "Albums", items: (g) => g.albums, strong: (g) => g.evidence === "same-tracks", href: (id) => `#/album/${id}`,
+      title: "Albums", items: (g) => g.albums, safe: (g) => !g.hard.length, href: (id) => `#/album/${id}`,
       sub: "One artist, the same title once notes like “Deluxe Edition” are dropped. Merging moves every play to the album you keep.",
       none: "No duplicate editions found.",
-      why: (g) => (g.evidence === "same-tracks" ? `${Fmt.pct(g.overlap)} of the tracks are on both` : `Few tracks in common (${Fmt.pct(g.overlap)}), check before merging`),
+      why: (g) => (g.evidence === "same-tracks" ? `${Fmt.pct(g.overlap)} of the tracks are on both` : `Few tracks in common (${Fmt.pct(g.overlap)})`),
       detail: (a) => `${Fmt.int(a.plays)} ${a.plays === 1 ? "play" : "plays"} · ${Fmt.int(a.n_tracks)} ${a.n_tracks === 1 ? "track" : "tracks"}`,
     },
   };
@@ -1743,13 +1743,14 @@
       return html`<li class="dupe" data-kind="${kind}" data-key="${g.key}">
         <div class="dupe-names" role="radiogroup" aria-label="Title to keep">${k.items(g).map((x) => html`<button type="button" class="keep-opt" role="radio"
           aria-checked="${String(x.id === g.target_id)}" data-id="${x.id}">${x.title} <span class="plays">${k.detail(x)}</span><span class="keep-mark">KEEP</span></button>`)}</div>
-        <div class="dupe-actions"><span class="reason"><a href="#/artist/${g.artist.id}">${g.artist.name}</a> · ${k.why(g)}</span>
+        <div class="dupe-actions"><span class="reason"><a href="#/artist/${g.artist.id}">${g.artist.name}</a> · ${k.why(g)}${g.hard.length ? ` · Needs a look: ${g.hard.join(", ")}` : ""}</span>
           <button type="button" class="btn ghost small dismiss">Not the same</button><button type="button" class="btn primary small merge">Merge</button></div></li>`;
     };
     const section = (kind) => {
-      const k = EDITION_KINDS[kind], groups = data[kind], n = groups.filter(k.strong).length;
+      const k = EDITION_KINDS[kind], groups = data[kind], n = groups.filter(k.safe).length;
       return card(html`${k.title} ${groups.length ? html`<span class="pill accent" style="vertical-align:4px">${Fmt.int(groups.length)}</span>` : ""}`,
-        groups.length ? html`${n ? html`<p style="margin-bottom:12px"><button type="button" class="btn primary small merge-all" data-kind="${kind}">Merge the ${Fmt.int(n)} sure ${n === 1 ? "match" : "matches"}</button></p>` : ""}
+        groups.length ? html`${n ? html`<p style="margin-bottom:12px"><button type="button" class="btn primary small merge-all" data-kind="${kind}">Merge the ${Fmt.int(n)} safe ${n === 1 ? "match" : "matches"}</button>
+          <span class="reason"> Sure matches, and ones with nothing odd about them. The rest say what needs a look.</span></p>` : ""}
             <ul class="dupes" data-kind="${kind}">${groups.slice(0, shown[kind]).map((g) => groupHtml(kind, g))}</ul>
             ${groups.length > shown[kind] ? html`<p style="margin-top:12px"><button type="button" class="btn secondary small more" data-kind="${kind}">Show 25 more</button></p>` : ""}`
           : html`<p class="empty box">${k.none}</p>`, { cls: kind === "tracks" ? "canvas" : "", sub: k.sub });
@@ -1817,7 +1818,7 @@
       li.querySelector(".dismiss").addEventListener("click", async () => {
         try {
           await postJson("/api/maintenance/dismiss", { key: g.key });
-          data[kind] = data[kind].filter((x) => x !== g); // so "Merge the sure matches" and the counts forget it
+          data[kind] = data[kind].filter((x) => x !== g); // so "Merge the safe matches" and the counts forget it
           await refresh(`Kept apart: ${g.artist.name}, ${EDITION_KINDS[kind].items(g).map((x) => x.title).join(" and ")}.`);
         } catch (err) { say(err.message, true); }
       });
@@ -1826,7 +1827,7 @@
       const kind = b.dataset.kind, label = b.textContent;
       armed(b, () => `Confirm: merge ${label.match(/\d[\d\s]*/)[0].trim()} into the titles marked KEEP`, async () => {
         const lis = [...view.querySelectorAll(`.dupe[data-kind="${kind}"]`)];
-        const merges = data[kind].filter(EDITION_KINDS[kind].strong).map((g) => {
+        const merges = data[kind].filter(EDITION_KINDS[kind].safe).map((g) => {
           const li = lis.find((x) => x.dataset.key === g.key); // as chosen on the page, else the default
           return li ? mergeOf(li) : { source_ids: EDITION_KINDS[kind].items(g).map((x) => x.id).filter((id) => id !== g.target_id), target_id: g.target_id };
         });

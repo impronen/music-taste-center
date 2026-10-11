@@ -88,6 +88,43 @@ class EditionTests(unittest.TestCase):
         self.assertEqual(groups["other song"]["artist"]["name"], "Someone Else")
         self.assertEqual([g["evidence"] for g in editions.track_groups(self.conn)][-1], "other-albums")  # weakest last
 
+    def test_groups_that_need_a_look_say_why(self):
+        rows = [S("Intro", 300, "Debut"), S("Intro - Remastered", 301, "Reissue"),                  # generic title
+                S("Lullaby", 310, "Studio"), S("Lullaby - Remastered 2011", 311, "Live at Home"),   # an album that sounds like another recording
+                S("Many", 320, "A"), S("Many - Remastered", 321, "B"), S("Many (Remastered 2011)", 322, "C"),
+                S("Many - 2011 Remaster", 323, "D")]                                              # four versions
+        ingest.ingest_records(self.conn, rows, source="t")
+        by = {g["key"].split(":", 2)[2]: g for g in editions.track_groups(self.conn)}
+        self.assertEqual(by["intro"]["hard"], ["a very generic title"])
+        self.assertEqual(by["lullaby"]["hard"], ["an album name suggests another recording"])
+        self.assertEqual(by["many"]["hard"], ["more than 3 versions"])
+        self.assertEqual(by["echo"]["hard"], [])  # other albums, but nothing odd: safe
+        self.assertEqual(by["harbour lights"]["hard"], [])
+        # album evidence for every track outweighs the generic title
+        ingest.ingest_records(self.conn, [S("Intro", 330, "Midnight"), S("Intro - Remastered", 331, "Midnight (Remastered 2011)")], source="t")
+        self.assertEqual({g["key"].split(":", 2)[2]: g for g in editions.track_groups(self.conn)}["intro"]["hard"], [])
+        # ...but not for a third version played only from another recording's album
+        ingest.ingest_records(self.conn, [S("Harbour Lights (2011 Remaster)", 340, "Piano Sessions")], source="t")
+        hl = {g["key"].split(":", 2)[2]: g for g in editions.track_groups(self.conn)}["harbour lights"]
+        self.assertEqual((hl["evidence"], hl["hard"]), ("same-album", ["an album name suggests another recording"]))
+        # a version without album information at all
+        ingest.ingest_records(self.conn, [Scrobble(BAND, "Echo (Remastered 2009)", T0 + 350 * 3600)], source="t")
+        self.assertIn("no album information", {g["key"].split(":", 2)[2]: g for g in editions.track_groups(self.conn)}["echo"]["hard"])
+        for groups in (editions.track_groups(self.conn), editions.album_groups(self.conn)):
+            order = [(bool(g["hard"]), g["evidence"] not in ("same-album", "same-tracks")) for g in groups]
+            self.assertEqual(order, sorted(order))  # sure first, then safe, then needs a look
+        albums = {g["artist"]["name"]: g for g in editions.album_groups(self.conn)}
+        self.assertEqual(albums["Third One"]["hard"], ["a compilation-style title"])  # one track each, so not "no shared tracks"
+        self.assertEqual(albums[BAND]["hard"], [])
+        # albums: four versions with little in common, and unrelated albums with a few tracks each
+        rows = [S(f"T{k}{i}", 400 + i + 10 * k, f"Odyssey{suffix}", artist="Many Albums") for k, suffix in
+                enumerate(("", " (Deluxe Edition)", " (Remastered)", " [Expanded Edition]")) for i in range(2)]
+        rows += [S(f"A{i}", 500 + i, "Pairs", artist="Unrelated") for i in range(3)] + [S(f"B{i}", 510 + i, "Pairs (Deluxe)", artist="Unrelated") for i in range(3)]
+        ingest.ingest_records(self.conn, rows, source="t")
+        by = {g["artist"]["name"]: g for g in editions.album_groups(self.conn)}
+        self.assertEqual(by["Unrelated"]["hard"], ["the albums share no tracks"])
+        self.assertEqual(by["Many Albums"]["hard"], ["more than 3 versions"])  # two different tracks each: too few to call them unrelated
+
     def test_album_groups_show_shared_tracks(self):
         g = next(x for x in editions.album_groups(self.conn) if x["artist"]["name"] == BAND)
         self.assertEqual([a["title"] for a in g["albums"]], ["Midnight", "Midnight (Remastered 2011)"])
