@@ -345,6 +345,9 @@ class UnmatchedLovedTests(unittest.TestCase):
             try:
                 self.assertLess(conn.execute("PRAGMA user_version").fetchone()[0], number)
                 self.assertIsNone(conn.execute("SELECT 1 FROM sqlite_master WHERE name = 'loved_title_rules'").fetchone())
+                # ingest also reads the later title-rule tables; stand-ins (migration 010 keeps them as they are)
+                conn.executescript("CREATE TABLE track_aliases(artist_id, title_key, track_id);"
+                                   "CREATE TABLE album_aliases(artist_id, title_key, album_id);")
                 ingest.ingest_records(conn, history(), source="test")
                 updater.store_loved(conn, self.LOVED)
                 aghartha = conn.execute("SELECT track_id FROM loved WHERE title = 'Aghartha'").fetchone()[0]

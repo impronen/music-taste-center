@@ -12,7 +12,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 
-from . import config, db, decades, velocity, derive, enrich, fsutil, ingest, insights, jobs, maintenance, releases, rhythms, settings, taste_gap, taste_prompt, updater
+from . import config, db, decades, velocity, derive, enrich, fsutil, editions, ingest, insights, jobs, maintenance, releases, rhythms, settings, taste_gap, taste_prompt, updater
 from .webapi import Fatal, NotFound
 
 MAX_UPLOAD_BYTES = 300 * 1024 * 1024
@@ -34,6 +34,15 @@ class KeyRequest(BaseModel):
 class MergeRequest(BaseModel):
     source_ids: list[int] = Field(..., min_length=1, max_length=50)
     target_id: int
+
+
+class EditionMerge(BaseModel):
+    source_ids: list[int] = Field(..., min_length=1, max_length=200)
+    target_id: int
+
+
+class EditionMergeRequest(BaseModel):
+    merges: list[EditionMerge] = Field(..., min_length=1, max_length=500)
 
 
 class AliasRequest(BaseModel):
@@ -392,6 +401,42 @@ def create_app(db_path: str | Path | None = None, *, lastfm_factory: Callable | 
             raise HTTPException(400, str(exc)) from None
         except LookupError as exc:
             raise HTTPException(404, str(exc)) from None
+
+    @app.get("/api/maintenance/editions")
+    def edition_groups(c=Conn):
+        """Tracks and albums that differ only by remaster/edition notes, and the rules from earlier merges."""
+        return {"tracks": editions.track_groups(c), "albums": editions.album_groups(c), "rules": editions.rules(c)}
+
+    def edition_merge(kind: str, req: EditionMergeRequest, c):
+        results = []
+        failure: Exception | None = None
+        try:
+            for m in req.merges:
+                if kind == "tracks":
+                    results.append(editions.merge_tracks(c, m.source_ids, m.target_id, rebuild=False))
+                else:
+                    results.append(editions.merge_albums(c, m.source_ids, m.target_id))
+        except (ValueError, LookupError) as exc:
+            failure = exc
+        finally:
+            if kind == "tracks" and results:
+                derive.rebuild(c)  # once, whatever merged before a failure
+        if failure is not None:
+            raise HTTPException(404 if isinstance(failure, LookupError) else 400, str(failure)) from None
+        return {"merged": results}
+
+    @app.post("/api/maintenance/editions/tracks")
+    def edition_merge_tracks(req: EditionMergeRequest, c=Conn):
+        return edition_merge("tracks", req, c)
+
+    @app.post("/api/maintenance/editions/albums")
+    def edition_merge_albums(req: EditionMergeRequest, c=Conn):
+        return edition_merge("albums", req, c)
+
+    @app.delete("/api/maintenance/editions/{kind}/rules/{rule_id}")
+    def edition_rule_remove(kind: str = PathParam(..., pattern="^(tracks|albums)$"),
+                            rule_id: int = PathParam(..., ge=1, le=SQLITE_INT_MAX), c=Conn):
+        return {"removed": found(editions.remove_rule(c, kind, rule_id) or None)}
 
     @app.post("/api/maintenance/dismiss")
     def dismiss(req: DismissRequest, c=Conn):

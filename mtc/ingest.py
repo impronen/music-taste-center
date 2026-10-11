@@ -157,6 +157,9 @@ class _Ids:
         self.artists.update((r[0], r[1]) for r in conn.execute("SELECT name_key, artist_id FROM artist_aliases"))
         self.tracks = {(r[0], r[1]): r[2] for r in conn.execute("SELECT artist_id, title_key, id FROM tracks")}
         self.albums = {(r[0], r[1]): r[2] for r in conn.execute("SELECT artist_id, title_key, id FROM albums")}
+        # title rules from editions.merge_tracks / merge_albums: a merged-away title maps to the kept one
+        self.tracks.update(((r[0], r[1]), r[2]) for r in conn.execute("SELECT artist_id, title_key, track_id FROM track_aliases"))
+        self.albums.update(((r[0], r[1]), r[2]) for r in conn.execute("SELECT artist_id, title_key, album_id FROM album_aliases"))
 
     def artist(self, name: str, mbid: str | None) -> int:
         k = key(name)

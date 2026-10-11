@@ -1561,7 +1561,8 @@
           <button type="button" class="btn ghost small dismiss">Not the same</button><button type="button" class="btn primary small merge">Merge</button></div></li>`;
     paint(seq, html`
       <div class="page-head"><div><h1>Cleanup</h1>
-        <p class="lead">Combine artists spelled more than one way. A merge moves every scrobble to the name you keep, and future imports of the other spelling land there too.</p></div></div>
+        <p class="lead">Combine artists spelled more than one way. A merge moves every scrobble to the name you keep, and future imports of the other spelling land there too.</p></div>
+        <a class="text-link" href="#/cleanup/editions">Remastered tracks and albums ${icon("arrow", 14)}</a></div>
       <div class="status-pill" id="cleanup-msg" role="status" aria-live="polite"></div>
       ${card("Merge two artists", html`<form class="merge-form" id="merge-form" autocomplete="off">
           <label class="field" for="m-source">Merge away${picker("m-source", "Search for the misspelling")}</label>
@@ -1711,6 +1712,125 @@
       try {
         await postJson(`/api/loved/rules/${Number(b.dataset.id)}`, null, "DELETE");
         await lovedDone(html`Link removed. That loved track is unmatched again.`, ".loved-rules > li", j);
+      } catch (err) { b.disabled = false; say(err.message, true); }
+    }));
+  }
+
+  // ---------- cleanup: remaster and edition duplicates ----------
+  // "Song" and "Song - Remastered 2011", "Album" and "Album (Deluxe Edition)" (editions.py). The server
+  // ranks groups by how sure it is: the album the tracks were played from, or the tracks two albums share.
+  const EDITION_KINDS = {
+    tracks: {
+      title: "Tracks", items: (g) => g.tracks, strong: (g) => g.evidence === "same-album", href: (id) => `#/track/${id}`,
+      sub: "One artist, the same title once notes like “Remastered 2011” are dropped. Live, acoustic and remix versions stay apart.",
+      none: "No remastered duplicates found.",
+      why: (g) => (g.evidence === "same-album" ? "Played from the same album" : "Played from different albums, check before merging"),
+      detail: (t) => `${Fmt.int(t.plays)} ${t.plays === 1 ? "play" : "plays"}${t.albums.length ? ` · ${t.albums.map((a) => a.title).join(", ")}${t.n_albums > t.albums.length ? ", …" : ""}` : ""}`,
+    },
+    albums: {
+      title: "Albums", items: (g) => g.albums, strong: (g) => g.evidence === "same-tracks", href: (id) => `#/album/${id}`,
+      sub: "One artist, the same title once notes like “Deluxe Edition” are dropped. Merging moves every play to the album you keep.",
+      none: "No duplicate editions found.",
+      why: (g) => (g.evidence === "same-tracks" ? `${Fmt.pct(g.overlap)} of the tracks are on both` : `Few tracks in common (${Fmt.pct(g.overlap)}), check before merging`),
+      detail: (a) => `${Fmt.int(a.plays)} ${a.plays === 1 ? "play" : "plays"} · ${Fmt.int(a.n_tracks)} ${a.n_tracks === 1 ? "track" : "tracks"}`,
+    },
+  };
+  async function editionsView(shown = { tracks: 25, albums: 25 }) {
+    const seq = rendering;
+    const data = await api("/api/maintenance/editions", { fresh: true });
+    const groupHtml = (kind, g) => {
+      const k = EDITION_KINDS[kind];
+      return html`<li class="dupe" data-kind="${kind}" data-key="${g.key}">
+        <div class="dupe-names" role="radiogroup" aria-label="Title to keep">${k.items(g).map((x) => html`<button type="button" class="keep-opt" role="radio"
+          aria-checked="${String(x.id === g.target_id)}" data-id="${x.id}">${x.title} <span class="plays">${k.detail(x)}</span><span class="keep-mark">KEEP</span></button>`)}</div>
+        <div class="dupe-actions"><span class="reason"><a href="#/artist/${g.artist.id}">${g.artist.name}</a> · ${k.why(g)}</span>
+          <button type="button" class="btn ghost small dismiss">Not the same</button><button type="button" class="btn primary small merge">Merge</button></div></li>`;
+    };
+    const section = (kind) => {
+      const k = EDITION_KINDS[kind], groups = data[kind], n = groups.filter(k.strong).length;
+      return card(html`${k.title} ${groups.length ? html`<span class="pill accent" style="vertical-align:4px">${Fmt.int(groups.length)}</span>` : ""}`,
+        groups.length ? html`${n ? html`<p style="margin-bottom:12px"><button type="button" class="btn primary small merge-all" data-kind="${kind}">Merge the ${Fmt.int(n)} sure ${n === 1 ? "match" : "matches"}</button></p>` : ""}
+            <ul class="dupes" data-kind="${kind}">${groups.slice(0, shown[kind]).map((g) => groupHtml(kind, g))}</ul>
+            ${groups.length > shown[kind] ? html`<p style="margin-top:12px"><button type="button" class="btn secondary small more" data-kind="${kind}">Show 25 more</button></p>` : ""}`
+          : html`<p class="empty box">${k.none}</p>`, { cls: kind === "tracks" ? "canvas" : "", sub: k.sub });
+    };
+    const ruleList = (kind) => (data.rules[kind].length ? html`<h3 class="lm-head">${EDITION_KINDS[kind].title}</h3><ul class="rows rules">${data.rules[kind].map((r) => html`<li><b>${r.title}</b><span aria-hidden="true">${icon("arrow", 14)}</span>
+        <a class="to" href="${EDITION_KINDS[kind].href(r.target_id)}">${r.target}</a><span class="meta">${r.artist}</span><span class="meta">${Fmt.date(r.created_at)}</span>
+        <button type="button" class="btn ghost small rule-remove" data-kind="${kind}" data-id="${r.id}" aria-label="Remove the rule for ${r.title}">Remove</button></li>`)}</ul>` : "");
+    paint(seq, html`
+      <div class="page-head"><div><a class="kicker" href="#/cleanup">← Cleanup</a><h1>Remasters and editions</h1>
+        <p class="lead">Spotify adds “Remastered 2011” and “Deluxe Edition” to titles, so one song or album ends up in two places. Merge them into the title you keep; later scrobbles with the old title go there too.</p></div></div>
+      <div class="status-pill" id="cleanup-msg" role="status" aria-live="polite"></div>
+      ${section("tracks")}${section("albums")}
+      ${card("Title rules", data.rules.tracks.length || data.rules.albums.length ? html`${ruleList("tracks")}${ruleList("albums")}`
+        : html`<p class="empty box">No rules yet. Merging a track or album creates one.</p>`,
+        { sub: "Applied on every import. Removing one doesn't split what is already merged." })}`);
+
+    const say = (tpl, err = false) => {
+      const msg = document.getElementById("cleanup-msg");
+      msg.classList.toggle("err", err);
+      mount(msg, html`${err ? "" : icon("check")}<span>${tpl}</span>`);
+    };
+    const refresh = async (message) => {
+      if (!location.hash.startsWith("#/cleanup/editions")) return; // the user moved on
+      await editionsView(shown);
+      if (message) say(message);
+      // the clicked button is gone: put keyboard focus on the note so it is read and tabbing continues from here
+      const note = document.getElementById("cleanup-msg");
+      note?.setAttribute("tabindex", "-1");
+      note?.focus({ preventScroll: false });
+    };
+    const merge = async (kind, merges) => {
+      const r = await postJson(`/api/maintenance/editions/${kind}`, { merges });
+      cache.clear();
+      const moved = r.merged.reduce((n, m) => n + m.scrobbles_moved, 0), count = r.merged.reduce((n, m) => n + m.merged, 0);
+      const noun = kind === "tracks" ? (count === 1 ? "track" : "tracks") : (count === 1 ? "album" : "albums");
+      return html`Merged ${Fmt.int(count)} ${noun}${r.merged.length === 1 ? html` into <a href="${EDITION_KINDS[kind].href(r.merged[0].target_id)}">${r.merged[0].target}</a>` : ""}:
+        ${Fmt.int(moved)} ${moved === 1 ? "play" : "plays"} moved. Later scrobbles with the old title go to the same place.`;
+    };
+    const chosen = (li) => Number(li.querySelector("[aria-checked=true]").dataset.id);
+    const mergeOf = (li) => ({ source_ids: [...li.querySelectorAll("[role=radio]")].map((b) => Number(b.dataset.id)).filter((id) => id !== chosen(li)), target_id: chosen(li) });
+    view.querySelectorAll(".dupe").forEach((li) => {
+      const kind = li.dataset.kind, g = data[kind].find((x) => x.key === li.dataset.key);
+      const radios = [...li.querySelectorAll("[role=radio]")];
+      const choose = (b) => { radios.forEach((r) => { r.setAttribute("aria-checked", String(r === b)); r.tabIndex = r === b ? 0 : -1; }); b.focus(); };
+      radios.forEach((b, i) => {
+        b.tabIndex = b.getAttribute("aria-checked") === "true" ? 0 : -1;
+        b.addEventListener("click", () => choose(b));
+        b.addEventListener("keydown", (e) => {
+          const d = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 }[e.key];
+          if (d) { e.preventDefault(); choose(radios[(i + d + radios.length) % radios.length]); }
+        });
+      });
+      armed(li.querySelector(".merge"), () => `Confirm: keep ${EDITION_KINDS[kind].items(g).find((x) => x.id === chosen(li)).title}`, async () => {
+        try { await refresh(await merge(kind, [mergeOf(li)])); } catch (err) { say(err.message, true); }
+      });
+      li.querySelector(".dismiss").addEventListener("click", async () => {
+        try {
+          await postJson("/api/maintenance/dismiss", { key: g.key });
+          data[kind] = data[kind].filter((x) => x !== g); // so "Merge the sure matches" and the counts forget it
+          await refresh(`Kept apart: ${g.artist.name}, ${EDITION_KINDS[kind].items(g).map((x) => x.title).join(" and ")}.`);
+        } catch (err) { say(err.message, true); }
+      });
+    });
+    view.querySelectorAll(".merge-all").forEach((b) => {
+      const kind = b.dataset.kind, label = b.textContent;
+      armed(b, () => `Confirm: merge ${label.match(/\d[\d\s]*/)[0].trim()} into the titles marked KEEP`, async () => {
+        const lis = [...view.querySelectorAll(`.dupe[data-kind="${kind}"]`)];
+        const merges = data[kind].filter(EDITION_KINDS[kind].strong).map((g) => {
+          const li = lis.find((x) => x.dataset.key === g.key); // as chosen on the page, else the default
+          return li ? mergeOf(li) : { source_ids: EDITION_KINDS[kind].items(g).map((x) => x.id).filter((id) => id !== g.target_id), target_id: g.target_id };
+        });
+        try { await refresh(await merge(kind, merges)); } catch (err) { await refresh(); say(err.message, true); }
+      });
+    });
+    view.querySelectorAll(".more").forEach((b) => b.addEventListener("click", () => { shown[b.dataset.kind] += 25; refresh(); }));
+    view.querySelectorAll(".rule-remove").forEach((b) => b.addEventListener("click", async () => {
+      b.disabled = true;
+      try {
+        await postJson(`/api/maintenance/editions/${b.dataset.kind}/rules/${Number(b.dataset.id)}`, null, "DELETE");
+        cache.clear();
+        await refresh("Rule removed. What was merged stays merged.");
       } catch (err) { b.disabled = false; say(err.message, true); }
     }));
   }
@@ -1996,6 +2116,7 @@
     [/^\/upcoming$/, upcomingView],
     [/^\/import$/, importView],
     [/^\/cleanup$/, cleanupView],
+    [/^\/cleanup\/editions$/, () => editionsView()],
   ];
   let firstRoute = true, lastPath = null;
   // A selector that finds "the same control" again after a view re-renders.

@@ -28,6 +28,8 @@ MERGE_HANDLES = {
     ("artist_links", "a", "artists"), ("artist_links", "b", "artists"),  # derived: dropped and rebuilt
     ("loved_title_rules", "track_id", "tracks"),   # repointed to the target's same-titled track
     ("hidden_artists", "artist_id", "artists"),    # repointed to the target
+    ("track_aliases", "artist_id", "artists"), ("track_aliases", "track_id", "tracks"),  # repointed (a clash is dropped)
+    ("album_aliases", "artist_id", "artists"), ("album_aliases", "album_id", "albums"),
 }
 
 
@@ -62,6 +64,7 @@ def merge_artists(conn: sqlite3.Connection, source_id: int, target_id: int, *, r
                 " WHERE d.track_id = ? AND d.artist_id = ? AND d.ts = scrobbles.ts)", (tid, same[0], target_id)).rowcount
             conn.execute("UPDATE scrobbles SET track_id = ?, artist_id = ? WHERE track_id = ?", (same[0], target_id, tid))
             conn.execute("UPDATE loved_title_rules SET track_id = ? WHERE track_id = ?", (same[0], tid))
+            conn.execute("UPDATE track_aliases SET track_id = ? WHERE track_id = ?", (same[0], tid))
             conn.execute("DELETE FROM tracks WHERE id = ?", (tid,))
         conn.execute("UPDATE scrobbles SET artist_id = ? WHERE artist_id = ?", (target_id, source_id))
         for aid, akey in conn.execute("SELECT id, title_key FROM albums WHERE artist_id = ?", (source_id,)).fetchall():
@@ -70,6 +73,7 @@ def merge_artists(conn: sqlite3.Connection, source_id: int, target_id: int, *, r
                 conn.execute("UPDATE albums SET artist_id = ? WHERE id = ?", (target_id, aid))
                 continue
             conn.execute("UPDATE scrobbles SET album_id = ? WHERE album_id = ?", (same[0], aid))
+            conn.execute("UPDATE album_aliases SET album_id = ? WHERE album_id = ?", (same[0], aid))
             conn.execute("DELETE FROM album_tags WHERE album_id = ?", (aid,))
             conn.execute("DELETE FROM album_info WHERE album_id = ?", (aid,))
             conn.execute("DELETE FROM albums WHERE id = ?", (aid,))
@@ -83,6 +87,13 @@ def merge_artists(conn: sqlite3.Connection, source_id: int, target_id: int, *, r
         # a hidden source stays hidden under the target (the target's own row, if any, wins)
         conn.execute("INSERT OR IGNORE INTO hidden_artists(artist_id, created_at)"
                      " SELECT ?, created_at FROM hidden_artists WHERE artist_id = ?", (target_id, source_id))
+        # title rules of the source follow it to the target; one that clashes with a title the target
+        # already has (or a rule it already has) is dropped
+        for rules, items in (("track_aliases", "tracks"), ("album_aliases", "albums")):
+            conn.execute(f"UPDATE OR IGNORE {rules} SET artist_id = ? WHERE artist_id = ?", (target_id, source_id))
+            conn.execute(f"DELETE FROM {rules} WHERE artist_id = ?", (source_id,))
+            conn.execute(f"DELETE FROM {rules} WHERE artist_id = ? AND title_key IN (SELECT title_key FROM {items} WHERE artist_id = ?)",
+                         (target_id, target_id))
         conn.execute("DELETE FROM artists WHERE id = ?", (source_id,))
         conn.execute(
             "INSERT INTO artist_aliases(name_key, name, artist_id, scrobbles, created_at) VALUES (?, ?, ?, ?, ?)"
@@ -304,6 +315,8 @@ def _direct_match(conn: sqlite3.Connection, artist_key: str, title_key: str) -> 
     if artist_id is None:
         return None, None
     t = conn.execute("SELECT id FROM tracks WHERE artist_id = ? AND title_key = ?", (artist_id, title_key)).fetchone()
+    if t is None:  # a title merged into another track (editions.merge_tracks)
+        t = conn.execute("SELECT track_id FROM track_aliases WHERE artist_id = ? AND title_key = ?", (artist_id, title_key)).fetchone()
     return artist_id, t[0] if t else None
 
 
