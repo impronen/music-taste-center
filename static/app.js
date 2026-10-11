@@ -1782,10 +1782,16 @@
     };
     const merge = async (kind, merges) => {
       const r = { merged: [] };
-      for (let i = 0; i < merges.length; i += 2000) { // the server takes up to 5 000 at a time
-        r.merged.push(...(await postJson(`/api/maintenance/editions/${kind}`, { merges: merges.slice(i, i + 2000) })).merged);
+      try {
+        for (let i = 0; i < merges.length; i += 2000) { // the server takes up to 5 000 at a time
+          r.merged.push(...(await postJson(`/api/maintenance/editions/${kind}`, { merges: merges.slice(i, i + 2000) })).merged);
+        }
+      } catch (err) {
+        if (r.merged.length) err.message = `${Fmt.int(r.merged.length)} merged before it stopped: ${err.message}`;
+        throw err;
+      } finally {
+        cache.clear(); // whatever merged changed the data
       }
-      cache.clear();
       const moved = r.merged.reduce((n, m) => n + m.scrobbles_moved, 0), count = r.merged.reduce((n, m) => n + m.merged, 0);
       const noun = kind === "tracks" ? (count === 1 ? "track" : "tracks") : (count === 1 ? "album" : "albums");
       return html`Merged ${Fmt.int(count)} ${noun}${r.merged.length === 1 ? html` into <a href="${EDITION_KINDS[kind].href(r.merged[0].target_id)}">${r.merged[0].target}</a>` : ""}:
