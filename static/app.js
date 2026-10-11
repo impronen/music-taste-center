@@ -61,6 +61,7 @@
     arrow: '<path d="M5 12h14"/><path d="m12 5 7 7-7 7"/>',
     more: '<circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/>',
     heart: '<path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"/>',
+    eyeoff: '<path d="M10.733 5.076a10.744 10.744 0 0 1 11.205 6.575 1 1 0 0 1 0 .696 10.747 10.747 0 0 1-1.444 2.49"/><path d="M14.084 14.158a3 3 0 0 1-4.242-4.242"/><path d="M17.479 17.499a10.75 10.75 0 0 1-15.417-5.151 1 1 0 0 1 0-.696 10.75 10.75 0 0 1 4.446-5.143"/><path d="m2 2 20 20"/>',
     external: '<path d="M7 7h10v10"/><path d="M7 17 17 7"/>',
   };
   const icon = (name, size = 18) => raw(`<svg class="icon" viewBox="0 0 24 24" aria-hidden="true" style="width:${size}px;height:${size}px">${ICONS[name]}</svg>`);
@@ -1060,15 +1061,18 @@
   }
 
   // ---------- insights ----------
-  const insightRow = (href, name, meta, key, pos, loved = false) => html`<li class="link-row"><a href="${href}">${pos ? html`<span class="num muted">${pos}</span>` : ""}${loved ? html`<span class="loved row-heart" aria-hidden="true">${icon("heart", 13)}</span>` : ""}
-    <span class="grow"><b>${name}</b> <span class="meta">${meta}</span></span><span class="key">${key}</span></a></li>`;
+  /* The button that hides an artist from Rediscover and Forgotten favourites (a sibling of the link, never inside it) */
+  const hideBtn = (r) => html`<button type="button" class="hide-btn" data-hide="${r.id}" data-name="${r.name}" title="Hide from Rediscover and Forgotten favourites"
+    aria-label="Hide ${r.name} from Rediscover and Forgotten favourites">${icon("eyeoff", 16)}</button>`;
+  const insightRow = (href, name, meta, key, pos, loved = false, hide = null) => html`<li class="link-row"><a href="${href}">${pos ? html`<span class="num muted">${pos}</span>` : ""}${loved ? html`<span class="loved row-heart" aria-hidden="true">${icon("heart", 13)}</span>` : ""}
+    <span class="grow"><b>${name}</b> <span class="meta">${meta}</span></span><span class="key">${key}</span></a>${hide ? hideBtn(hide) : ""}</li>`;
   const NO_LOVED = "No loved tracks yet. Love tracks on last.fm and they show up after the next update.";
   // kind (URL slug, API kind) -> title, subtitle, card tint, payload key, row renderer, empty text by years of history
   const INSIGHTS = [
     { kind: "rising", title: "On the rise", sub: "Last 90 days vs your usual pace for them", cls: "sage-soft", key: "rising",
       row: (r) => [artistHref(r), r.name, `${Fmt.int(r.recent)} plays in 90 d`, `${Fmt.dec(r.growth)}×`],
       empty: (years) => (years < 1.25 ? "Needs at least 15 months of history." : "Nobody is clearly speeding up right now.") },
-    { kind: "forgotten", title: "Forgotten favourites", sub: "Big artists you haven't played in over a year", cls: "", key: "forgotten",
+    { kind: "forgotten", title: "Forgotten favourites", sub: "Big artists you haven't played in over a year", cls: "", key: "forgotten", hideable: true,
       row: (r, ref) => [artistHref(r), r.name, `${Fmt.int(r.plays)} plays`, Fmt.ago(r.last_ts, ref).replace(" ago", "")],
       empty: (years) => (years < 1 ? "Needs a year of history." : "None: you still play all your big artists.") },
     { kind: "obsessions", title: "Obsessions", sub: "Months where one artist took over", cls: "", key: "obsessions",
@@ -1106,9 +1110,38 @@
   // " · ♥ 3 loved" after a Rediscover reason when the artist has loved tracks (they weigh in the rank)
   const lovedBadge = (n) => html`<span class="loved count" title="${Fmt.int(n)} loved on last.fm">${icon("heart", 14)} ${Fmt.int(n)} loved<span class="sr-only"> ${n === 1 ? "track" : "tracks"}</span></span>`;
   const lovedCount = (n) => (n > 0 ? html` · ${lovedBadge(n)}` : "");
-  const REDISCOVER = { kind: "rediscover", title: "Rediscover", sub: "Artists you used to play alongside your current favourites, untouched for a year.",
+  const REDISCOVER = { kind: "rediscover", title: "Rediscover", hideable: true, sub: "Artists you used to play alongside your current favourites, untouched for a year.",
     row: (r, ref) => [artistHref(r), r.name, html`because you're into ${r.because.slice(0, 2).map((b, k) => html`${k ? " and " : ""}${b.name}`)}${lovedCount(r.loved)}`, Fmt.ago(r.last_ts, ref)],
     empty: (years) => (years < 1 ? "Needs a year of history." : "Nothing to rediscover: you still play everything you used to pair with your favourites.") };
+  /* Hiding: one click on a row's eye button, then a note with Undo (and a Restore list at the foot of Insights).
+     The note is drawn once by the next Rediscover or Forgotten page, then cleared. */
+  let hideNote = null;
+  const hideNoteBar = () => {
+    const n = hideNote;
+    hideNote = null;
+    return n ? html`<div class="status-pill" role="status"><span>${n.name} is hidden from Rediscover and Forgotten favourites.</span>
+      <button type="button" class="btn ghost small" data-unhide="${n.id}">Undo</button></div>` : "";
+  };
+  view.addEventListener("click", async (e) => {
+    const b = e.target.closest("[data-hide], [data-unhide]");
+    if (!b || b.disabled) return;
+    b.disabled = true;
+    try {
+      if (b.dataset.hide) {
+        await postJson("/api/hidden-artists", { artist_id: Number(b.dataset.hide) });
+        hideNote = { id: Number(b.dataset.hide), name: b.dataset.name };
+      } else {
+        await postJson(`/api/hidden-artists/${Number(b.dataset.unhide)}`, null, "DELETE");
+        hideNote = null;
+      }
+      cache.clear();
+      route();
+    } catch (err) { b.disabled = false; hideNote = null; console.error(err); b.title = err.message; }
+  });
+  const hiddenCard = (hidden) => (hidden.length ? card(`Hidden artists (${Fmt.int(hidden.length)})`, html`<ul class="rows">${hidden.map((h) => html`<li>
+      <a class="grow" href="#/artist/${h.id}"><b>${h.name}</b></a>
+      <button type="button" class="btn ghost small" data-unhide="${h.id}" aria-label="Restore ${h.name} to Rediscover and Forgotten favourites">Restore</button></li>`)}</ul>`,
+    { h3: true, sub: "Left out of Rediscover and Forgotten favourites. Your plays and stats still count everywhere else." }) : "");
   const REDISCOVER_SHOWN = 15; // /api/insights returns at most this many (insights.py)
   const seeAll = (kind, label) => html`<a class="more" href="#/insights/${kind}">See all ${label.toLowerCase()} →</a>`;
 
@@ -1173,14 +1206,15 @@
 
   async function insightsView() {
     const seq = rendering;
-    const [i, ov, gap] = await Promise.all([api("/api/insights"), api("/api/overview"), api("/api/loved/gap").catch(() => null)]);
+    const [i, ov, gap, hidden] = await Promise.all([api("/api/insights"), api("/api/overview"), api("/api/loved/gap").catch(() => null),
+      api("/api/hidden-artists").catch(() => [])]);
     if (!i.reference_ts) return emptyState(seq);
     const ref = i.reference_ts;
     const years = (ov.last_ts - ov.first_ts) / (365.25 * 86400);
     const shown = 6;
     const listCard = (d) => {
       const items = i[d.key];
-      const body = items.length ? html`<ul class="rows">${items.slice(0, shown).map((r) => insightRow(...d.row(r, ref), 0, d.heart))}</ul>`
+      const body = items.length ? html`<ul class="rows">${items.slice(0, shown).map((r) => insightRow(...d.row(r, ref), 0, d.heart, d.hideable ? r : null))}</ul>`
         : html`<p class="empty box">${d.empty(years, i)}</p>`;
       return card(d.title, body, { id: d.kind, cls: d.cls, sub: d.sub, h3: true, foot: items.length > shown ? seeAll(d.kind, d.title) : "" });
     };
@@ -1194,12 +1228,13 @@
         <button type="button" data-to="rediscover">Rediscover <span class="n">${Fmt.int(i.rediscover.length)}${i.rediscover.length >= REDISCOVER_SHOWN ? "+" : ""}</span></button>
         <button type="button" data-to="patterns">Your patterns <span class="n">${patterns.length} lists</span></button>
         ${hasLoved ? html`<button type="button" data-to="loved">Loved tracks <span class="n">${lovedViews(gap) + lovedLists.length} views</span></button>` : ""}</nav>
+      ${hideNoteBar()}
       <section class="card solid feature" id="rediscover" tabindex="-1" aria-labelledby="rediscover-title">
         <div class="feature-head"><h2 id="rediscover-title">Rediscover</h2><p>${REDISCOVER.sub}</p></div>
-        ${i.rediscover.length ? html`<div class="tiles-2">${i.rediscover.slice(0, tiles).map((r) => html`<a class="tile-link" href="#/artist/${r.id}">
+        ${i.rediscover.length ? html`<div class="tiles-2">${i.rediscover.slice(0, tiles).map((r) => html`<div class="tile-wrap"><a class="tile-link" href="#/artist/${r.id}">
             <span class="top-line"><b>${r.name}</b><span class="ago">${Fmt.ago(r.last_ts, ref)}</span></span>
             <span class="why">because you're into ${r.because.slice(0, 2).map((b, k) => html`${k ? " and " : ""}<b>${b.name}</b>`)}</span>
-            ${r.loved > 0 ? html`<span class="why">${lovedBadge(r.loved)}</span>` : ""}</a>`)}</div>`
+            ${r.loved > 0 ? html`<span class="why">${lovedBadge(r.loved)}</span>` : ""}</a>${hideBtn(r)}</div>`)}</div>`
           : html`<p>${REDISCOVER.empty(years)}</p>`}
         ${i.rediscover.length > tiles ? html`<p class="card-foot">${seeAll("rediscover", "rediscoveries")}</p>` : ""}
       </section>
@@ -1213,7 +1248,8 @@
         ${hasLoved ? html`${gap ? tasteGapCards(gap) : gapEmpty("Couldn't load the comparison of loves and plays. Try again later.")}<div class="columns-3">${lovedLists.map(listCard)}</div>`
           : html`<div class="card accent-soft no-loved"><span class="heart-badge" aria-hidden="true">${icon("heart", 24)}</span>
               <div><h3>No loved tracks yet</h3><p>Love tracks on last.fm and this section fills in after the next update: what you love vs what you play, love at first listen, slow burners and more.</p></div></div>`}
-      </section>`);
+      </section>
+      ${hiddenCard(hidden)}`);
     view.querySelectorAll("[data-to]").forEach((b) => b.addEventListener("click", () => {
       const el = document.getElementById(b.dataset.to);
       el.setAttribute("tabindex", "-1");
@@ -1232,7 +1268,8 @@
     }
     const step = 50, max = 500;
     const n = Math.min(max, Math.max(step, Math.round((+params.get("n") || step) / step) * step));
-    const [data, ov] = await Promise.all([api(`/api/insights/${kind}?` + qs({ limit: n })), api("/api/overview")]);
+    const [data, ov, hidden] = await Promise.all([api(`/api/insights/${kind}?` + qs({ limit: n })), api("/api/overview"),
+      d.hideable ? api("/api/hidden-artists").catch(() => []) : []]);
     if (!data.reference_ts) return emptyState(seq);
     const years = (ov.last_ts - ov.first_ts) / (365.25 * 86400);
     const items = data.items;
@@ -1240,11 +1277,13 @@
       <div class="page-head"><div><a class="kicker" href="#/insights">← Insights</a><h1>${d.title}</h1>
         <p class="lead">${d.sub.replace(/\.$/, "")}. ${!data.has_more ? `All ${Fmt.int(items.length)}` : n < max ? `The top ${Fmt.int(n)}`
           : `The top ${Fmt.int(max)}, where the list stops`}, up to ${Fmt.date(ov.last_ts)}.</p></div></div>
-      ${card("", items.length ? html`<ul class="rows">${items.map((r, k) => insightRow(...d.row(r, data.reference_ts), k + 1, d.heart))}</ul>`
+      ${d.hideable ? hideNoteBar() : ""}
+      ${card("", items.length ? html`<ul class="rows">${items.map((r, k) => insightRow(...d.row(r, data.reference_ts), k + 1, d.heart, d.hideable ? r : null))}</ul>`
         : html`<p class="empty box">${d.empty(years, data)}</p>`, {
         cls: d.cls ?? "",
         foot: data.has_more && n < max ? html`<button type="button" class="btn secondary small" id="more">Show ${step} more</button>` : "",
-      })}`);
+      })}
+      ${hiddenCard(hidden)}`);
     // after "Show more", focus the first new row (the button may be gone, and the new rows sit above it)
     if (insightFocusFrom != null) view.querySelectorAll(".rows a")[Math.min(insightFocusFrom, items.length - 1)]?.focus();
     insightFocusFrom = null;

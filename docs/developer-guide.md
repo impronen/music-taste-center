@@ -24,7 +24,7 @@ mtc/
   releases.py    upcoming releases: ListenBrainz and Wikipedia clients, the cached lists, matching to library artists, "new to you" from last.fm similar artists and tags (/api/upcoming)
   webapi.py      shared throttled HTTP client with retries; transport injectable for tests
   tags.py        tag normalization and classification
-  maintenance.py artist merges, name rules (artist_aliases), duplicate suggestions, unmatched loved tracks (loved_title_rules)
+  maintenance.py artist merges, name rules (artist_aliases), duplicate suggestions, unmatched loved tracks (loved_title_rules), hidden artists (hidden_artists: left out of Rediscover and Forgotten)
   rhythms.py     cyclical patterns: seasons, time of day/week, seasonal artists, drift, diversity
   decades.py     release decades, album age, discovery lag, decade rhythms and genres
   velocity.py    weekly cumulative plays per artist and their pace facts (/api/velocity)

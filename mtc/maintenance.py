@@ -27,6 +27,7 @@ MERGE_HANDLES = {
     ("artist_stats", "first_track_id", "tracks"),  # derived: source row dropped, gateways repointed, rebuilt
     ("artist_links", "a", "artists"), ("artist_links", "b", "artists"),  # derived: dropped and rebuilt
     ("loved_title_rules", "track_id", "tracks"),   # repointed to the target's same-titled track
+    ("hidden_artists", "artist_id", "artists"),    # repointed to the target
 }
 
 
@@ -79,6 +80,9 @@ def merge_artists(conn: sqlite3.Connection, source_id: int, target_id: int, *, r
             conn.execute("UPDATE artists SET mbid = ? WHERE id = ?", (src["mbid"], target_id))
         # name rules: earlier rules for the source now point at the target, plus one for the source itself
         conn.execute("UPDATE artist_aliases SET artist_id = ? WHERE artist_id = ?", (target_id, source_id))
+        # a hidden source stays hidden under the target (the target's own row, if any, wins)
+        conn.execute("INSERT OR IGNORE INTO hidden_artists(artist_id, created_at)"
+                     " SELECT ?, created_at FROM hidden_artists WHERE artist_id = ?", (target_id, source_id))
         conn.execute("DELETE FROM artists WHERE id = ?", (source_id,))
         conn.execute(
             "INSERT INTO artist_aliases(name_key, name, artist_id, scrobbles, created_at) VALUES (?, ?, ?, ?, ?)"
@@ -159,6 +163,33 @@ def remove_alias(conn: sqlite3.Connection, alias_id: int) -> bool:
         removed = conn.execute("DELETE FROM artist_aliases WHERE id = ?", (alias_id,)).rowcount > 0
         if removed:
             db.bump(conn, "scrobbles_version")  # loved tracks under that spelling stop resolving
+        return removed
+
+
+# ---------------------------------------------------------------- hiding artists from suggestions
+
+
+def hidden_artists(conn: sqlite3.Connection) -> list[dict]:
+    """Artists hidden from Rediscover and Forgotten favourites, newest first."""
+    return [dict(r) for r in conn.execute(
+        "SELECT a.id, a.name, h.created_at FROM hidden_artists h JOIN artists a ON a.id = h.artist_id"
+        " ORDER BY h.created_at DESC, a.id DESC")]
+
+
+def hide_artist(conn: sqlite3.Connection, artist_id: int) -> None:
+    if conn.execute("SELECT 1 FROM artists WHERE id = ?", (artist_id,)).fetchone() is None:
+        raise LookupError("artist not found")
+    with conn:
+        if conn.execute("INSERT OR IGNORE INTO hidden_artists(artist_id, created_at) VALUES (?, ?)",
+                        (artist_id, int(time.time()))).rowcount:
+            db.bump(conn, "scrobbles_version")  # cached insight lists change
+
+
+def unhide_artist(conn: sqlite3.Connection, artist_id: int) -> bool:
+    with conn:
+        removed = conn.execute("DELETE FROM hidden_artists WHERE artist_id = ?", (artist_id,)).rowcount > 0
+        if removed:
+            db.bump(conn, "scrobbles_version")
         return removed
 
 

@@ -396,5 +396,80 @@ class UnmatchedLovedTests(unittest.TestCase):
             self.assertEqual(len(client.get("/api/loved/unmatched").json()["items"]), 4)
 
 
+class HiddenArtistsTests(unittest.TestCase):
+    """Hiding an artist removes it from Rediscover and Forgotten favourites and nothing else."""
+
+    @classmethod
+    def setUpClass(cls):
+        from tests import synthetic
+        cls.tmp = tempfile.TemporaryDirectory()
+        csv = Path(cls.tmp.name) / "export.csv"
+        csv.write_text(synthetic.to_csv(synthetic.generate()), encoding="utf-8")
+        cls.path = Path(cls.tmp.name) / "t.db"
+        cls.conn = db.connect(cls.path)
+        ingest.import_csv(cls.conn, csv)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.conn.close()
+        cls.tmp.cleanup()
+
+    def tearDown(self):
+        self.conn.execute("DELETE FROM hidden_artists")
+        self.conn.commit()
+
+    def names(self, kind):
+        return [r["name"] for r in insights.insight_list(self.conn, kind, limit=500)["items"]]
+
+    def test_hidden_artists_leave_both_lists_and_the_next_one_moves_up(self):
+        for kind in ("forgotten", "rediscover"):
+            before = insights.insight_list(self.conn, kind, limit=500)["items"]
+            self.assertGreater(len(before), 2, kind)
+            gone = before[0]
+            maintenance.hide_artist(self.conn, gone["id"])
+            self.assertEqual([r["name"] for r in insights.insight_list(self.conn, kind, limit=500)["items"]],
+                             [r["name"] for r in before[1:]], kind)
+            self.assertEqual(len(insights.insights(self.conn)[kind]), min(len(before) - 1, 15 if kind == "rediscover" else 12))
+            maintenance.unhide_artist(self.conn, gone["id"])
+            self.assertEqual(self.names(kind), [r["name"] for r in before], kind)
+
+    def test_hiding_changes_nothing_else_and_bumps_the_version(self):
+        aid = insights.insight_list(self.conn, "forgotten", limit=1)["items"][0]["id"]
+        plays = self.conn.execute("SELECT COUNT(*) FROM scrobbles WHERE artist_id = ?", (aid,)).fetchone()[0]
+        v = db.versions(self.conn)
+        maintenance.hide_artist(self.conn, aid)
+        maintenance.hide_artist(self.conn, aid)  # idempotent
+        self.assertNotEqual(db.versions(self.conn), v)
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM scrobbles WHERE artist_id = ?", (aid,)).fetchone()[0], plays)
+        self.assertEqual([r["id"] for r in maintenance.hidden_artists(self.conn)], [aid])
+        self.assertEqual(insights.artist(self.conn, aid)["id"], aid)
+        with self.assertRaises(LookupError):
+            maintenance.hide_artist(self.conn, 10**9)
+
+    def test_a_hidden_artist_stays_hidden_through_a_merge(self):
+        a, b = (r["id"] for r in insights.insight_list(self.conn, "forgotten", limit=2)["items"])
+        maintenance.hide_artist(self.conn, b)
+        maintenance.merge_artists(self.conn, b, a)
+        self.assertEqual([r["id"] for r in maintenance.hidden_artists(self.conn)], [a])
+        self.assertNotIn(a, [r["id"] for r in insights.insight_list(self.conn, "forgotten", limit=500)["items"]])
+
+    def test_endpoints(self):
+        aid = insights.insight_list(self.conn, "forgotten", limit=1)["items"][0]["id"]
+        evil = {"Origin": "http://evil.example"}
+        client = TestClient(create_app(self.path))
+        self.assertEqual(client.post("/api/hidden-artists", json={"artist_id": aid}, headers=evil).status_code, 403)
+        self.assertEqual(client.post("/api/hidden-artists", json={"artist_id": 0}).status_code, 422)
+        self.assertEqual(client.post("/api/hidden-artists", json={"artist_id": 10**9}).status_code, 404)
+        v = client.get("/api/version").json()["version"]
+        self.assertEqual(client.post("/api/hidden-artists", json={"artist_id": aid}).status_code, 200)
+        self.assertNotEqual(client.get("/api/version").json()["version"], v)
+        self.assertEqual([r["id"] for r in client.get("/api/hidden-artists").json()], [aid])
+        self.assertNotIn(aid, [r["id"] for r in client.get("/api/insights/forgotten?limit=500").json()["items"]])
+        self.assertEqual(client.delete(f"/api/hidden-artists/{aid}", headers=evil).status_code, 403)
+        self.assertEqual(client.delete(f"/api/hidden-artists/{aid}").json(), {"removed": True})
+        self.assertEqual(client.delete(f"/api/hidden-artists/{aid}").status_code, 404)
+        self.assertEqual(client.get("/api/hidden-artists").json(), [])
+
+
 if __name__ == "__main__":
     unittest.main()
