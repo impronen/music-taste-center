@@ -1135,7 +1135,13 @@
         hideNote = null;
       }
       cache.clear();
-      route();
+      await route();
+      // the clicked button is gone: keep keyboard focus (and the viewport) on the Undo note, the next Restore, or the heading
+      const next = view.querySelector(".status-pill [data-unhide]") || view.querySelector("[data-unhide]") || view.querySelector("h1");
+      if (next) {
+        if (next.tagName === "H1") next.setAttribute("tabindex", "-1");
+        next.focus();
+      }
     } catch (err) { b.disabled = false; hideNote = null; console.error(err); b.title = err.message; }
   });
   const hiddenCard = (hidden) => (hidden.length ? card(`Hidden artists (${Fmt.int(hidden.length)})`, html`<ul class="rows">${hidden.map((h) => html`<li>
@@ -2008,6 +2014,7 @@
     const my = ++routeSeq;
     const samePage = path === lastPath;
     const restore = samePage ? focusKey(document.activeElement) : null;
+    if (!path.startsWith("/insights")) hideNote = null; // an Undo note is for the page it was made on
     const section = (p) => (p === "/" ? path === "/" : path.startsWith(p));
     document.querySelectorAll("#nav a, .util a").forEach((a) => {
       const target = a.getAttribute("href").slice(1);

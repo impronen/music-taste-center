@@ -453,6 +453,14 @@ class HiddenArtistsTests(unittest.TestCase):
         self.assertEqual([r["id"] for r in maintenance.hidden_artists(self.conn)], [a])
         self.assertNotIn(a, [r["id"] for r in insights.insight_list(self.conn, "forgotten", limit=500)["items"]])
 
+    def test_merging_into_an_already_hidden_target_keeps_it_hidden(self):
+        a, b, c = (r["id"] for r in insights.insight_list(self.conn, "forgotten", limit=3)["items"])
+        maintenance.hide_artist(self.conn, a)
+        maintenance.hide_artist(self.conn, b)
+        maintenance.merge_artists(self.conn, b, a)  # both hidden
+        maintenance.merge_artists(self.conn, c, a)  # only the target hidden
+        self.assertEqual([r["id"] for r in maintenance.hidden_artists(self.conn)], [a])
+
     def test_endpoints(self):
         aid = insights.insight_list(self.conn, "forgotten", limit=1)["items"][0]["id"]
         evil = {"Origin": "http://evil.example"}
