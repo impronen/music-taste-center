@@ -42,7 +42,7 @@ class EditionMerge(BaseModel):
 
 
 class EditionMergeRequest(BaseModel):
-    merges: list[EditionMerge] = Field(..., min_length=1, max_length=500)
+    merges: list[EditionMerge] = Field(..., min_length=1, max_length=5000)
 
 
 class AliasRequest(BaseModel):

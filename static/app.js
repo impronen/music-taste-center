@@ -1781,7 +1781,10 @@
       note?.focus({ preventScroll: false });
     };
     const merge = async (kind, merges) => {
-      const r = await postJson(`/api/maintenance/editions/${kind}`, { merges });
+      const r = { merged: [] };
+      for (let i = 0; i < merges.length; i += 2000) { // the server takes up to 5 000 at a time
+        r.merged.push(...(await postJson(`/api/maintenance/editions/${kind}`, { merges: merges.slice(i, i + 2000) })).merged);
+      }
       cache.clear();
       const moved = r.merged.reduce((n, m) => n + m.scrobbles_moved, 0), count = r.merged.reduce((n, m) => n + m.merged, 0);
       const noun = kind === "tracks" ? (count === 1 ? "track" : "tracks") : (count === 1 ? "album" : "albums");
