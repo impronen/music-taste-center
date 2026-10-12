@@ -40,6 +40,9 @@ class StripTests(unittest.TestCase):
             ("Come Together - Remastered 2009", "Come Together"), ("Heroes (2017 Remaster)", "Heroes"),
             ("Song - 2011 Remaster", "Song"), ("Song [Remastered]", "Song"), ("Song - Mono Version", "Song"),
             ("Song – Digital Remaster", "Song"), ("Song (Deluxe Edition)", "Song"), ("Song (Bonus Track)", "Song"),
+            ("Kind of Blue (Legacy Edition)", "Kind of Blue"), ("Kind of Blue - Legacy Edition", "Kind of Blue"),
+            ("Album (Special Edition)", "Album"), ("Album [Collector's Edition]", "Album"), ("Album (Limited Tour Edition)", "Album"),
+            ("Album (Special)", "Album (Special)"), ("Album (Tour)", "Album (Tour)"), ("Album (Live Edition)", "Album (Live Edition)"),
             ("Album (40th Anniversary Edition)", "Album"), ("Album [Expanded Edition]", "Album"),
             ("Song (Live) [Remastered 2011]", "Song (Live)"), ("Song - Live - Remastered 2011", "Song - Live"),
             ("Song (feat. X) - Remastered 2011", "Song (feat. X)"),
@@ -124,6 +127,16 @@ class EditionTests(unittest.TestCase):
         by = {g["artist"]["name"]: g for g in editions.album_groups(self.conn)}
         self.assertEqual(by["Unrelated"]["hard"], ["the albums share no tracks"])
         self.assertEqual(by["Many Albums"]["hard"], ["more than 3 versions"])  # two different tracks each: too few to call them unrelated
+
+    def test_an_edition_with_extra_songs_still_groups_and_is_safe(self):
+        rows = [S(f"Tune {i}", 600 + i, "Kind of Test", artist="Jazz Trio") for i in range(5)]
+        rows += [S(f"Tune {i}", 620 + i, "Kind of Test (Legacy Edition)", artist="Jazz Trio") for i in range(5)]
+        rows += [S(f"Tune {i} (Alternate Take)", 640 + i, "Kind of Test (Legacy Edition)", artist="Jazz Trio") for i in range(8)]
+        ingest.ingest_records(self.conn, rows, source="t")
+        g = next(x for x in editions.album_groups(self.conn) if x["artist"]["name"] == "Jazz Trio")
+        self.assertEqual([a["title"] for a in g["albums"]], ["Kind of Test", "Kind of Test (Legacy Edition)"])
+        self.assertEqual((g["evidence"], g["overlap"], g["hard"]), ("same-tracks", 1.0, []))  # all 5 of the smaller album are on both
+        self.assertNotIn("Jazz Trio", [x["artist"]["name"] for x in editions.track_groups(self.conn)])  # alternate takes stay separate tracks
 
     def test_album_groups_show_shared_tracks(self):
         g = next(x for x in editions.album_groups(self.conn) if x["artist"]["name"] == BAND)

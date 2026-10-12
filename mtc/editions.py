@@ -23,6 +23,10 @@ _CORE = {"remaster", "remastered", "remasters", "remastering", "reissue", "reiss
 # Words that may sit next to them in the same segment.
 _FILLER = {"digital", "version", "mix", "edition", "the", "original", "new", "super", "special", "limited",
            "track", "tracks", "and", "from", "album", "collectors", "collector's", "release", "re"}
+# Edition labels that only count next to the word "edition" ("Legacy Edition", "Collector's Edition"), so
+# a bare "(Special)" or "(Tour)" stays part of the title.
+_LABEL = {"legacy", "special", "collector's", "collectors", "platinum", "gold", "limited", "tour", "international",
+          "ultimate", "definitive", "standard", "classic", "bonus"}
 _WORD = re.compile(r"[^\W_]+(?:['’][^\W_]+)?", re.UNICODE)
 _YEAR = re.compile(r"^(?:\d{4}|\d{1,3}(?:st|nd|rd|th))$")
 _BRACKETED = re.compile(r"\s*[(\[]([^()\[\]]*)[)\]]")
@@ -32,9 +36,11 @@ _DASH = re.compile(r"\s[-–—]\s")
 def is_noise(segment: str) -> bool:
     """Is this bracket content / dash suffix only an edition note?"""
     words = [w.casefold().replace("’", "'") for w in _WORD.findall(segment)]
-    if not words or not any(w in _CORE for w in words):
+    if not words:
         return False
-    return all(w in _CORE or w in _FILLER or _YEAR.match(w) for w in words)
+    if not any(w in _CORE for w in words) and not ("edition" in words and any(w in _LABEL for w in words)):
+        return False
+    return all(w in _CORE or w in _FILLER or w in _LABEL or _YEAR.match(w) for w in words)
 
 
 def strip_edition(title: str) -> str:
