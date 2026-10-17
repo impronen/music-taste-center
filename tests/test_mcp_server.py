@@ -6,6 +6,7 @@ import sqlite3
 import tempfile
 from contextlib import closing
 import unittest
+import unittest.mock
 from pathlib import Path
 
 
@@ -65,6 +66,28 @@ class McpServerTest(unittest.TestCase):
 
     def test_taste_profile_has_text(self):
         self.assertIn("My music taste", self.data("taste_profile", task="discover")["text"])
+
+    def test_taste_profile_drops_working_data(self):
+        profile = self.data("taste_profile")["profile"]
+        self.assertTrue({"genres", "artists", "loved"} <= set(profile))
+        self.assertFalse({"genre_vector", "genre_idf", "seeds"} & set(profile))
+
+    def test_upcoming_releases_limit_caps_each_list(self):
+        # the demo DB has no cached releases, so feed the tool a week with more items than the limit
+        item = lambda i: {"artist": f"Artist {i}", "title": f"Title {i}", "release_date": "2030-01-04", "label": "Fictional",
+                          "cover_url": "https://example.test/c.jpg", "release_group_mbid": "x", "source": "wikipedia", "sources": ["wikipedia"]}
+        week = {"friday": "2030-01-04", "more": 2, **{k: [item(i) for i in range(6)] for k in ("new", "mine", "also")}}
+        with unittest.mock.patch("mtc.mcp_server.releases.upcoming", return_value={"first": "2030-01-01", "weeks": [week]}):
+            for limit in (1, 4):
+                out = self.data("upcoming_releases", limit=limit)["weeks"][0]
+                self.assertEqual(out["more"], 2)
+                for k in ("new", "mine", "also"):
+                    self.assertEqual([r["title"] for r in out[k]], [f"Title {i}" for i in range(limit)])
+                    self.assertFalse({"cover_url", "release_group_mbid", "source", "sources"} & set(out[k][0]))
+                    self.assertEqual(out[k][0]["label"], "Fictional")
+        with self.assertRaises(Exception):
+            call(self.server, "upcoming_releases", limit=0)
+        self.assertEqual(len(week["new"]), 6)  # the shared result is not modified
 
     def test_sql_is_read_only_and_capped(self):
         r = self.data("query_sql", sql="SELECT id FROM scrobbles")
