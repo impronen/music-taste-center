@@ -9,7 +9,7 @@ app.py           entry point: `python app.py` serves the UI (same as `python -m 
 Taste Center.command  macOS double-click launcher (sets up .venv on first run, opens the browser)
 requirements.txt / requirements-dev.txt   runtime dependencies / plus the test dependencies
 mtc/
-  __main__.py    the command line: serve, import, rebuild, enrich, update, set-key, set-user, set-birth-year, merge-artist, duplicates, stats
+  __main__.py    the command line: serve, import, rebuild, enrich, update, set-key, set-user, set-birth-year, merge-artist, duplicates, stats, mcp
   config.py      paths, time zone and every tunable constant
   db.py          SQLite connection, migrations and the data-version counters
   fsutil.py      file reading that survives cloud placeholders (iCloud/OneDrive) and non-UTF-8 exports
@@ -32,6 +32,7 @@ mtc/
   taste_gap.py   loved tracks vs plays: genres, decades and artists over- and under-represented among loves (/api/loved/gap)
   insights.py    all read queries
   settings.py    the gitignored data/settings.json (API key, username, optional birth year)
+  mcp_server.py  MCP server (stdio, `python -m mtc mcp`): read-only tools over insights, taste_prompt, taste_gap and releases, a read-only SQL tool; opens the DB with mode=ro and never migrates
   api.py         FastAPI JSON endpoints (/api/docs) + static UI
   migrations/    numbered SQL migrations (PRAGMA user_version)
 static/          vanilla JS UI (app.js router/views, charts.js SVG charts, graph.js force graph)

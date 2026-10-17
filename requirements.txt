@@ -1,2 +1,3 @@
 fastapi>=0.142
 uvicorn>=0.54
+mcp>=2.3,<3
