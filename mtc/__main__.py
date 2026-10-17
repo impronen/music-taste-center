@@ -1,4 +1,4 @@
-"""CLI: python -m mtc [serve|import|rebuild|enrich|update|set-key|set-user|set-birth-year|merge-artist|duplicates|stats]."""
+"""CLI: python -m mtc [serve|import|rebuild|enrich|update|set-key|set-user|set-birth-year|merge-artist|duplicates|stats|mcp]."""
 import argparse
 import json
 import os
@@ -46,6 +46,7 @@ def main(argv: list[str] | None = None) -> int:
     m.add_argument("target")
     sub.add_parser("duplicates", help="list artists that look like spelling variants of each other")
     sub.add_parser("stats", help="print a short overview")
+    sub.add_parser("mcp", help="run the MCP server (stdio, read-only) so Claude can use your listening data")
 
     args = p.parse_args(argv)
     cmd = args.cmd or "serve"
@@ -57,6 +58,12 @@ def main(argv: list[str] | None = None) -> int:
 
         auto = not getattr(args, "no_update", False) and os.environ.get("MTC_AUTO_UPDATE", "1") != "0"
         uvicorn.run(create_app(args.db, auto_update=auto), host=getattr(args, "host", "127.0.0.1"), port=getattr(args, "port", 8765))
+        return 0
+
+    if cmd == "mcp":  # stdout carries the protocol: print nothing, and don't migrate (the app does)
+        from .mcp_server import serve
+
+        serve(args.db)
         return 0
 
     conn = db.connect(args.db)

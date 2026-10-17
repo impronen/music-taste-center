@@ -105,10 +105,23 @@ It works through your most-played artists and albums first, in the background, w
 
 Press **/** anywhere to search. The moon button in the top right switches between light and dark. For what each page measures and how, see [How it works](docs/how-it-works.md).
 
+## Use your library from Claude (MCP)
+
+`python -m mtc mcp` runs a [Model Context Protocol](https://modelcontextprotocol.io) server that gives Claude read-only tools over your library: top lists, genres, a taste profile, the Insights lists, loved-track gaps, upcoming releases, `check_library` (is this artist already in my library?) and a read-only SQL query. Ask things like "make a chart of my listening by hour" or "find ten artists I don't know that fit what I play now", and Claude can search the web and drop the ones you already play.
+
+Register it once (use the full path to this folder):
+
+```
+claude mcp add taste-center -- /full/path/to/music-taste-center/.venv/bin/python -m mtc mcp
+```
+
+For Claude Desktop, add the same command to `claude_desktop_config.json` under `mcpServers`. The server only reads: it opens the database read-only, never writes and never calls last.fm or MusicBrainz. The app can run at the same time.
+
 ## Your data and privacy
 
 - **Everything stays on your computer.** Your history lives in `data/mtc.db`, and your username and API key in `data/settings.json`, both inside the app's folder and both kept out of git. The app listens only on your own machine.
 - **What is sent out.** Only when you download or fetch: your last.fm username and API key to last.fm; artist and album names to last.fm and MusicBrainz; and your browser loads album covers from last.fm's servers. The Upcoming page asks ListenBrainz and Wikipedia for their lists of new releases (only dates are sent, nothing about you), asks last.fm for artists similar to the ones you play most and for the genre tags of artists with new releases, and loads release covers from the Cover Art Archive. The fonts are bundled, so nothing else is loaded from the internet.
+- **The MCP server sends what Claude asks for to Claude.** Only if you register it: the tool results (play counts, names, query results) become part of your conversation with Claude, under that service's own terms. Don't register it if that isn't acceptable.
 - **Back up** by closing the app and copying the whole `data` folder.
 - **Update** by closing the app, downloading the new ZIP, unpacking it and copying your old `data` folder into the new folder. Don't copy the hidden `.venv` folder; the new version sets itself up again the first time you start it. Delete the old folder only after you've checked that your history shows up.
 - **Move or rename the app's folder?** Delete the hidden `.venv` folder inside it first; it is rebuilt on the next start.
