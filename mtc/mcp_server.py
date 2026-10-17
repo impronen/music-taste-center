@@ -28,6 +28,10 @@ CHECK_MAX_NAMES = 100
 _SQL_ALLOWED = {sqlite3.SQLITE_SELECT, sqlite3.SQLITE_READ, sqlite3.SQLITE_FUNCTION, sqlite3.SQLITE_RECURSIVE}
 # Rows that are large in the UI (a year of monthly counts, 24 hourly bars) but noise to a model.
 ARTIST_DROP = ("monthly", "hours", "image_url")
+# Working data for releases.py (a weight per tag, 150 seed artists): ~85 % of the profile, noise to a model.
+PROFILE_DROP = ("genre_vector", "genre_idf", "seeds")
+RELEASE_DROP = ("cover_url", "release_group_mbid", "source", "sources")
+RELEASE_LISTS = ("new", "mine", "also")
 READ_ONLY = ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False)
 
 INSTRUCTIONS = (
@@ -132,7 +136,10 @@ def build_server(db_path: str | Path | None = None) -> MCPServer:
     @mcp.tool(annotations=READ_ONLY)
     def taste_profile(task: Literal["profile", "discover", "releases"] = "profile") -> dict:
         """The taste profile that the web app's AI prompt is built from: recent listening weighted over a ~90 day half-life, genres rising/core/fading, recent discoveries, staples, loved tracks. `text` is the ready prompt for the task."""
-        return run(taste_prompt.build, task)
+        built = run(taste_prompt.build, task)
+        if built["profile"] is not None:
+            built = {**built, "profile": {k: v for k, v in built["profile"].items() if k not in PROFILE_DROP}}
+        return built
 
     @mcp.tool(annotations=READ_ONLY)
     def loved_taste_gap() -> dict:
@@ -140,9 +147,11 @@ def build_server(db_path: str | Path | None = None) -> MCPServer:
         return run(taste_gap.taste_gap)
 
     @mcp.tool(annotations=READ_ONLY)
-    def upcoming_releases() -> dict:
-        """Cached releases of the coming Fridays: new to you (similar to your artists or fitting your genres), by artists in your library, and others. Refreshing is done in the web app."""
-        return run(releases.upcoming, has_lastfm=bool(settings.lastfm_api_key()), with_new=True)
+    def upcoming_releases(limit: Annotated[int, Field(ge=1, le=50, description="most releases per list (new, mine, also) in each week")] = 8) -> dict:
+        """Cached releases of the coming Fridays: new to you (similar to your artists or fitting your genres), by artists in your library, and others. Best first; `limit` caps each list per week. Refreshing is done in the web app."""
+        data = run(releases.upcoming, has_lastfm=bool(settings.lastfm_api_key()), with_new=True)
+        trim = lambda items: [{k: v for k, v in r.items() if k not in RELEASE_DROP} for r in items[:limit]]
+        return {**data, "weeks": [{**w, **{k: trim(w[k]) for k in RELEASE_LISTS}} for w in data["weeks"]]}
 
     @mcp.tool(annotations=READ_ONLY)
     def check_library(names: Annotated[list[str], Field(min_length=1, max_length=CHECK_MAX_NAMES)]) -> list[dict]:
