@@ -2,6 +2,11 @@
 
 Local FastAPI + SQLite app (Python 3.14, vanilla JS in `static/`). See the README for installing and using it, `docs/how-it-works.md` for what each page measures and `docs/developer-guide.md` for architecture.
 
+## Workflow
+Workflow tier: light
+
+A personal tool holding only the owner's own data. Ordinary changes: branch, tests, PR, and Claude merges it once tests pass (see the `stage-pr` skill). Independent review is required for risky diffs: imports, migrations, `data/settings.json` or API keys, data deletion, CI files, dependency locks, CLAUDE.md. Never commit `data/`, `*.db`, `*.csv` or the API key.
+
 ## Commands (always the project `.venv`)
 - Run: `.venv/bin/python app.py` (http://127.0.0.1:8765). The server does not auto-reload; restart after Python changes.
 - Import: `.venv/bin/python -m mtc import file.csv`. Rebuild derived tables or local times: `python -m mtc rebuild`
