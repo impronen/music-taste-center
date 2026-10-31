@@ -269,8 +269,7 @@
       const lead = html`${peak.top.plays * 2 > peak.plays ? "mostly" : "led by"} ${artist(peak.top)}`;
       add("peak", 1, [
         html`${when} was the big one: <strong>${n} scrobbles</strong>, ${lead}.`,
-        html`Nothing topped ${when}: ${n} scrobbles, ${lead}.`,
-        html`${n} scrobbles ${unitDay ? "on" : "in"} ${when}. Were you okay?`]);
+        html`Nothing topped ${when}: ${n} scrobbles, ${lead}.`]);
     }
     if (ta[1] && ta[0].plays >= 10 && ta[0].plays >= 2 * ta[1].plays) {
       const a = artist(ta[0]), b = artist(ta[1]);
