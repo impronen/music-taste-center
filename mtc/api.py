@@ -240,10 +240,14 @@ def create_app(db_path: str | Path | None = None, *, lastfm_factory: Callable | 
         """Releases of the next few Fridays from the cache: new to you, then artists in the library."""
         return releases.upcoming(c, has_lastfm=bool(lastfm_factory or settings.lastfm_api_key()))
 
+    @app.get("/api/upcoming/status")
+    def upcoming_status(c=Conn):
+        return releases.refresh_status(c)
+
     @app.post("/api/upcoming/refresh", status_code=202)
     def upcoming_refresh():
         """Fetch the release lists again, and the similar artists and tags behind "new to you", in the
-        background (the first time takes minutes). GET /api/upcoming says when it's done."""
+        background (the first time takes minutes). GET /api/upcoming/status says when it's done."""
         try:
             releases.start(path, releases_factory or releases.clients, lastfm_client)
         except releases.Busy as exc:
