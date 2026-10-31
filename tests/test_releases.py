@@ -274,8 +274,20 @@ class UpcomingTest(unittest.TestCase):
         u = releases.upcoming(self.conn, today=TODAY)
         self.assertIsNone(u["sources"]["wikipedia"]["at"])
         self.assertTrue(u["sources"]["wikipedia"]["error"])
-        self.assertTrue(u["stale"])
         self.assertEqual(u["weeks"][0]["mine"][0]["title"], "Night Garden")  # ListenBrainz's list still shows
+
+    def test_a_failing_source_is_not_retried_on_every_visit(self):
+        self.refresh(lb_client(status=403))
+        self.assertTrue(releases.upcoming(self.conn, today=TODAY)["sources"]["listenbrainz"]["error"])
+        self.assertFalse(releases.upcoming(self.conn, today=TODAY)["stale"])
+        with self.conn:
+            db.set_meta(self.conn, "upcoming_tried_at", str(int(time.time()) - releases.RETRY_AFTER_S - 1))
+        self.assertTrue(releases.upcoming(self.conn, today=TODAY)["stale"])
+
+    def test_refresh_status(self):
+        self.assertEqual(releases.refresh_status(self.conn), {"refreshing": False, "checked": 0, "progress": None})
+        self.refresh()
+        self.assertGreater(releases.refresh_status(self.conn)["checked"], 0)
 
     def test_missing_wikipedia_page(self):
         result = self.refresh(wiki=wiki_client(missing=True))
@@ -424,7 +436,7 @@ class NewToYouTest(unittest.TestCase):
         self.assertTrue(result["listenbrainz"]["ok"])
         u = releases.upcoming(self.conn, today=TODAY, has_lastfm=True)
         self.assertIn("Invalid API key", u["lastfm"]["error"])
-        self.assertFalse(u["stale"])  # tried just now: no automatic retry until "Check again" or 12 hours
+        self.assertFalse(u["stale"])  # tried just now: no automatic retry until "Check again" or STALE_AFTER_S
         self.assertEqual(sum(len(w["new"]) for w in u["weeks"]), 0)  # nothing looked up, nothing scored
 
 
@@ -438,6 +450,7 @@ class ApiTest(unittest.TestCase):
             self.assertTrue(u["stale"])
             self.assertEqual(client.post("/api/upcoming/refresh").status_code, 202)
             releases.join(10)
+            self.assertFalse(client.get("/api/upcoming/status").json()["refreshing"])
             r = client.get("/api/upcoming").json()
             self.assertFalse(r["stale"])
             self.assertFalse(r["refreshing"])

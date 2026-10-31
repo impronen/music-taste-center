@@ -1423,6 +1423,7 @@
   const PROMPT_TASKS = [["releases", "New releases"], ["discover", "New artists"], ["profile", "Taste only"]];
   const shortDay = (iso) => Fmt.day(iso).replace(/\s\d{4}$/, ""); // "16 Oct"
   let copyTimer = 0;
+  const CHECKING = "Checking ListenBrainz and Wikipedia for new releases";
   let upcomingRefresh = null; // the running refresh, so a re-render doesn't start another
   let upcomingAutoAt = 0;     // when the page last refreshed by itself (at most every 10 minutes, so a failing source can't loop)
   // kept across re-renders (a refresh re-renders the page every few seconds)
@@ -1441,7 +1442,7 @@
     const checked = Math.max(0, ...Object.values(src).map((s) => s.at ?? 0)); // the newest list; a failing source gets a pill
     const busy = u.refreshing || upcomingRefresh;
     const partly = fm.has_key && fm.seeds && fm.seeds_done < fm.seeds ? ` Similar artists looked up for ${Fmt.int(fm.seeds_done)} of your ${Fmt.int(fm.seeds)} most played.` : "";
-    const status = busy ? `${u.progress || "Checking ListenBrainz and Wikipedia for new releases"}…`
+    const status = busy ? `${u.progress || CHECKING}…`
       : !checked ? "Not checked yet."
       : (now - checked < 86400 ? `Checked at ${new Date(checked * 1000).toTimeString().slice(0, 5)}.` : `Checked ${Fmt.ago(checked, now)}.`) + partly;
     const listName = { listenbrainz: "ListenBrainz", wikipedia: "Wikipedia" };
@@ -1467,7 +1468,7 @@
         <div class="seg" role="group" aria-label="Show">
           <button type="button" data-show="albums" aria-pressed="${String(!all)}">Albums and EPs</button>
           <button type="button" data-show="all" aria-pressed="${String(all)}">With singles</button></div>
-        <div class="status-line" role="status"><span>${status}</span>${pills}</div>
+        <div class="status-line" role="status"><span id="upcoming-status">${status}</span>${pills}</div>
         <button type="button" class="btn secondary small" id="refresh" aria-disabled="${String(!!busy)}">Check again</button></div>
       ${busyWeeks.length ? html`<nav class="jumpbar" aria-label="Jump to a week">${busyWeeks.map((w) => html`<button type="button" data-to="wk-${w.friday}">${shortDay(w.friday)}
         <span class="count">${Fmt.int(w.count)}</span></button>`)}${quiet.length ? html`<span class="quiet-note">${quiet.length === 1 ? "1 quiet week" : `${quiet.length} quiet weeks`} below</span>` : ""}</nav>` : ""}
@@ -1542,20 +1543,36 @@
       document.getElementById(b.dataset.to).setAttribute("tabindex", "-1");
       scrollToId(b.dataset.to);
     }));
+    // A refresh can take minutes and may have been started in another tab or before a reload. Watch its
+    // status, and redraw only when a list was saved or it ended, so the page stays still while you read.
+    let watching = !!busy;
+    const showProgress = (text) => {
+      view.querySelector("#upcoming-status").textContent = `${text}…`;
+      view.querySelectorAll(".status-line .pill").forEach((p) => p.remove());
+      view.querySelector("#refresh").setAttribute("aria-disabled", "true");
+    };
+    const watch = async () => {
+      if (seq !== routeSeq) return;
+      const s = await api("/api/upcoming/status", { fresh: true }).catch(() => null);
+      if (seq !== routeSeq) return;
+      if (s && (!s.refreshing || s.checked !== checked)) return route();
+      if (s?.progress) showProgress(s.progress);
+      setTimeout(watch, 5000);
+    };
     const run = () => {
-      if (upcomingRefresh || busy) return;
+      if (upcomingRefresh || watching) return;
+      watching = true;
+      showProgress(CHECKING);
       upcomingRefresh = postJson("/api/upcoming/refresh")
         .catch((err) => { if (!/already/.test(err.message)) console.error(err); })
-        .finally(() => { upcomingRefresh = null; if (location.hash.startsWith("#/upcoming")) route(); });
-      if (location.hash.startsWith("#/upcoming")) route(); // show the "checking" state
+        .finally(() => { upcomingRefresh = null; watch(); });
     };
     view.querySelector("#refresh").addEventListener("click", run); // stays focusable while busy; run() ignores it then
     view.querySelectorAll("details.also").forEach((d) => d.addEventListener("toggle", () => {
       if (d.open) upcomingOpen.add(d.dataset.week); else upcomingOpen.delete(d.dataset.week);
     }));
     if (u.stale && !busy && Date.now() - upcomingAutoAt > 10 * 60e3) { upcomingAutoAt = Date.now(); run(); }
-    // a refresh runs in the background (started here, in another tab or before a reload): look again until it is done
-    if (u.refreshing && !upcomingRefresh) setTimeout(() => { if (seq === routeSeq && location.hash.startsWith("#/upcoming")) route(); }, 5000);
+    if (busy) setTimeout(watch, 5000);
   }
 
   // ---------- cleanup ----------

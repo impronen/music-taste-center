@@ -31,7 +31,8 @@ from .musicbrainz import edition_free_title
 from .webapi import ApiError, Fatal, JsonApi, NotFound, Transient
 
 WEEKS_AHEAD = 6                 # Fridays after the current week's (MusicBrainz thins out after ~6)
-STALE_AFTER_S = 12 * 3600       # the page refreshes the cache when it's older than this
+STALE_AFTER_S = 3 * 86400       # the page refreshes the cache when it's older than this: release lists move slowly
+RETRY_AFTER_S = 3600            # ... but not sooner than this after a try that left a list failing
 TYPES = ("Album", "EP", "Single")
 RECENT_DAYS = 365
 MIN_PLAYS = 3                   # an artist played less isn't "yours" (and a name clash costs less)
@@ -330,6 +331,8 @@ def _refresh(conn, lb, wiki, today, lastfm) -> dict:
     first, last = window(today or local_today())
     result = {}
     _progress(conn, "Checking ListenBrainz and Wikipedia")
+    with conn:
+        db.set_meta(conn, "upcoming_tried_at", str(int(time.time())))
     for source, fetch in (("listenbrainz", lambda: _from_listenbrainz(lb, first, last)),
                           ("wikipedia", lambda: _from_wikipedia(wiki, first, last))):
         try:
@@ -492,6 +495,13 @@ def _status(conn) -> dict:
     return out
 
 
+def refresh_status(conn) -> dict:
+    """What the page polls during a refresh: cheap, unlike upcoming(). `checked` is when the newest
+    list was saved, so a change means there is something new to draw."""
+    return {"refreshing": refreshing(), "checked": max(s["at"] or 0 for s in _status(conn).values()),
+            "progress": (db.get_meta(conn, "upcoming_progress") or None) if refreshing() else None}
+
+
 def _merged(conn, first: date, last: date) -> list[dict]:
     """The cached releases in the window, one entry per release, with their library artists."""
     match = _artist_lookup(conn)
@@ -614,10 +624,12 @@ def upcoming(conn, today: date | None = None, has_lastfm: bool = False, with_new
     stale = any(s["at"] is None or time.time() - s["at"] > STALE_AFTER_S for s in status.values())
     if (db.get_meta(conn, "upcoming_last_day") or "") < last.isoformat():  # a new week came into view (on Saturdays)
         stale = True
+    if any(s["error"] for s in status.values()) and time.time() - int(db.get_meta(conn, "upcoming_tried_at") or 0) < RETRY_AFTER_S:
+        stale = False  # a source is down: "Check again" still works, the page just doesn't keep trying
     tried = int(db.get_meta(conn, "upcoming_lastfm_tried_at") or 0)
     if has_lastfm and time.time() - tried > STALE_AFTER_S and (
             lastfm["seeds_done"] < lastfm["seeds"] or not lastfm["at"] or time.time() - lastfm["at"] > STALE_AFTER_S):
-        stale = True  # not after a recent try that failed: that waits for "Check again" or 12 hours
+        stale = True  # not after a recent try that failed: that waits for "Check again" or STALE_AFTER_S
     merged = _merged(conn, first, last)
     facts = _artist_facts(conn, {i for m in merged for i in m["artist_ids"]})
     picked: dict[str, list] = {}
