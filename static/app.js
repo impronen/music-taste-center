@@ -301,8 +301,7 @@
     }
     if (facts?.song_age) {
       const { years, before_birth: older } = facts.song_age;
-      const say = [html`The average song you played was <strong>${spell(years)} years old</strong>.`,
-        html`Your average song was ${spell(years)} when you played it. Respect your elders.`];
+      const say = [html`The average song you played was <strong>${spell(years)} years old</strong>.`];
       if (older >= 0.5) say.push(html`Going by release dates, <strong>${Fmt.pct(Math.round(older * 100) / 100)}</strong> of this came out before you were born.`);
       add("song-age", 2, say);
     }
