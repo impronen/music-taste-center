@@ -250,11 +250,12 @@
   }
 
   // The Overview's opening sentence: a couple of lines drawn from whatever this period has to say.
+  // They can land in any order, so each must make sense alone: nothing like "a year later" that reads
+  // as following on from the line before.
   // Weights favour the rarer facts, so they show up when they are true.
   const NUMBER_WORDS = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten"];
   const WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
   const spell = (n) => NUMBER_WORDS[n] ?? Fmt.int(n);
-  const capital = (s) => s[0].toUpperCase() + s.slice(1);
   const yearsAway = (days) => { const y = Math.max(1, Math.round(days / 365.25)); return y === 1 ? "a year" : `${spell(y)} years`; };
 
   function overviewLines({ act, ta, tt, facts }) {
@@ -309,7 +310,7 @@
       const a = artist(facts.comeback), gap = yearsAway(facts.comeback.gap_days);
       add("comeback", 3, [
         html`${a} returned after <strong>${gap} away</strong>.`,
-        html`${capital(gap)} later, ${a} was back.`,
+        html`After ${gap} away, ${a} was back.`,
         html`${a} was gone for ${gap}. All is forgiven.`]);
     }
     if (facts?.obscure) {
