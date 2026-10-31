@@ -30,6 +30,7 @@ mtc/
   decades.py     release decades, album age, discovery lag, decade rhythms and genres
   velocity.py    weekly cumulative plays per artist and their pace facts (/api/velocity)
   taste_gap.py   loved tracks vs plays: genres, decades and artists over- and under-represented among loves (/api/loved/gap)
+  highlights.py  facts for the Overview's changing sentence, each with its own bar to clear (/api/highlights)
   insights.py    all read queries
   settings.py    the gitignored data/settings.json (API key, username, optional birth year)
   mcp_server.py  MCP server (stdio, `python -m mtc mcp`): read-only tools over insights, taste_prompt, taste_gap and releases, a read-only SQL tool; opens the DB with mode=ro and never migrates

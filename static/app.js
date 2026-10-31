@@ -249,17 +249,113 @@
       <p style="margin-top:20px"><a class="btn primary" href="#/import">${icon("upload")} Go to Import</a></p></div></div>`);
   }
 
+  // The Overview's opening sentence: a couple of lines drawn from whatever this period has to say.
+  // Weights favour the rarer facts, so they show up when they are true.
+  const NUMBER_WORDS = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten"];
+  const WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+  const spell = (n) => NUMBER_WORDS[n] ?? Fmt.int(n);
+  const capital = (s) => s[0].toUpperCase() + s.slice(1);
+  const yearsAway = (days) => { const y = Math.max(1, Math.round(days / 365.25)); return y === 1 ? "a year" : `${spell(y)} years`; };
+
+  function overviewLines({ act, ta, tt, facts }) {
+    const artist = (a) => html`<a href="${artistHref(a)}">${a.name}</a>`;
+    const lines = [];
+    const add = (kind, weight, say) => lines.push({ kind, weight, say });
+
+    const items = act.items, unitDay = act.unit === "day";
+    const peak = items.reduce((best, d) => (d.plays > (best?.plays ?? -1) ? d : best), null);
+    if (peak?.top && peak.plays >= 10 && peak.plays >= 2 * items.reduce((s, d) => s + d.plays, 0) / items.length) {
+      const when = unitDay ? Fmt.dayShort(peak.key) : Fmt.month(peak.key), n = Fmt.int(peak.plays);
+      const lead = html`${peak.top.plays * 2 > peak.plays ? "mostly" : "led by"} ${artist(peak.top)}`;
+      add("peak", 1, [
+        html`${when} was the big one: <strong>${n} scrobbles</strong>, ${lead}.`,
+        html`Nothing topped ${when}: ${n} scrobbles, ${lead}.`,
+        html`${n} scrobbles ${unitDay ? "on" : "in"} ${when}. Were you okay?`]);
+    }
+    if (ta[1] && ta[0].plays >= 10 && ta[0].plays >= 2 * ta[1].plays) {
+      const a = artist(ta[0]), b = artist(ta[1]);
+      add("runaway", 1, [
+        html`${a} outplayed the runner-up <strong>${spell(Math.floor(ta[0].plays / ta[1].plays))} to one</strong>.`,
+        html`Not a close race: ${a} ${Fmt.int(ta[0].plays)}, ${b} ${Fmt.int(ta[1].plays)}.`,
+        html`${b} finished a distant second to ${a}.`]);
+    }
+    if (tt[0]?.plays >= 5) {
+      const t = html`<a href="${trackHref(tt[0])}">${tt[0].name}</a>`, n = Fmt.int(tt[0].plays);
+      add("repeat", 1, [
+        html`You played ${t} <strong>${n} times</strong>. It's fine.`,
+        html`${t}, ${n} times. No judgement.`,
+        html`${n} plays of ${t}. The neighbours know it by now.`]);
+    }
+    if (facts?.one_song) {
+      const n = Fmt.int(facts.one_song.artists), of = Fmt.int(facts.one_song.of);
+      add("one-song", 2, [
+        html`<strong>${n} of your ${of} artists</strong> got exactly one song. Tough crowd.`,
+        html`One song was all ${n} of your ${of} artists got.`,
+        html`${n} artists got one song and no second chance.`]);
+    }
+    if (facts?.double_life) {
+      const [a, b] = facts.double_life.days, dayA = WEEKDAYS[a.weekday], dayB = WEEKDAYS[b.weekday];
+      add("double-life", 3, [
+        html`${dayA}s are ${artist(a)}, ${dayB}s are ${artist(b)}.`,
+        html`${artist(a)} on ${dayA}s, ${artist(b)} on ${dayB}s. You contain multitudes.`]);
+    }
+    if (facts?.song_age) {
+      const { years, before_birth: older } = facts.song_age;
+      const say = [html`The average song you played was <strong>${spell(years)} years old</strong>.`,
+        html`Your average song was ${spell(years)} when you played it. Respect your elders.`];
+      if (older >= 0.5) say.push(html`Going by release dates, <strong>${Fmt.pct(Math.round(older * 100) / 100)}</strong> of this came out before you were born.`);
+      add("song-age", 2, say);
+    }
+    if (facts?.comeback) {
+      const a = artist(facts.comeback), gap = yearsAway(facts.comeback.gap_days);
+      add("comeback", 3, [
+        html`${a} returned after <strong>${gap} away</strong>.`,
+        html`${capital(gap)} later, ${a} was back.`,
+        html`${a} was gone for ${gap}. All is forgiven.`]);
+    }
+    if (facts?.obscure) {
+      const a = artist(facts.obscure), n = Fmt.int(facts.obscure.listeners);
+      add("obscure", 3, [
+        html`Only about <strong>${n} people</strong> on last.fm listen to ${a}. You're one of them.`,
+        html`${a}: about ${n} listeners on last.fm, you among them.`,
+        html`You know ${a}. Last.fm counts only about ${n} listeners.`]);
+    }
+    return lines;
+  }
+
+  // Up to n lines of different kinds by weighted draw, without what the last render showed if there
+  // is enough else to say; a kind that has to repeat changes its wording.
+  function pickLines(lines, n = 2) {
+    const shown = (storage.get("mtc-lines") || "").split(",");
+    const shownKinds = shown.map((s) => s.split(":")[0]);
+    const draw = (pool) => {
+      let r = Math.random() * pool.reduce((s, l) => s + l.weight, 0);
+      return pool.find((l) => (r -= l.weight) < 0) ?? pool[pool.length - 1];
+    };
+    const fresh = lines.filter((l) => !shownKinds.includes(l.kind)), rest = lines.filter((l) => shownKinds.includes(l.kind));
+    const picked = [];
+    while (picked.length < n && (fresh.length || rest.length)) {
+      const pool = fresh.length ? fresh : rest, line = draw(pool);
+      pool.splice(pool.indexOf(line), 1);
+      const unseen = line.say.map((_, i) => i).filter((i) => !shown.includes(`${line.kind}:${i}`));
+      const options = unseen.length ? unseen : line.say.map((_, i) => i);
+      picked.push({ kind: line.kind, i: options[Math.floor(Math.random() * options.length)], say: line.say });
+    }
+    storage.set("mtc-lines", picked.map((p) => `${p.kind}:${p.i}`).join(","));
+    return picked.map((p) => p.say[p.i]);
+  }
+
   async function overviewView(params) {
     const seq = rendering;
     const ov = await api("/api/overview");
     if (ov.empty) return emptyState(seq);
     const period = parseRange(params.get("period") || storage.get("mtc-period") || "30d", ov);
     const range = { start: period.start, end: period.end };
-    const [sum, act, timeline, clock, ta, tt, tal, recent, seasonal] = await Promise.all([
+    const [sum, act, timeline, clock, ta, tt, tal, recent, seasonal, facts] = await Promise.all([
       api("/api/summary?" + qs(range)), api("/api/activity?" + qs(range)), api("/api/timeline"), api("/api/clock?" + qs(range)),
       api("/api/top/artist?" + qs({ ...range, limit: 6 })), api("/api/top/track?" + qs({ ...range, limit: 6 })),
       api("/api/top/album?" + qs({ ...range, limit: 6 })), api("/api/recent?limit=8"),
-      api("/api/rhythms/artists").catch(() => null),
+      api("/api/rhythms/artists").catch(() => null), api("/api/highlights?" + qs(range)).catch(() => null),
     ]);
     const prev = sum.previous;
     const ref = prevRef(period, prev);
@@ -281,6 +377,7 @@
       const higher = [...earlier].reverse().find((m) => m.novelty >= novNow);
       return higher ? `your highest since ${higher.month.slice(0, 4)}` : "your highest yet";
     })();
+    const lines = pickLines(overviewLines({ act, ta, tt, facts }));
     const recentRows = [];
     let lastDay = null;
     for (const r of recent) {
@@ -295,8 +392,8 @@
         <div>
           <span class="kicker">${rangeText(sum.start, sum.end)}</span>
           <h1 style="margin-top:10px">${title}</h1>
-          <p class="lead">You played <strong>${Fmt.int(sum.plays)} scrobbles</strong> from ${Fmt.int(sum.artists)} artists${sum.new_artists ? `, ${Fmt.int(sum.new_artists)} of them brand new` : ""}.
-            ${ta[0] ? html`Mostly <strong>${ta[0].name}</strong>, mostly ${DAYPART(band)}.` : ""}</p>
+          <p class="lead">${lines.length ? lines.map((l, i) => html`${i ? " " : ""}${l}`) : html`You played <strong>${Fmt.int(sum.plays)} scrobbles</strong> from ${Fmt.int(sum.artists)} artists${sum.new_artists ? `, ${Fmt.int(sum.new_artists)} of them brand new` : ""}.
+            ${ta[0] ? html`Mostly <strong>${ta[0].name}</strong>, mostly ${DAYPART(band)}.` : ""}`}</p>
           ${periodControls(period, ov)}
         </div>
         <div class="big-circle" aria-hidden="false"><div>

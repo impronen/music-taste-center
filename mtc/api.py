@@ -12,7 +12,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 
-from . import config, db, decades, velocity, derive, enrich, fsutil, editions, ingest, insights, jobs, maintenance, releases, rhythms, settings, taste_gap, taste_prompt, updater
+from . import config, db, decades, velocity, derive, enrich, fsutil, editions, highlights, ingest, insights, jobs, maintenance, releases, rhythms, settings, taste_gap, taste_prompt, updater
 from .webapi import Fatal, NotFound
 
 MAX_UPLOAD_BYTES = 300 * 1024 * 1024
@@ -134,6 +134,10 @@ def create_app(db_path: str | Path | None = None, *, lastfm_factory: Callable | 
     @app.get("/api/summary")
     def period_summary(start: str | None = Query(None, pattern=DATE), end: str | None = Query(None, pattern=DATE), c=Conn):
         return insights.summary(c, start, end)
+
+    @app.get("/api/highlights")
+    def period_highlights(start: str | None = Query(None, pattern=DATE), end: str | None = Query(None, pattern=DATE), c=Conn):
+        return highlights.highlights(c, start, end, settings.birth_year())
 
     @app.get("/api/activity")
     def period_activity(start: str | None = Query(None, pattern=DATE), end: str | None = Query(None, pattern=DATE), c=Conn):
