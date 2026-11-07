@@ -20,6 +20,8 @@ mtc/
   wrapped.py     the year in review: one dataset per calendar year (`python -m mtc wrapped YEAR` writes JSON + CSV to data/wrapped/YEAR/)
   wrapped_art.py cover downloads for the year in review (Cover Art Archive, then last.fm), cached in data/wrapped/YEAR/art/
   wrapped_render.py  the year in review as one self-contained index.html plus PNG cards (headless Chrome, `#card=ID&size=story|square`)
+  wrapped_run.py the whole pipeline in one call (dataset, covers, page, PNG cards) with progress/stop callbacks; used by the CLI and the job
+  wrapped_job.py the Wrapped tab's background job (one at a time, like jobs.EnrichJob); API under /api/wrapped
   updater.py     the startup scrobble updater (daily limit and cooldown), also refreshes loved tracks
   lastfm.py      last.fm client (read-only methods, JSON quirks)
   musicbrainz.py MusicBrainz client (release-group dates)

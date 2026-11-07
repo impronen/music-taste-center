@@ -755,3 +755,15 @@ dialog::backdrop { background: color-mix(in srgb, var(--color-neutral-900) 50%, 
   .clusters { max-height: none; }
 }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+
+/* ---------- wrapped tab ---------- */
+.wrapped-card { margin-top: var(--gap); display: grid; gap: var(--gap); }
+.wrapped-head { display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap; }
+.wrapped-head h2 { margin: 0; font-family: var(--font-heading); font-size: var(--fs-section); font-weight: 400; }
+.check { display: inline-flex; align-items: center; gap: 8px; font-size: var(--fs-md); }
+.check small { color: var(--color-ink-2); }
+.wrapped-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: var(--gap); }
+.wrapped-grid figure { margin: 0; display: grid; gap: 6px; }
+.wrapped-grid a img { display: block; width: 100%; aspect-ratio: 9 / 16; object-fit: cover; border-radius: var(--radius-md); background: var(--color-chip); }
+.wrapped-grid figcaption { font-size: var(--fs-sm); color: var(--color-ink-2); text-transform: capitalize; }
+.wrapped-card .note { font-size: var(--fs-sm); color: var(--color-ink-2); margin: 0; }

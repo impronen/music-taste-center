@@ -1,5 +1,7 @@
 """HTTP layer: JSON endpoints under /api and the single-page UI from static/."""
+import json
 import logging
+import re
 import sqlite3
 from collections.abc import Callable, Iterator
 from contextlib import asynccontextmanager, closing
@@ -12,7 +14,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 
-from . import config, db, decades, velocity, derive, enrich, fsutil, editions, highlights, ingest, insights, jobs, maintenance, releases, rhythms, settings, taste_gap, taste_prompt, updater
+from . import config, db, decades, velocity, derive, enrich, fsutil, editions, highlights, ingest, insights, jobs, maintenance, releases, rhythms, settings, taste_gap, taste_prompt, updater, wrapped_job, wrapped_render
 from .webapi import Fatal, NotFound
 
 MAX_UPLOAD_BYTES = 300 * 1024 * 1024
@@ -25,6 +27,16 @@ class FetchRequest(BaseModel):
     artists: int | None = Field(None, ge=0)
     albums: int | None = Field(None, ge=0)
     releases: int | None = Field(None, ge=0)
+
+
+class WrappedRequest(BaseModel):
+    year: int = Field(..., ge=1900, le=2200)
+    art: bool = True   # download covers (network)
+    png: bool = True   # screenshot the PNG cards (needs Chrome)
+
+
+WRAPPED_FILE = re.compile(r"^(index\.html|wrapped\.json|[a-z_]+\.csv|cards/\d\d-[a-z_]+-(story|square)\.png)$")
+WRAPPED_CARD = re.compile(r"^(\d\d)-([a-z_]+)-(story|square)\.png$")
 
 
 class KeyRequest(BaseModel):
@@ -74,7 +86,7 @@ class UsernameRequest(BaseModel):
 
 def create_app(db_path: str | Path | None = None, *, lastfm_factory: Callable | None = None,
                musicbrainz_factory: Callable | None = None, releases_factory: Callable | None = None,
-               auto_update: bool = False) -> FastAPI:
+               auto_update: bool = False, cover_transport: Callable | None = None) -> FastAPI:
     """The factories replace the real last.fm / MusicBrainz / release-list clients (tests pass fakes).
     `auto_update` pulls new scrobbles from last.fm at startup, gated to 3 runs a day (updater.py);
     it is off by default so tests and tools never reach the network, and `serve` turns it on."""
@@ -82,6 +94,7 @@ def create_app(db_path: str | Path | None = None, *, lastfm_factory: Callable | 
     db.connect(path).close()  # apply migrations at startup
     job = jobs.EnrichJob(path, lastfm_factory=lastfm_factory, musicbrainz_factory=musicbrainz_factory)
     auto = updater.AutoUpdater(path, lastfm_factory=lastfm_factory)
+    wrapped = wrapped_job.WrappedJob(path, path.parent / "wrapped", transport=cover_transport)
 
     @asynccontextmanager
     async def lifespan(_app):
@@ -93,10 +106,12 @@ def create_app(db_path: str | Path | None = None, *, lastfm_factory: Callable | 
         yield
         await run_in_threadpool(auto.shutdown)
         job.shutdown()  # finish the current item, then stop
+        wrapped.shutdown()
 
     app = FastAPI(title="Music Taste Center", docs_url="/api/docs", openapi_url="/api/openapi.json", lifespan=lifespan)
     app.state.enrich_job = job
     app.state.updater = auto
+    app.state.wrapped_job = wrapped
 
     def conn() -> Iterator[sqlite3.Connection]:
         c = db.connect(path)
@@ -324,6 +339,69 @@ def create_app(db_path: str | Path | None = None, *, lastfm_factory: Callable | 
     @app.post("/api/metadata/job/stop")
     def stop_fetch():
         return job.stop()
+
+    # ---------- year in review ("Wrapped") ----------
+    def wrapped_dir(year: int) -> Path:
+        return wrapped.out_dir(year)
+
+    @app.get("/api/wrapped")
+    def wrapped_overview(c=Conn):
+        """Every year with plays, whether its wrapped has been made, and the running job."""
+        years = []
+        for year, plays in c.execute("SELECT substr(lday, 1, 4), COUNT(*) FROM scrobbles GROUP BY 1 ORDER BY 1 DESC"):
+            if not (year and year.isdigit() and 1900 <= int(year) <= 2200):
+                continue
+            made = wrapped_dir(int(year)) / "wrapped.json"
+            years.append({"year": int(year), "plays": plays, "made": made.is_file(),
+                          "made_at": int(made.stat().st_mtime) if made.is_file() else None})
+        return {"years": years, "job": wrapped.snapshot(), "has_chrome": wrapped_render.chrome() is not None,
+                "folder": str(wrapped.out_root)}
+
+    @app.get("/api/wrapped/job")
+    def wrapped_job_state():
+        return wrapped.snapshot()
+
+    @app.post("/api/wrapped/job", status_code=202)
+    def wrapped_start(req: WrappedRequest):
+        try:
+            return wrapped.start(req.year, art=req.art, png=req.png)
+        except jobs.Busy as exc:
+            raise HTTPException(409, str(exc)) from None
+
+    @app.post("/api/wrapped/job/stop")
+    def wrapped_stop():
+        return wrapped.stop()
+
+    @app.get("/api/wrapped/{year}")
+    def wrapped_year(year: int = PathParam(..., ge=1900, le=2200)):
+        """What a made wrapped holds: its numbers, the cards and the downloadable files."""
+        folder = wrapped_dir(year)
+        try:
+            data = json.loads((folder / "wrapped.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            raise HTTPException(404, "not made yet") from None
+        base = f"/api/wrapped/{year}/file/"
+        cards: dict[tuple[str, str], dict] = {}
+        for f in sorted((folder / "cards").glob("*.png")) if (folder / "cards").is_dir() else []:
+            m = WRAPPED_CARD.match(f.name)
+            if m:
+                card = cards.setdefault((m.group(1), m.group(2)), {"n": int(m.group(1)), "id": m.group(2)})
+                card[m.group(3)] = f"{base}cards/{f.name}"
+        files = [f.name for f in sorted(folder.glob("*.csv"))]
+        return {"year": year, "totals": data.get("totals"), "cards": list(cards.values()),
+                "report": base + "index.html" if (folder / "index.html").is_file() else None,
+                "json": base + "wrapped.json", "csv": [{"name": n, "url": base + n} for n in files]}
+
+    @app.get("/api/wrapped/{year}/file/{name:path}")
+    def wrapped_file(name: str, year: int = PathParam(..., ge=1900, le=2200)):
+        """One generated file. Only the known names, so no path can leave the folder. The report page
+        is sandboxed: it keeps scripts but loses this app's origin, so it cannot call the API."""
+        folder = wrapped_dir(year).resolve()
+        target = (folder / name).resolve()
+        if not WRAPPED_FILE.match(name) or folder not in target.parents or not target.is_file():
+            raise HTTPException(404, "no such file")
+        headers = {"Content-Security-Policy": "sandbox allow-scripts allow-popups"} if name == "index.html" else None
+        return FileResponse(target, headers=headers)
 
     @app.put("/api/metadata/key")
     def save_key(req: KeyRequest):

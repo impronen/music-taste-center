@@ -2,7 +2,6 @@
 import argparse
 import json
 import os
-import subprocess
 import sys
 
 from . import config, db, derive, enrich, ingest, insights, maintenance, settings, updater
@@ -152,39 +151,37 @@ def main(argv: list[str] | None = None) -> int:
     elif cmd == "wrapped":
         from pathlib import Path
 
-        from . import wrapped
+        from . import wrapped_run
 
         if not 1900 <= args.year <= 2200:
             print("give a four-digit year, like 2026")
             return 1
-        data = wrapped.build(conn, args.year, settings.birth_year())
-        if data.get("empty"):
-            print(f"No scrobbles in {args.year}.")
-            return 1
         out = Path(args.out) if args.out else config.DB_PATH.parent / "wrapped" / str(args.year)
-        files = wrapped.write(data, out)
-        if not args.no_art:
-            from . import wrapped_art
+        shown = {}
 
-            try:
-                r = wrapped_art.fetch(conn, data, out, progress=lambda i, n: print(f"\r  covers {i}/{n}", end="", flush=True))
-                print(f"\n  {r['with_cover']} of {r['albums']} covers found ({r['requests']} requests)")
-            except KeyboardInterrupt:
-                print("\nStopped. Covers fetched so far are saved; run again to continue.")
-        from . import wrapped_render
+        def progress(phase, i, n):
+            if phase in ("covers", "cards"):
+                print(f"\r  {phase} {i}/{n}", end="", flush=True)
+                shown[phase] = True
 
-        if args.no_png:
-            wrapped_render.page(data, out)
-        else:
-            try:
-                wrapped_render.cards(data, out, progress=lambda i, n: print(f"\r  cards {i}/{n}", end="", flush=True))
-                print()
-            except (RuntimeError, OSError, subprocess.SubprocessError) as exc:
-                print(f"\n  PNG cards skipped: {exc}")
-                wrapped_render.page(data, out)
-        t = data["totals"]
+        try:
+            r = wrapped_run.generate(conn, args.year, out, art=not args.no_art, png=not args.no_png,
+                                     birth_year=settings.birth_year(), progress=progress)
+        except ValueError as exc:
+            print(exc)
+            return 1
+        except KeyboardInterrupt:
+            print(f"\nStopped. What is done is saved in {out}; run again to continue.")
+            return 130
+        if shown:
+            print()
+        if r["covers"]:
+            print(f"  {r['covers']['with_cover']} of {r['covers']['albums']} covers found ({r['covers']['requests']} requests)")
+        if r["png_error"]:
+            print(f"  PNG cards skipped: {r['png_error']}")
+        t = r["totals"]
         print(f"{args.year}: {t['plays']} plays, {t['artists']} artists ({t['new_artists']} new), {t['active_days']} days."
-              f" Wrote {len(files)} files to {out}")
+              f" Wrote {len(r['files'])} files to {out}")
     elif cmd == "stats":
         o = insights.overview(conn)
         print(json.dumps({k: v for k, v in o.items() if k != "recent_top"}, indent=2, default=str))
