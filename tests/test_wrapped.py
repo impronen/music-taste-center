@@ -6,14 +6,14 @@ import unittest
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
-from mtc import db, derive, ingest, rhythms, wrapped
+from mtc import config, db, derive, ingest, rhythms, wrapped
 from mtc.ingest import Scrobble
 from tests import synthetic
 
 
 def at(day: str, hour: int = 12, minute: int = 0) -> int:
     d = date.fromisoformat(day)
-    return int(datetime(d.year, d.month, d.day, hour, minute).timestamp())
+    return int(datetime(d.year, d.month, d.day, hour, minute, tzinfo=config.TZ).timestamp())
 
 
 class Base(unittest.TestCase):
@@ -38,6 +38,7 @@ class SectionTests(Base):
             recs.append(Scrobble("Old Favourite", f"Song {i % 3}", at("2024-01-01") + i * 86400, "Old LP"))
         for i in range(10):  # one burst on a single day, back to back: a session and a repeat day
             recs.append(Scrobble("Newcomer", "Hit", at("2024-06-10", 9) + i * 200, "New LP"))
+        recs.append(Scrobble("=Ääniwalli", "Sigur Rós", at("2024-02-02", 3), "Öö LP"))  # Finnish letters, formula-like name
         recs.append(Scrobble("Late Night", "Moon", at("2024-12-31", 23, 30), "Dark LP"))
         recs.append(Scrobble("Late Night", "Moon", at("2025-01-01", 0, 10), "Dark LP"))  # next year
         self.conn = self.library(recs)
@@ -45,14 +46,14 @@ class SectionTests(Base):
 
     def test_totals_use_local_calendar_year(self):
         t = self.data["totals"]
-        self.assertEqual(t["plays"], 71)  # 60 + 10 + the 23:30 play; the 00:10 play is 2025
-        self.assertEqual(t["artists"], 3)
+        self.assertEqual(t["plays"], 72)  # 60 + 10 + the 23:30 play; the 00:10 play is 2025
+        self.assertEqual(t["artists"], 4)
         self.assertEqual(self.data["versus_last_year"]["plays"]["before"], 30)
-        self.assertEqual(self.data["versus_last_year"]["plays"]["change"], 41)
+        self.assertEqual(self.data["versus_last_year"]["plays"]["change"], 42)
 
     def test_new_artists_exclude_those_known_before(self):
-        self.assertEqual(self.data["totals"]["new_artists"], 2)  # Newcomer, Late Night
-        self.assertEqual(self.data["totals"]["new_artist_plays"], 11)
+        self.assertEqual(self.data["totals"]["new_artists"], 3)  # Newcomer, Ääniwalli, Late Night (not Old Favourite)
+        self.assertEqual(self.data["totals"]["new_artist_plays"], 12)
 
     def test_tops_are_ordered_with_artist_names(self):
         self.assertEqual(self.data["top_artists"][0]["name"], "Old Favourite")
@@ -76,20 +77,45 @@ class SectionTests(Base):
         self.assertIsNone(months[8])
 
     def test_clock_sums_to_plays(self):
-        self.assertEqual(sum(map(sum, self.data["clock"])), 71)
+        self.assertEqual(sum(map(sum, self.data["clock"])), 72)
 
     def test_release_years_report_coverage_when_undated(self):
         r = self.data["release_years"]
-        self.assertEqual((r["dated_plays"], r["total_plays"]), (0, 71))
+        self.assertEqual((r["dated_plays"], r["total_plays"]), (0, 72))
         self.assertIsNone(r["this_year_share"])
 
     def test_archetypes_state_their_evidence(self):
         keys = {a["key"] for a in self.data["archetypes"]}
-        self.assertEqual(keys, {"loyalist", "album_listener"})
+        self.assertEqual(keys, {"loyalist"})  # album pairs (9) are under the minimum; night owl is under its bar
         self.assertTrue(all(a["fact"] for a in self.data["archetypes"]))
 
     def test_thin_year_gets_no_archetypes(self):
         self.assertEqual(wrapped.build(self.conn, 2023)["archetypes"], [])
+
+    def test_session_is_clipped_to_the_year(self):
+        # 23:30 on 31 Dec and 00:10 on 1 Jan are one session; only the 2024 play counts for 2024.
+        late = [x for x in wrapped._sessions(self.conn, "2024-12-31", "2024-12-31")]
+        self.assertEqual(late[0]["plays"], 1)
+
+    def test_loved_counts_the_local_year_only(self):
+        with self.conn:
+            for title, day in (("Moon", "2024-12-31"), ("Moon2", "2025-01-01")):
+                self.conn.execute("INSERT INTO loved_tracks(artist, artist_key, title, title_key, loved_at)"
+                                  " VALUES ('Late Night', 'late night', ?, ?, ?)", (title, title.lower(), at(day, 23, 59)))
+        self.assertEqual(wrapped.build(self.conn, 2024)["loved"]["count"], 1)
+
+    def test_versus_last_year_ratio_and_new_artists(self):
+        v = self.data["versus_last_year"]
+        self.assertEqual(v["plays"]["ratio"], round(72 / 30, 4))
+        self.assertEqual(v["new_artists"]["before"], 0)  # Old Favourite began within the pre-history window
+
+    def test_finnish_names_and_formula_guard_survive_csv(self):
+        with tempfile.TemporaryDirectory() as out:
+            wrapped.write(self.data, Path(out))
+            rows = list(csv.reader((Path(out) / "top_artists.csv").read_text("utf-8-sig").splitlines()))
+            names = [r[1] for r in rows[1:]]
+            self.assertIn("'=Ääniwalli", names)
+            self.assertIn("=Ääniwalli", [a["name"] for a in json.loads((Path(out) / "wrapped.json").read_text("utf-8"))["top_artists"]])
 
     def test_empty_year(self):
         d = wrapped.build(self.conn, 2010)

@@ -23,7 +23,8 @@ SESSIONS_SHOWN = 3
 EXPLORER_MIN_NEW_SHARE = 0.30       # plays going to artists first heard this year
 LOYALIST_MIN_TOP5_SHARE = 0.50      # plays going to the five most-played artists
 NIGHT_OWL_MIN_SHARE = 0.15          # plays between 00:00 and 05:59
-EARLY_BIRD_MIN_SHARE = 0.15         # plays between 05:00 and 08:59 (overlaps the night owl hours at 05)
+EARLY_BIRD_MIN_SHARE = 0.15         # plays between 06:00 and 08:59
+ALBUM_MIN_PLAYS = 50                # album-continuation pairs needed before the label can show
 ALBUM_MIN_SHARE = 0.50              # plays following a play of the same album in the same session
 MIN_PLAYS = 50                      # below this a year is too thin for labels
 
@@ -148,11 +149,11 @@ def _streak(conn, s: str, e: str) -> dict:
 
 
 def _sessions(conn, s: str, e: str) -> list[dict]:
-    """The longest listening sessions (by plays) that started in the range."""
+    """The longest listening sessions (by plays); a session crossing the year's edge counts only its plays inside."""
     rows = conn.execute(
-        "SELECT MIN(lday), MIN(ts), MAX(ts), COUNT(*), COUNT(DISTINCT artist_id) FROM scrobbles WHERE session_id IN"
-        " (SELECT DISTINCT session_id FROM scrobbles WHERE lday BETWEEN ? AND ?) GROUP BY session_id"
-        " HAVING MIN(lday) BETWEEN ? AND ? ORDER BY COUNT(*) DESC, MIN(ts) LIMIT ?", (s, e, s, e, SESSIONS_SHOWN))
+        "SELECT MIN(lday), MIN(ts), MAX(ts), COUNT(*), COUNT(DISTINCT artist_id) FROM scrobbles"
+        " WHERE lday BETWEEN ? AND ? GROUP BY session_id ORDER BY COUNT(*) DESC, MIN(ts) LIMIT ?",
+        (s, e, SESSIONS_SHOWN))
     return [{"day": day, "plays": plays, "artists": artists, "minutes": round((last - first) / 60)}
             for day, first, last, plays, artists in rows]
 
@@ -237,13 +238,13 @@ def _archetypes(conn, s: str, e: str, data: dict) -> list[dict]:
     add("loyalist", "Loyalist", top5, LOYALIST_MIN_TOP5_SHARE, f"{top5:.0%} of plays went to five artists")
     night = sum(sum(row[:6]) for row in data["clock"]) / plays
     add("night_owl", "Night owl", night, NIGHT_OWL_MIN_SHARE, f"{night:.0%} of plays were between midnight and 6")
-    early = sum(sum(row[5:9]) for row in data["clock"]) / plays
-    add("early_bird", "Early bird", early, EARLY_BIRD_MIN_SHARE, f"{early:.0%} of plays were between 5 and 9")
+    early = sum(sum(row[6:9]) for row in data["clock"]) / plays
+    add("early_bird", "Early bird", early, EARLY_BIRD_MIN_SHARE, f"{early:.0%} of plays were between 6 and 9")
     same, following = conn.execute(
-        "SELECT SUM(album_id IS NOT NULL AND album_id = prev), SUM(prev IS NOT NULL) FROM"
-        " (SELECT album_id, LAG(album_id) OVER (PARTITION BY session_id ORDER BY ts) AS prev, lday FROM scrobbles)"
+        "SELECT SUM(album_id IS NOT NULL AND album_id = prev), SUM(album_id IS NOT NULL AND prev IS NOT NULL) FROM"
+        " (SELECT id, album_id, LAG(album_id) OVER (PARTITION BY session_id ORDER BY ts, id) AS prev, lday FROM scrobbles)"
         " WHERE lday BETWEEN ? AND ?", (s, e)).fetchone()
-    if following:
+    if following and following >= ALBUM_MIN_PLAYS:
         add("album_listener", "Album listener", same / following, ALBUM_MIN_SHARE,
             f"{same / following:.0%} of plays continued the same album")
     return out
@@ -256,6 +257,11 @@ _TABLES = {
     "top_tracks": ("id", "name", "artist", "plays", "days"),
     "top_albums": ("id", "name", "artist", "plays", "days"),
 }
+
+
+def _safe(cell):
+    """Stop Excel reading a name like '=SUM(...)' as a formula."""
+    return "'" + cell if isinstance(cell, str) and cell[:1] in ("=", "+", "-", "@") else cell
 
 
 def write(data: dict, out_dir: Path) -> list[Path]:
@@ -273,6 +279,7 @@ def write(data: dict, out_dir: Path) -> list[Path]:
     tables["genre_months"] = [["genre", *range(1, 13)]] + [[g["name"], *g["months"]] for g in data["genre_months"]["genres"]]
     tables["release_years"] = [["release_year", "plays"]] + sorted(data["release_years"]["histogram"].items())
     for name, rows in tables.items():
+        rows = [[_safe(c) for c in r] for r in rows]
         path = out_dir / f"{name}.csv"
         with path.open("w", encoding="utf-8-sig", newline="") as f:
             csv.writer(f).writerows(rows)

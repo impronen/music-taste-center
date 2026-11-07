@@ -151,6 +151,9 @@ def main(argv: list[str] | None = None) -> int:
 
         from . import wrapped
 
+        if not 1900 <= args.year <= 2200:
+            print("give a four-digit year, like 2026")
+            return 1
         data = wrapped.build(conn, args.year, settings.birth_year())
         if data.get("empty"):
             print(f"No scrobbles in {args.year}.")
