@@ -2027,6 +2027,66 @@
     });
   }
 
+  // ---------- wrapped (the year in review, made by a background job) ----------
+  // The server builds data/wrapped/YEAR/ (numbers, covers, a report page, PNG cards). While a job runs
+  // the page re-renders itself every second or so; the report opens sandboxed in its own tab.
+  const wrappedOpts = { art: true, png: true };
+  const WRAPPED_STEPS = { data: "Counting plays", covers: "Fetching album covers", cards: "Drawing the cards" };
+  let wrappedTimer = 0;
+  async function wrappedView(params) {
+    clearTimeout(wrappedTimer);
+    const seq = rendering;
+    const o = await api("/api/wrapped", { fresh: true });
+    const job = o.job, busy = job.state === "running" || job.state === "stopping";
+    const year = Number(params.get("year")) || (o.years.find((y) => y.made) || o.years[0] || {}).year || null;
+    const row = o.years.find((y) => y.year === year);
+    const detail = row && row.made ? await api(`/api/wrapped/${year}`, { fresh: true }).catch(() => null) : null;
+    const t = detail && detail.totals;
+    const pct = job.total ? Math.round((job.done / job.total) * 100) : 0;
+    const png = o.has_chrome && wrappedOpts.png;
+    const jobBox = job.state === "idle" ? "" : busy ? html`
+      <div class="progress-hero" role="status"><span class="pct">${pct}%</span>
+        <div class="what"><b>${job.state === "stopping" ? "Stopping…" : `Making ${job.year}`}</b><span>${WRAPPED_STEPS[job.phase] ?? ""}${job.total > 1 ? ` (${Fmt.int(job.done)} of ${Fmt.int(job.total)})` : ""}</span></div>
+        <button class="btn secondary small" type="button" id="wrapped-stop" ${job.state === "stopping" ? raw("disabled") : ""}>Stop</button></div>
+      <div class="progress" aria-hidden="true"><i style="width:${pct}%"></i></div>` : job.state === "failed" ? html`
+      <p class="empty box" role="alert">Couldn't make ${job.year}: ${job.error}</p>` : job.state === "stopped" ? html`
+      <p class="empty box" role="status">Stopped. Covers fetched so far are kept; making ${job.year} again continues from there.</p>` : html`
+      <p class="empty box" role="status">${job.year} is ready.${job.summary && job.summary.png_error ? ` Picture cards were skipped: ${job.summary.png_error}` : ""}</p>`;
+    paint(seq, html`
+      <div class="page-head"><div><span class="kicker">Once a year</span><h1>Wrapped</h1>
+        <p class="lead">A loud look back at one year of listening: picture cards for sharing, a scrolling report and the raw numbers. Pick any year that has plays.</p></div></div>
+      ${o.years.length ? html`
+      <nav class="seg" aria-label="Year">${o.years.map((y) => html`<a href="#/wrapped?year=${y.year}" aria-selected="${String(y.year === year)}">${y.year}${y.made ? " ✓" : ""}</a>`)}</nav>
+      <section class="card wrapped-card" aria-labelledby="wrapped-h">
+        <div class="wrapped-head"><h2 id="wrapped-h">${year}</h2><span class="meta">${Fmt.int(row.plays)} plays${row.plays < 200 ? " (a thin year: the cards will be sparse)" : ""}${row.made ? html` · made ${Fmt.date(row.made_at)}` : " · not made yet"}</span></div>
+        <div class="toolbar">
+          <label class="check"><input type="checkbox" id="wrapped-art" ${wrappedOpts.art ? raw("checked") : ""}> Fetch album covers <small>(Cover Art Archive, about a second each)</small></label>
+          <label class="check"><input type="checkbox" id="wrapped-png" ${png ? raw("checked") : ""} ${o.has_chrome ? "" : raw("disabled")}> Picture cards ${o.has_chrome ? "" : html`<small>(needs Google Chrome, not found)</small>`}</label>
+          <button class="btn primary grow" type="button" id="wrapped-make" ${busy ? raw("disabled") : ""}>${row.made ? "Make it again" : "Make it"}</button></div>
+        <p class="empty box" id="wrapped-error" role="alert" hidden></p>
+        ${jobBox}
+        ${detail ? html`
+        <p class="status-line">${t ? html`<span class="pill">${Fmt.int(t.plays)} plays</span><span class="pill">${Fmt.int(t.artists)} artists</span><span class="pill">${Fmt.int(t.new_artists)} new to you</span><span class="pill">${Fmt.int(t.active_days)} days</span>` : ""}</p>
+        <p class="chips">${detail.report ? html`<a class="btn secondary small" href="${detail.report}" target="_blank" rel="noopener noreferrer">Open the report ${icon("external", 14)}</a>` : ""}
+          <a class="btn secondary small" href="${detail.json}" download>wrapped.json</a>
+          ${detail.csv.map((f) => html`<a class="btn ghost small" href="${f.url}" download>${f.name}</a>`)}</p>
+        ${detail.cards.length ? html`<div class="wrapped-grid">${detail.cards.map((c) => html`
+          <figure><a href="${c.story}" target="_blank" rel="noopener noreferrer" title="Open the story card"><img src="${c.story}" alt="${c.id.replace(/_/g, " ")} card" loading="lazy"></a>
+            <figcaption>${c.id.replace(/_/g, " ")}${c.square ? html` · <a href="${c.square}" target="_blank" rel="noopener noreferrer">square</a>` : ""}</figcaption></figure>`)}</div>`
+          : html`<p class="empty box">No picture cards yet. Make it again with picture cards on, or open the report.</p>`}` : ""}
+        <p class="note">Files live in <code>${o.folder}/${year}</code>. The same thing runs from the command line: <code>python -m mtc wrapped ${year}</code>.</p>
+      </section>` : html`<p class="empty box">No listening data yet. <a href="#/import">Import your history</a> first.</p>`}`);
+    view.querySelector("#wrapped-art")?.addEventListener("change", (e) => { wrappedOpts.art = e.target.checked; });
+    view.querySelector("#wrapped-png")?.addEventListener("change", (e) => { wrappedOpts.png = e.target.checked; });
+    view.querySelector("#wrapped-make")?.addEventListener("click", async (e) => {
+      e.currentTarget.disabled = true;
+      try { await postJson("/api/wrapped/job", { year, art: wrappedOpts.art, png: png }); } catch (err) { const box = view.querySelector("#wrapped-error"); box.textContent = err.message; box.hidden = false; return; }
+      route();
+    });
+    view.querySelector("#wrapped-stop")?.addEventListener("click", async () => { await postJson("/api/wrapped/job/stop"); route(); });
+    if (busy) wrappedTimer = setTimeout(() => { if (location.hash.startsWith("#/wrapped")) route(); }, 1200);
+  }
+
   // ---------- metadata fetch (background job on the server) ----------
   const PHASE_LABEL = { artists: "Artist tags", albums: "Album tags & covers", releases: "Release dates" };
   const duration = (s) => (s < 90 ? `${Math.max(1, Math.round(s))} s` : s < 5400 ? `${Math.round(s / 60)} min` : `${Fmt.dec(s / 3600)} h`);
@@ -2237,6 +2297,7 @@
     [/^\/insights$/, insightsView],
     [/^\/insights\/([a-z-]+)$/, insightView],
     [/^\/upcoming$/, upcomingView],
+    [/^\/wrapped$/, wrappedView],
     [/^\/import$/, importView],
     [/^\/cleanup$/, cleanupView],
     [/^\/cleanup\/editions$/, () => editionsView()],
