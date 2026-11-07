@@ -1,4 +1,4 @@
-"""CLI: python -m mtc [serve|import|rebuild|enrich|update|set-key|set-user|set-birth-year|merge-artist|duplicates|stats|mcp]."""
+"""CLI: python -m mtc [serve|import|rebuild|enrich|update|set-key|set-user|set-birth-year|merge-artist|duplicates|stats|wrapped|mcp]."""
 import argparse
 import json
 import os
@@ -45,6 +45,9 @@ def main(argv: list[str] | None = None) -> int:
     m.add_argument("source")
     m.add_argument("target")
     sub.add_parser("duplicates", help="list artists that look like spelling variants of each other")
+    w = sub.add_parser("wrapped", help="write the year in review (JSON + CSV tables) to data/wrapped/YEAR/")
+    w.add_argument("year", type=int)
+    w.add_argument("--out", default=None, help="output folder (default data/wrapped/YEAR)")
     sub.add_parser("stats", help="print a short overview")
     sub.add_parser("mcp", help="run the MCP server (stdio, read-only) so Claude can use your listening data")
 
@@ -143,6 +146,20 @@ def main(argv: list[str] | None = None) -> int:
     elif cmd == "duplicates":
         for g in maintenance.duplicate_candidates(conn):
             print("  ".join(f"{a['name']} ({a['plays']})" + (" *" if a["id"] == g["target_id"] else "") for a in g["artists"]))
+    elif cmd == "wrapped":
+        from pathlib import Path
+
+        from . import wrapped
+
+        data = wrapped.build(conn, args.year, settings.birth_year())
+        if data.get("empty"):
+            print(f"No scrobbles in {args.year}.")
+            return 1
+        out = Path(args.out) if args.out else config.DB_PATH.parent / "wrapped" / str(args.year)
+        files = wrapped.write(data, out)
+        t = data["totals"]
+        print(f"{args.year}: {t['plays']} plays, {t['artists']} artists ({t['new_artists']} new), {t['active_days']} days."
+              f" Wrote {len(files)} files to {out}")
     elif cmd == "stats":
         o = insights.overview(conn)
         print(json.dumps({k: v for k, v in o.items() if k != "recent_top"}, indent=2, default=str))
