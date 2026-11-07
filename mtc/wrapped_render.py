@@ -119,6 +119,8 @@ def cards(data: dict, out_dir: Path, progress=None) -> list[Path]:
     index = page(data, out_dir, pngs=True)
     target = out_dir / "cards"
     target.mkdir(exist_ok=True)
+    for old in target.glob("*.png"):
+        old.unlink()  # cards of an earlier run, possibly with other ids
     ids = card_ids(data)
     written = []
     for i, card in enumerate(ids, 1):
@@ -129,6 +131,8 @@ def cards(data: dict, out_dir: Path, progress=None) -> list[Path]:
                  f"--window-size={w},{h}", "--virtual-time-budget=8000", f"--screenshot={path}",
                  f"{index.as_uri()}#card={card}&size={size}"],
                 check=True, capture_output=True, timeout=SHOT_TIMEOUT_S)
+            if not path.is_file() or png_size(path) != (w, h):  # Chrome can exit 0 without a usable file
+                raise RuntimeError(f"Chrome did not produce a {w}x{h} picture for {card} ({size}).")
             written.append(path)
         if progress:
             progress(i, len(ids))

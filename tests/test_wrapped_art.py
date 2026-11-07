@@ -1,10 +1,13 @@
 """Cover downloads for the year in review: sources and their order, caching, misses, retries, safety."""
+import http.server
 import json
 import struct
 import tempfile
+import threading
 import unittest
 import zlib
 from pathlib import Path
+from unittest import mock
 
 from mtc import db, derive, ingest, rhythms, wrapped, wrapped_art, wrapped_render
 from mtc.ingest import Scrobble
@@ -115,6 +118,84 @@ class FetchTests(unittest.TestCase):
         self.assertIsNone(client.image("https://coverartarchive.org.evil.example/x.png"))
         html_body = Fake({"https://coverartarchive.org/a": (200, b"<html>not an image</html>")})
         self.assertIsNone(wrapped_art.CoverArt(html_body, sleep=lambda s: None).image("https://coverartarchive.org/a"))
+
+    def test_redirects_are_followed_only_to_allowed_hosts(self):
+        base = "https://coverartarchive.org/release-group/rg-alpha/front-500"
+        ok = Fake({base: (307, b"https://ia800000.us.archive.org/1/x.png"), "https://ia800000.us.archive.org/1/x.png": (200, png())})
+        self.assertIsNotNone(wrapped_art.CoverArt(ok, sleep=lambda s: None).image(base))
+        bad = Fake({base: (307, b"https://evil.example/x.png"), "https://evil.example/x.png": (200, png())})
+        self.assertIsNone(wrapped_art.CoverArt(bad, sleep=lambda s: None).image(base))
+        self.assertEqual(bad.urls, [base])  # the second hop was never requested
+        plain = Fake({base: (302, b"http://archive.org/x.png")})
+        self.assertIsNone(wrapped_art.CoverArt(plain, sleep=lambda s: None).image(base))
+        loop = Fake({base: (302, base.encode())})
+        self.assertIsNone(wrapped_art.CoverArt(loop, sleep=lambda s: None).image(base))  # hop limit
+
+    def test_odd_urls_status_codes_size_and_retries(self):
+        c = lambda t: wrapped_art.CoverArt(t, sleep=lambda s: None)
+        self.assertIsNone(c(Fake({})).image("https:///x.png"))  # no host
+        u = "https://coverartarchive.org/a"
+        for status in (400, 403, 404):
+            self.assertIsNone(c(Fake({u: (status, b"")})).image(u))
+        with mock.patch.object(wrapped_art, "MAX_BYTES", 10):
+            self.assertIsNone(c(Fake({u: (200, png())})).image(u))
+        seq = iter([(429, b""), (503, b""), (200, png())])
+        self.assertIsNotNone(c(Fake({u: lambda url: next(seq)})).image(u))  # retried through 429 and 503
+        def boom(url):
+            raise OSError("down")
+        with self.assertRaises(wrapped_art.ApiError):
+            c(Fake({u: boom})).image(u)
+
+    def test_image_transport_stops_at_redirects_and_caps_the_body(self):
+        class H(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                if self.path == "/r":
+                    self.send_response(302); self.send_header("Location", "/big"); self.end_headers()
+                else:
+                    self.send_response(200); self.end_headers(); self.wfile.write(b"x" * 5000)
+            def log_message(self, *a): pass
+        srv = http.server.HTTPServer(("127.0.0.1", 0), H)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        self.addCleanup(srv.server_close)
+        self.addCleanup(srv.shutdown)
+        base = f"http://127.0.0.1:{srv.server_port}"
+        self.assertEqual(wrapped_art.image_transport(base + "/r", {}, 5), (302, b"/big"))
+        with mock.patch.object(wrapped_art, "MAX_BYTES", 100):
+            status, body = wrapped_art.image_transport(base + "/big", {}, 5)
+        self.assertEqual((status, len(body)), (200, 101))  # stopped reading just past the cap
+
+    def test_albums_without_a_source_are_not_cached_as_misses(self):
+        with self.conn:
+            self.conn.execute("DELETE FROM album_info")
+        t = Fake({})
+        client_run(self.conn, self.data, self.out, t)
+        self.assertEqual(t.urls, [])
+        self.assertEqual(self.manifest()["albums"], {})  # after `enrich` a rerun may find covers
+
+    def test_corrupt_manifest_is_ignored_and_writes_are_atomic(self):
+        (self.out / "art").mkdir(parents=True)
+        (self.out / "art" / "manifest.json").write_text('{"albums": {"1"')  # cut off mid-write
+        t = Fake({"https://coverartarchive.org/release-group/rg-alpha/front-500": (200, png())})
+        client_run(self.conn, self.data, self.out, t)
+        self.assertTrue(self.manifest()["albums"][str(self.ids["Alpha LP"])])
+        self.assertFalse((self.out / "art" / "manifest.tmp").exists())
+        self.assertEqual(wrapped_render._art(self.out / "nowhere"), {"albums": {}, "artists": {}, "names": {}})
+
+    def test_cards_need_chrome_and_check_what_it_wrote(self):
+        with mock.patch.object(wrapped_render, "chrome", return_value=None):
+            with self.assertRaises(RuntimeError):
+                wrapped_render.cards(self.data, self.out)
+        def fake_run(cmd, **kw):  # exits 0 but writes nothing
+            return None
+        self.out.mkdir(exist_ok=True)
+        stale = self.out / "cards" / "99-old-story.png"
+        stale.parent.mkdir(exist_ok=True)
+        stale.write_bytes(b"old")
+        with mock.patch.object(wrapped_render, "chrome", return_value="chrome"), \
+                mock.patch.object(wrapped_render.subprocess, "run", fake_run):
+            with self.assertRaises(RuntimeError):
+                wrapped_render.cards(self.data, self.out)
+        self.assertFalse(stale.exists())  # cards of an earlier run are cleared
 
     def test_page_embeds_covers_and_escapes_script_text(self):
         t = Fake({"https://coverartarchive.org/release-group/rg-alpha/front-500": (200, png())})
