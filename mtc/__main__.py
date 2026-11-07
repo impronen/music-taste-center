@@ -2,6 +2,7 @@
 import argparse
 import json
 import os
+import subprocess
 import sys
 
 from . import config, db, derive, enrich, ingest, insights, maintenance, settings, updater
@@ -48,6 +49,8 @@ def main(argv: list[str] | None = None) -> int:
     w = sub.add_parser("wrapped", help="write the year in review (JSON + CSV tables) to data/wrapped/YEAR/")
     w.add_argument("year", type=int)
     w.add_argument("--out", default=None, help="output folder (default data/wrapped/YEAR)")
+    w.add_argument("--no-png", action="store_true", help="skip the PNG cards (they need Google Chrome)")
+    w.add_argument("--no-art", action="store_true", help="skip downloading cover images (Cover Art Archive, last.fm)")
     sub.add_parser("stats", help="print a short overview")
     sub.add_parser("mcp", help="run the MCP server (stdio, read-only) so Claude can use your listening data")
 
@@ -160,6 +163,25 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         out = Path(args.out) if args.out else config.DB_PATH.parent / "wrapped" / str(args.year)
         files = wrapped.write(data, out)
+        if not args.no_art:
+            from . import wrapped_art
+
+            try:
+                r = wrapped_art.fetch(conn, data, out, progress=lambda i, n: print(f"\r  covers {i}/{n}", end="", flush=True))
+                print(f"\n  {r['with_cover']} of {r['albums']} covers found ({r['requests']} requests)")
+            except KeyboardInterrupt:
+                print("\nStopped. Covers fetched so far are saved; run again to continue.")
+        from . import wrapped_render
+
+        if args.no_png:
+            wrapped_render.page(data, out)
+        else:
+            try:
+                wrapped_render.cards(data, out, progress=lambda i, n: print(f"\r  cards {i}/{n}", end="", flush=True))
+                print()
+            except (RuntimeError, OSError, subprocess.SubprocessError) as exc:
+                print(f"\n  PNG cards skipped: {exc}")
+                wrapped_render.page(data, out)
         t = data["totals"]
         print(f"{args.year}: {t['plays']} plays, {t['artists']} artists ({t['new_artists']} new), {t['active_days']} days."
               f" Wrote {len(files)} files to {out}")
