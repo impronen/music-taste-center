@@ -9,7 +9,7 @@ app.py           entry point: `python app.py` serves the UI (same as `python -m 
 Taste Center.command  macOS double-click launcher (sets up .venv on first run, opens the browser)
 requirements.txt / requirements-dev.txt   runtime dependencies / plus the test dependencies
 mtc/
-  __main__.py    the command line: serve, import, rebuild, enrich, update, set-key, set-user, set-birth-year, merge-artist, duplicates, stats, mcp
+  __main__.py    the command line: serve, import, rebuild, enrich, update, set-key, set-user, set-birth-year, merge-artist, duplicates, stats, wrapped, mcp
   config.py      paths, time zone and every tunable constant
   db.py          SQLite connection, migrations and the data-version counters
   fsutil.py      file reading that survives cloud placeholders (iCloud/OneDrive) and non-UTF-8 exports
@@ -17,6 +17,7 @@ mtc/
   derive.py      sessions, artist stats, gateways, co-listening links (rebuilt after each import)
   enrich.py      resumable metadata fetch (artists, albums, release dates)
   jobs.py        background fetch for the UI's button (one at a time, progress, stop)
+  wrapped.py     the year in review: one dataset per calendar year (`python -m mtc wrapped YEAR` writes JSON + CSV to data/wrapped/YEAR/)
   updater.py     the startup scrobble updater (daily limit and cooldown), also refreshes loved tracks
   lastfm.py      last.fm client (read-only methods, JSON quirks)
   musicbrainz.py MusicBrainz client (release-group dates)
