@@ -77,6 +77,8 @@ class FetchTests(unittest.TestCase):
         self.assertEqual(m["albums"][str(self.ids["Alpha LP"])], f"album-{self.ids['Alpha LP']}.png")
         self.assertTrue((self.out / "art" / f"album-{self.ids['Alpha LP']}.png").read_bytes().startswith(b"\x89PNG"))
         self.assertNotIn("https://coverartarchive.org/release/rel-alpha/front-500", t.urls)  # first source answered
+        self.assertEqual(m["names"][str(self.ids["Alpha LP"])], {"title": "Alpha LP", "artist": "Alpha"})  # cards print it
+        self.assertEqual(wrapped_render._art(self.out)["names"], m["names"])
 
     def test_falls_back_to_release_then_lastfm(self):
         t = Fake({"https://coverartarchive.org/release/rel-alpha/front-500": (200, png())})

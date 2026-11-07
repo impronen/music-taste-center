@@ -84,6 +84,12 @@ def targets(conn: sqlite3.Connection, data: dict) -> tuple[list[int], dict[int, 
     return albums, stands_for
 
 
+def _name(conn, album_id: int) -> dict | None:
+    row = conn.execute("SELECT al.title, ar.name FROM albums al JOIN artists ar ON ar.id = al.artist_id WHERE al.id = ?",
+                       (album_id,)).fetchone()
+    return {"title": row[0], "artist": row[1]} if row else None
+
+
 def _urls(conn, album_id: int) -> list[str]:
     row = conn.execute("SELECT release_group_mbid, mbid, image_url FROM album_info WHERE album_id = ?",
                        (album_id,)).fetchone()
@@ -103,7 +109,7 @@ def _urls(conn, album_id: int) -> list[str]:
 def fetch(conn: sqlite3.Connection, data: dict, out_dir: Path, transport: Transport = urllib_transport,
           progress=None, sleep=None) -> dict:
     """Download what the year's cards need into out_dir/art/ and write art/manifest.json:
-    {"albums": {id: "album-<id>.jpg" | null}, "artists": {artist id: album id}}."""
+    {"albums": {id: "album-<id>.jpg" | null}, "artists": {artist id: album id}, "names": {id: {title, artist}}}."""
     art = out_dir / "art"
     art.mkdir(parents=True, exist_ok=True)
     manifest_path = art / "manifest.json"
@@ -113,6 +119,7 @@ def fetch(conn: sqlite3.Connection, data: dict, out_dir: Path, transport: Transp
     client = CoverArt(transport, **({"sleep": sleep} if sleep else {}))
     albums, stands_for = targets(conn, data)
     manifest["artists"] = {str(a): b for a, b in stands_for.items()}
+    manifest["names"] = {str(a): n for a in albums if (n := _name(conn, a))}  # cards print the album title
     done = 0
     for album in albums:
         key = str(album)

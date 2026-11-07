@@ -72,7 +72,7 @@ def _json(value) -> str:
 
 def _art(out_dir: Path) -> dict:
     manifest_path = out_dir / "art" / "manifest.json"
-    art = {"albums": {}, "artists": {}}
+    art = {"albums": {}, "artists": {}, "names": {}}
     if not manifest_path.exists():
         return art
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -81,6 +81,7 @@ def _art(out_dir: Path) -> dict:
         if path and path.is_file():
             mime = "image/png" if name.endswith(".png") else "image/jpeg"
             art["albums"][album] = f"data:{mime};base64,{base64.b64encode(path.read_bytes()).decode()}"
+    art["names"] = manifest.get("names", {})
     art["artists"] = {a: b for a, b in manifest.get("artists", {}).items() if str(b) in art["albums"]}
     return art
 

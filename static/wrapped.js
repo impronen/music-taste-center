@@ -1,6 +1,6 @@
 /* The year in review. Reads the embedded dataset (#wrapped-data) and cover images (#wrapped-art, data URIs so a
    canvas may read their pixels) and draws one card per id. Picture treatments are canvas drawings of a cover:
-   ASCII, braille, halftone, Bayer dither, glitch and LED pixels. Everything from the data goes through
+   mixed coloured glyphs as the main look, with glitch, CRT and torn variants. Everything from the data goes through
    textContent. `#card=ID&size=story|square` shows a single card (the PNG renderer uses it). */
 (function () {
   "use strict";
@@ -66,87 +66,124 @@
     return { g, data: g.getImageData(0, 0, n, n).data, n };
   }
   const lum = (d, i) => (0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2]) / 255;
-  const BAYER = [0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5];
 
-  const STYLES = {
-    ascii(g, S, px, fg, bg, seed) {
-      const ramp = " .'`^\",:;Il!i><~+_-?][}{1)(|/tfjrxnuvczXYUJCLQ0OZmwqpdbkhao*#MW&8%B@$";
-      const cols = 64, cell = px / cols, { data, n } = sample(S, cols);
-      g.fillStyle = bg; g.fillRect(0, 0, px, px);
-      g.fillStyle = fg; g.font = `700 ${cell * 1.5}px ui-monospace, Menlo, monospace`; g.textBaseline = "top";
-      for (let y = 0; y < cols; y++) for (let x = 0; x < cols; x++) {
-        const l = lum(data, (y * n + x) * 4);
-        g.fillText(ramp[Math.floor(l * (ramp.length - 1))], x * cell, y * cell - cell * .15);
-      }
-    },
-    braille(g, S, px, fg, bg) {
-      const cols = 56, rows = 56, { data, n } = sample(S, cols * 2); // 2x4 dots per glyph, drawn as dots
-      const w = px / n, h = px / n;
-      g.fillStyle = bg; g.fillRect(0, 0, px, px);
-      const err = new Float32Array(n * n);
-      for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) err[y * n + x] = lum(data, (y * n + x) * 4);
-      g.fillStyle = fg;
-      for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) {
-        const old = err[y * n + x], v = old < .5 ? 0 : 1, e = old - v;
-        if (x + 1 < n) err[y * n + x + 1] += e * 7 / 16;
-        if (y + 1 < n) { if (x > 0) err[(y + 1) * n + x - 1] += e * 3 / 16; err[(y + 1) * n + x] += e * 5 / 16; if (x + 1 < n) err[(y + 1) * n + x + 1] += e / 16; }
-        if (!v) { g.beginPath(); g.arc(x * w + w / 2, y * h + h / 2, Math.min(w, h) * .38, 0, 6.3); g.fill(); }
-      }
-    },
-    halftone(g, S, px, fg, bg) {
-      const cols = 44, cell = px / cols, { data, n } = sample(S, cols);
-      g.fillStyle = bg; g.fillRect(0, 0, px, px); g.fillStyle = fg;
-      for (let y = 0; y < cols; y++) for (let x = 0; x < cols; x++) {
-        const dark = 1 - lum(data, (y * n + x) * 4);
-        g.beginPath(); g.arc(x * cell + cell / 2, y * cell + cell / 2, cell * .72 * Math.sqrt(dark), 0, 6.3); g.fill();
-      }
-    },
-    bayer(g, S, px, fg, bg) {
-      const n = 160, { data } = sample(S, n), cell = px / n;
-      g.fillStyle = bg; g.fillRect(0, 0, px, px); g.fillStyle = fg;
-      for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) {
-        const t = (BAYER[(y % 4) * 4 + (x % 4)] + .5) / 16;
-        if (lum(data, (y * n + x) * 4) < t) g.fillRect(x * cell, y * cell, Math.ceil(cell), Math.ceil(cell));
-      }
-    },
-    glitch(g, S, px, fg, bg, seed) {
-      const r = rng(hash(seed)), { data, n } = sample(S, 120), cell = px / n;
-      g.fillStyle = bg; g.fillRect(0, 0, px, px);
-      const shift = Math.round(n * .04), bands = [];
-      for (let y = 0; y < n; ) { const h = 1 + Math.floor(r() * 9); bands.push([y, h, r() < .3 ? Math.round((r() - .5) * n * .3) : 0]); y += h; }
-      for (const [y0, h, off] of bands) for (let y = y0; y < Math.min(n, y0 + h); y++) for (let x = 0; x < n; x++) {
-        const sx = (x - off + n) % n, i = (y * n + sx) * 4, ir = (y * n + Math.min(n - 1, sx + shift)) * 4, ib = (y * n + Math.max(0, sx - shift)) * 4;
-        g.fillStyle = `rgb(${data[ir]},${data[i + 1]},${data[ib + 2]})`;
-        g.fillRect(x * cell, y * cell, Math.ceil(cell), Math.ceil(cell));
-      }
-    },
-    pixels(g, S, px, fg, bg) {
-      const cols = 28, cell = px / cols, { data, n } = sample(S, cols);
-      g.fillStyle = bg; g.fillRect(0, 0, px, px);
-      for (let y = 0; y < cols; y++) for (let x = 0; x < cols; x++) {
-        const i = (y * n + x) * 4;
-        g.fillStyle = `rgb(${data[i]},${data[i + 1]},${data[i + 2]})`;
-        g.beginPath(); g.arc(x * cell + cell / 2, y * cell + cell / 2, cell * .46, 0, 6.3); g.fill();
-      }
-    },
-  };
-  const STYLE_NAMES = Object.keys(STYLES);
+  // "Mixed glyphs" (ascii-magic.com/styles/mixed): each cell takes the photo's colour and one of five glyph
+  // families, picked by a hash of its position, so the texture varies across the frame. Light to dense.
+  const FAMILIES = [" .·:+╪╬", " ',-=≡▒", " ^~xX×╳", " ;!|┃║╫", " ·o0O@#"];
+  const DARK = 0.1;
+  function mixed(g, S, px, seed) {
+    const cell = Math.max(5, Math.round(px / 80)), cols = Math.floor(px / cell), { data, n } = sample(S, cols);
+    g.fillStyle = "#050505"; g.fillRect(0, 0, px, px);
+    g.font = `700 ${cell * 1.3}px ui-monospace, Menlo, monospace`; g.textAlign = "center"; g.textBaseline = "middle";
+    const salt = hash(seed);
+    for (let y = 0; y < cols; y++) for (let x = 0; x < cols; x++) {
+      const i = (y * n + x) * 4;
+      const k = 1.6, rgb = [0, 1, 2].map((c) => Math.max(0, Math.min(255, (data[i + c] - 128) * k + 128 + 20)));
+      const l = lum(data, i);
+      const lc = Math.max(0, Math.min(1, (l - .5) * k + .5 + .08));
+      if (lc < DARK) continue;
+      const fam = FAMILIES[hash(`${salt}:${x}:${y}`) % FAMILIES.length];
+      const ch = fam[Math.max(1, Math.round(lc * (fam.length - 1)))];
+      g.fillStyle = `rgb(${rgb[0] | 0},${rgb[1] | 0},${rgb[2] | 0})`;
+      g.fillText(ch, x * cell + cell / 2, y * cell + cell / 2);
+    }
+  }
 
-  function cover(parent, albumId, size, style, card) {
-    const canvas = el("canvas", "cover", null, parent);
+  // ---- damage: block displacement, channel offset, scan tearing, CRT bulge and phosphor ----
+  function photo(g, S, px) { // the picture itself, square-cropped
+    const w = S.naturalWidth || S.width, h = S.naturalHeight || S.height, s = Math.min(w, h);
+    g.drawImage(S, (w - s) / 2, (h - s) / 2, s, s, 0, 0, px, px);
+  }
+  function displace(g, px, r, blocks) {
+    for (let b = 0; b < blocks; b++) {
+      const y = Math.floor(r() * px), h = Math.max(2, Math.floor(px * (.008 + .045 * r()))), dx = Math.round((r() - .5) * px * .16);
+      g.drawImage(g.canvas, 0, y, px, h, dx, y, px, h);
+    }
+  }
+  function rgbSplit(g, px, k) {
+    const src = g.getImageData(0, 0, px, px), out = g.createImageData(px, px), a = src.data, o = out.data;
+    for (let y = 0; y < px; y++) for (let x = 0; x < px; x++) {
+      const i = (y * px + x) * 4, ir = (y * px + Math.min(px - 1, x + k)) * 4, ib = (y * px + Math.max(0, x - k)) * 4;
+      o[i] = a[ir]; o[i + 1] = a[i + 1]; o[i + 2] = a[ib + 2]; o[i + 3] = 255;
+    }
+    g.putImageData(out, 0, 0);
+  }
+  function scanlines(g, px, step, alpha) {
+    g.fillStyle = `rgba(0,0,0,${alpha})`;
+    for (let y = 0; y < px; y += step) g.fillRect(0, y, px, Math.max(1, step / 3));
+  }
+  function barrel(g, px) { // squeeze rows towards top and bottom, like a curved tube
+    const tmp = document.createElement("canvas"); tmp.width = tmp.height = px;
+    tmp.getContext("2d").drawImage(g.canvas, 0, 0);
+    g.fillStyle = "#000"; g.fillRect(0, 0, px, px);
+    for (let y = 0; y < px; y += 2) {
+      const ny = (y / px) * 2 - 1, w = px * (1 - .05 * ny * ny), x = (px - w) / 2;
+      g.drawImage(tmp, 0, y, px, 2, x, y, w, 2);
+    }
+    const v = g.createRadialGradient(px / 2, px / 2, px * .35, px / 2, px / 2, px * .75);
+    v.addColorStop(0, "rgba(0,0,0,0)"); v.addColorStop(1, "rgba(0,0,0,.4)");
+    g.fillStyle = v; g.fillRect(0, 0, px, px);
+  }
+
+  // ascii-magic "glitch": the photo underneath, sparse glowing glyphs over it, then torn and channel-shifted
+  function glitchy(g, S, px, seed) {
+    const r = rng(hash(seed + ":g"));
+    g.filter = "saturate(1.5) contrast(1.15) brightness(.85)"; photo(g, S, px); g.filter = "none";
+    const cell = Math.max(7, Math.round(px / 56)), cols = Math.floor(px / cell), { data, n } = sample(S, cols), set = "X0$S8#:+";
+    g.font = `700 ${cell * 1.2}px ui-monospace, Menlo, monospace`; g.textAlign = "center"; g.textBaseline = "middle";
+    g.shadowColor = "rgba(255,238,200,.95)"; g.shadowBlur = cell;
+    g.fillStyle = "rgba(255,244,214,.95)";
+    for (let y = 0; y < cols; y++) for (let x = 0; x < cols; x++) {
+      if (lum(data, (y * n + x) * 4) > .55 && r() < .4) g.fillText(set[Math.floor(r() * set.length)], x * cell + cell / 2, y * cell + cell / 2);
+    }
+    g.shadowBlur = 0;
+    displace(g, px, r, 4); rgbSplit(g, px, Math.max(2, Math.round(px * .008))); displace(g, px, r, 1); scanlines(g, px, 4, .14);
+  }
+  function crt(g, S, px, seed) {
+    const small = document.createElement("canvas"), k = 72; small.width = small.height = k;
+    const sg = small.getContext("2d"); sg.filter = "saturate(1.4) contrast(1.2)"; photo(sg, S, k);
+    g.imageSmoothingEnabled = false; g.drawImage(small, 0, 0, px, px); g.imageSmoothingEnabled = true;
+    for (let x = 0; x < px; x += 3) { // phosphor stripes
+      g.fillStyle = "rgba(255,0,0,.08)"; g.fillRect(x, 0, 1, px);
+      g.fillStyle = "rgba(0,255,0,.08)"; g.fillRect(x + 1, 0, 1, px);
+      g.fillStyle = "rgba(0,80,255,.09)"; g.fillRect(x + 2, 0, 1, px);
+    }
+    scanlines(g, px, 3, .26);
+    g.globalCompositeOperation = "lighter"; g.globalAlpha = .22; g.filter = `blur(${Math.max(2, px / 90)}px)`; g.drawImage(g.canvas, 0, 0);
+    g.globalCompositeOperation = "source-over"; g.globalAlpha = 1; g.filter = "none";
+    const r = rng(hash(seed + ":c")); displace(g, px, r, 1); rgbSplit(g, px, Math.max(1, Math.round(px * .004)));
+    barrel(g, px);
+  }
+  function torn(g, S, px, seed) { // the main look, broken
+    const r = rng(hash(seed + ":t"));
+    mixed(g, S, px, seed); displace(g, px, r, 5); rgbSplit(g, px, Math.max(2, Math.round(px * .007))); scanlines(g, px, 4, .12);
+  }
+  const LOOKS = [[mixed, .5], [glitchy, .22], [crt, .16], [torn, .12]];
+  function pickLook(seed) {
+    let v = (hash(`look:${seed}`) % 1000) / 1000;
+    for (const [fn, w] of LOOKS) { if (v < w) return fn; v -= w; }
+    return mixed;
+  }
+
+  function cover(parent, albumId, size) {
+    const canvas = el("canvas", "cover", null, parent), seed = `${D.year}:${albumId}`, look = pickLook(seed);
     canvas.width = canvas.height = size;
     canvas.style.width = "100%";
-    const css = getComputedStyle(card);
-    const fg = css.getPropertyValue("--fg").trim(), bg = css.getPropertyValue("--bg").trim();
-    const name = style || STYLE_NAMES[hash(`${D.year}:${albumId}`) % STYLE_NAMES.length];
-    canvas.dataset.style = name;
-    const ready = loadImage(albumId).then((img) => {
-      STYLES[name](canvas.getContext("2d"), img || blobs(albumId, 256), size, fg, bg, `${D.year}:${albumId}`);
-    });
-    pending.push(ready);
+    canvas.dataset.style = look.name;
+    pending.push(loadImage(albumId).then((img) => look(canvas.getContext("2d", { willReadFrequently: true }), img || blobs(albumId, 256), size, seed)));
     return canvas;
   }
   const pending = [];
+
+  // The title plate printed under a cover: name from the manifest, or from the top albums.
+  function caption(parent, albumId, rank) {
+    const n = (ART.names || {})[albumId] || (D.top_albums || []).filter((a) => String(a.id) === String(albumId)).map((a) => ({ title: a.name, artist: a.artist }))[0];
+    if (!n) return null;
+    const c = el("div", "cap", null, parent);
+    el("b", null, (rank ? `${rank}  ` : "") + n.title, c);
+    el("span", null, n.artist, c);
+    return c;
+  }
 
   // ---------- cards ----------
   const kicker = (card, label, n) => { const k = el("div", "kicker", null, card); el("b", null, `${D.year}`, k); el("span", null, `${label}`, k); el("span", null, n, k); };
@@ -165,6 +202,13 @@
         const s = el("div", "stamp tilt-l", v.change >= 0 ? `+${int(v.change)}` : `−${int(-v.change)}`, card);
         el("small", null, `plays against ${D.year - 1} (${int(v.before)})`, s);
       }
+      const lead = (D.top_albums || [])[0];
+      if (lead) {
+        const wrap = el("div", "plate more", null, card), win = el("div", "arch", null, wrap);
+        wrap.style.width = "520px"; wrap.style.marginLeft = "auto";
+        cover(win, lead.id, 520);
+        caption(wrap, lead.id);
+      }
       el("div", "spacer", null, card);
       const t = el("div", "ticker", null, card);
       el("span", null, (D.top_tracks || []).map((x) => `${x.name} — ${x.artist}`).join("   ///   "), t);
@@ -177,9 +221,10 @@
       const row = el("div", "row", null, card);
       el("div", "num", int(a.plays), row);
       el("div", "lead", `plays on ${int(a.days)} days`, row);
-      const frame = el("div", "hard", null, card);
-      frame.style.width = card.classList.contains("square") ? "360px" : "760px";
-      cover(frame, album ?? `artist-${a.id}`, 640, "ascii", card);
+      const wrap = el("div", "plate", null, card), frame = el("div", "arch tall", null, wrap);
+      wrap.style.width = card.classList.contains("square") ? "360px" : "620px";
+      cover(frame, album ?? `artist-${a.id}`, 640);
+      if (album != null) caption(wrap, album);
       el("div", "spacer", null, card);
       const rest = el("div", "log more", null, card);
       L.slice(1, 5).forEach((x, i) => { const p = el("div", null, null, rest); el("span", "m", String(i + 2).padStart(2, "0"), p); p.append(`${x.name} `); el("span", "n", int(x.plays), p); });
@@ -206,13 +251,14 @@
       el("h2", "big", "albums on the wall", card);
       const grid = el("div", "grid3", null, card);
       D.top_albums.slice(0, 9).forEach((a, i) => {
-        const t = el("div", "tile", null, grid);
-        cover(t, a.id, 360, null, card);
-        el("i", null, String(i + 1), t);
+        const t = el("div", "tile" + (i >= 8 ? " more" : ""), null, grid), w = el("div", "arch", null, t);
+        cover(w, a.id, 360);
+        el("i", null, String(i + 1), w);
+        const c = el("div", "cap", null, t);
+        el("b", null, a.name, c); el("span", null, a.artist, c);
       });
       const a = D.top_albums[0];
-      el("div", "lead", `#1: ${a.name} — ${a.artist}`, card);
-      el("div", "mono", `${int(a.plays)} plays`, card);
+      el("div", "mono", `#1 ${a.name} — ${int(a.plays)} plays`, card);
     },
     clock(card) {
       kicker(card, "when", "05");
@@ -290,7 +336,7 @@
       const v = D.versus_last_year.new_artists;
       el("div", "mono", `${D.year - 1}: ${int(v.before)} new artists`, card);
       const waffle = el("canvas", "cover", null, card); // 100 squares, one per percent of plays
-      waffle.width = waffle.height = 10 * 76; waffle.style.width = card.classList.contains("square") ? "300px" : "780px"; waffle.style.animation = "none";
+      waffle.width = waffle.height = 10 * 76; waffle.style.width = card.classList.contains("square") ? "300px" : "100%"; waffle.style.animation = "none";
       const wg = waffle.getContext("2d"), wcss = getComputedStyle(card), filled = Math.round((D.totals.new_artist_share || 0) * 100);
       for (let i = 0; i < 100; i++) {
         wg.fillStyle = i < filled ? wcss.getPropertyValue("--acc").trim() : wcss.getPropertyValue("--fg").trim();
@@ -306,8 +352,9 @@
     moments(card) {
       kicker(card, "oddities", "10");
       el("h2", "big", "things we noticed", card);
-      const h = D.highlights || {}, log = el("div", "log", null, card);
-      const add = (m, t) => { const p = el("div", null, null, log); el("span", "m", m, p); p.append(t); };
+      const h = D.highlights || {}, log = el("div", "log roomy", null, card);
+      let shown = 0;
+      const add = (m, t) => { const p = el("div", shown++ >= 3 ? "more" : "", null, log); el("span", "m", m, p); p.append(t); };
       if (h.comeback) add("BACK", `${h.comeback.name} returned after ${int(Math.round(h.comeback.gap_days / 30))} months.`);
       if (h.one_song) add("ONCE", `${int(h.one_song.artists)} of ${int(h.one_song.of)} artists got a single song.`);
       if (h.double_life) add("2×", `${WD[h.double_life.days[0].weekday]}: ${h.double_life.days[0].name}. ${WD[h.double_life.days[1].weekday]}: ${h.double_life.days[1].name}.`);
@@ -342,11 +389,104 @@
       el("h2", "hero glitch", `see you ${D.year + 1}`, card).style.fontSize = "var(--fs-xl)";
       const mosaic = el("div", "mosaic", null, card);
       const ids = Object.keys(ART.albums).filter((k) => ART.albums[k]).slice(0, 20);
-      (ids.length ? ids : D.top_albums.map((a) => String(a.id))).slice(0, 20).forEach((id) => cover(mosaic, id, 180, null, card));
+      (ids.length ? ids : D.top_albums.map((a) => String(a.id))).slice(0, 20).forEach((id) => cover(mosaic, id, 180));
       el("div", "spacer", null, card);
       el("div", "mono", `${int(D.totals.plays)} plays · ${int(D.totals.artists)} artists · ${int(D.totals.tracks)} songs`, card);
     },
   };
+
+  // Cards after the first four are laid out like a torn collage: blocks pushed to different sides, tilted,
+  // overlapping, with a huge ghost number and stray debris text behind them. Seeded, so reruns match.
+  const SCATTER = new Set(["clock", "calendar", "genres", "months", "discovery", "moments", "ages", "loved", "outro"]);
+  const WIDE = ".clockgrid, canvas, .bars, .hist, .mosaic, .log, .axis, .receipt";
+  function scatter(card, body, id, index) {
+    const r = rng(hash(`${D.year}:${id}:layout`)), sq = card.classList.contains("square");
+    body.classList.add("scatter");
+    [...body.children].forEach((n, i) => {
+      if (n.classList.contains("spacer")) return;
+      if (n.matches(WIDE)) {
+        n.style.transform = `rotate(${((r() - .5) * 2.2).toFixed(2)}deg)`;
+        if (n.matches(".log")) { if (r() < .5) n.style.marginLeft = "auto"; }
+      } else {
+        const k = r(), side = k < .38 ? "flex-start" : k < .8 ? "flex-end" : "center";
+        n.style.alignSelf = side;
+        if (side === "flex-end") n.style.textAlign = "right";
+        n.style.maxWidth = `${72 + Math.floor(r() * 24)}%`;
+        n.style.transform = `rotate(${((r() - .5) * (n.matches(".stamp") ? 3 : 7)).toFixed(1)}deg)`;
+      }
+      n.style.marginTop = i && r() < .3 ? `-${18 + Math.floor(r() * 36)}px` : `${Math.floor(r() * (sq ? 16 : 56))}px`;
+    });
+    distract(card, id, r);
+  }
+
+  // Distractions: a different handful per card, picked by the card's seed, so no two cards carry the same noise.
+  const SETS = ["▓▒░█▌▐", "╬╪┼╫╳╋", "x+*·:;", "01", "░▒▓▒░", "/\\|-_", "▀▄▌▐■□", "<>{}[]()"];
+  const ARTS = ["  *\n ***\n*****\n ***\n  *", "┌──┐\n│><│\n└┬┬┘", "( o_o )\n /|_|\\", "▁▂▃▅▇▅▃▂▁", "$ play --loop\n> _"];
+  const KINDS = {
+    ghost(card, r, idx) {
+      const g = el("div", "ghost", String(idx).padStart(2, "0"), card);
+      g.style.top = `${-10 + Math.floor(r() * 50)}%`;
+      g.style[r() < .5 ? "left" : "right"] = `${-12 - Math.floor(r() * 12)}%`;
+      g.style.transform = `rotate(${Math.round((r() - .5) * 24)}deg)`;
+    },
+    hex(card, r) {
+      const bits = [`ERR_${Math.floor(r() * 900 + 100)}`, `0x${Math.floor(r() * 65535).toString(16).toUpperCase().padStart(4, "0")}`, "[ SIGNAL LOST ]", "///", `${D.year}.${String(1 + Math.floor(r() * 12)).padStart(2, "0")}`];
+      for (let i = 0; i < 3; i++) put(card, "debris", bits[Math.floor(r() * bits.length)], r);
+    },
+    glyphs(card, r) { // a random patch of one glyph family
+      const set = [...SETS[Math.floor(r() * SETS.length)]], rows = 3 + Math.floor(r() * 5), cols = 6 + Math.floor(r() * 12);
+      put(card, "debris patch", Array.from({ length: rows }, () => Array.from({ length: cols }, () => set[Math.floor(r() * set.length)]).join("")).join("\n"), r);
+    },
+    art(card, r) { put(card, "debris patch", ARTS[Math.floor(r() * ARTS.length)], r); },
+    rec(card, r) { const p = put(card, "debris rec", `● REC 00:${String(Math.floor(r() * 59)).padStart(2, "0")}:${String(Math.floor(r() * 59)).padStart(2, "0")}`, r); p.style.transform = "none"; },
+    meter(card, r) { const n = 3 + Math.floor(r() * 8); put(card, "debris", `[${"█".repeat(n)}${"░".repeat(12 - n)}] ${Math.round((n / 12) * 100)}%`, r); },
+    crosses(card, r) { for (let i = 0; i < 7; i++) put(card, "debris cross", "+", r); },
+    barcode(card, r) {
+      const bars = []; let x = 0;
+      while (x < 100) { const w = 1 + r() * 4, gap = 1 + r() * 4; bars.push(`var(--fg) ${x}% ${x + w}%`, `transparent ${x + w}% ${x + w + gap}%`); x += w + gap; }
+      const b = put(card, "debris barcode", "", r); b.style.background = `linear-gradient(90deg, ${bars.join(",")})`;
+    },
+  };
+  function put(card, cls, text, r) {
+    const d = el("div", cls, text, card);
+    d.style.top = `${9 + Math.floor(r() * 82)}%`; d.style.left = `${5 + Math.floor(r() * 72)}%`;
+    d.style.transform = `rotate(${Math.round((r() - .5) * 20)}deg)`;
+    return d;
+  }
+  function distract(card, id, r) {
+    const names = Object.keys(KINDS), n = 2 + (r() < .4 ? 1 : 0), pick = [];
+    while (pick.length < n) { const k = names[Math.floor(r() * names.length)]; if (!pick.includes(k)) pick.push(k); }
+    const index = D.cards.indexOf(id) + 1;
+    pick.forEach((k) => KINDS[k](card, r, index));
+  }
+
+  // The first four cards keep their layout but get a lighter version: a few blocks nudged and tilted.
+  function nudge(card, body, id) {
+    const r = rng(hash(`${D.year}:${id}:nudge`));
+    [...body.children].forEach((n) => {
+      if (n.classList.contains("spacer") || n.matches(".receipt, .stamp, .plate, .grid3")) {
+        if (n.matches(".grid3")) n.style.transform = `rotate(${((r() - .5) * 1.4).toFixed(2)}deg)`;
+        return;
+      }
+      if (n.matches(".big, .hero, .num, .lead, .mono, .row, .log")) {
+        n.style.transform = `translateX(${Math.round((r() - .5) * 36)}px) rotate(${((r() - .5) * 3.4).toFixed(1)}deg)`;
+      }
+    });
+    distract(card, id, r);
+  }
+
+  // Zalgo: stacked combining marks above, through and below a letter (glyphy.io/font-generator/zalgo-text).
+  const range = (a, b) => Array.from({ length: b - a + 1 }, (_, i) => a + i);
+  const Z_UP = [...range(0x300, 0x314), ...range(0x33d, 0x344), 0x346, ...range(0x34a, 0x34c), ...range(0x350, 0x352), 0x357, 0x35b];
+  const Z_MID = [0x315, 0x31b, 0x321, 0x322, 0x327, 0x328, ...range(0x334, 0x338), 0x358];
+  const Z_DOWN = [...range(0x316, 0x319), ...range(0x31c, 0x320), ...range(0x323, 0x326), ...range(0x329, 0x333), ...range(0x339, 0x33c), 0x345, ...range(0x347, 0x349), 0x34d, 0x34e, ...range(0x353, 0x356), 0x359, 0x35a, ...range(0x35c, 0x362)];
+  function zalgo(text, level, r) {
+    const marks = (set, n) => Array.from({ length: n }, () => String.fromCharCode(set[Math.floor(r() * set.length)])).join("");
+    return [...text].map((c) => {
+      if (!/[\p{L}\p{N}]/u.test(c) || r() > .4) return c;
+      return c + marks(Z_UP, Math.ceil(r() * 3 * level)) + (r() < .3 * level ? marks(Z_MID, 1) : "") + marks(Z_DOWN, Math.ceil(r() * 2 * level));
+    }).join("");
+  }
 
   function build(id, size, index) {
     const card = el("article", `card ${size}`);
@@ -354,8 +494,16 @@
     card.dataset.card = id;
     document.body.appendChild(card); // computed style needs it attached
     CARDS[id](card);
-    const last = card.lastElementChild;
-    if (last && !last.classList.contains("spacer") && !last.classList.contains("ticker")) last.style.marginTop = "auto";
+    const body = el("div", "body"); // the kicker stays on top, the rest is centred in what is left
+    [...card.children].slice(1).filter((n) => !n.classList.contains("ticker")).forEach((n) => body.appendChild(n));
+    card.appendChild(body);
+    if (SCATTER.has(id)) scatter(card, body, id, index); else nudge(card, body, id);
+    el("div", "roll", null, card).style.top = `${20 + (hash(`${D.year}:${id}:roll`) % 55)}%`; // a CRT refresh bar
+    const zr = rng(hash(`${D.year}:${id}:zalgo`)), level = index < 4 ? .7 : zr() < .35 ? .45 : 0; // the tidy cards get it most
+    if (level) card.querySelectorAll(".big, .hero").forEach((n) => { n.textContent = zalgo(n.textContent, n.matches(".hero") ? level * .6 : level, zr); n.classList.add("zal"); });
+    card.querySelectorAll(".glitch").forEach((n) => { n.dataset.text = n.textContent; });
+    el("div", "side l", `taste center ✦ ${D.year}`, card);
+    el("div", "side r", `wrapped ✦ ${String(index + 1).padStart(2, "0")}/${String(D.cards.length).padStart(2, "0")}`, card);
     if (!card.querySelector(".ticker")) {
       const t = el("div", "ticker", null, card);
       el("span", null, (D.top_artists || []).map((a) => a.name).join("   ///   ") + "   ///   " + D.year, t);
