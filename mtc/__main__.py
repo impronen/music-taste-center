@@ -171,8 +171,8 @@ def main(argv: list[str] | None = None) -> int:
             print(exc)
             return 1
         except KeyboardInterrupt:
-            print("\nStopped. Covers fetched so far are saved; run again to continue.")
-            return 1
+            print(f"\nStopped. What is done is saved in {out}; run again to continue.")
+            return 130
         if shown:
             print()
         if r["covers"]:

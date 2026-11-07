@@ -92,23 +92,41 @@ class WrappedWebTests(unittest.TestCase):
         self.assertIn("Chrome", job["summary"]["png_error"])
         self.assertEqual(c.get(c.get(f"/api/wrapped/{year}").json()["report"]).status_code, 200)
 
-    def test_one_job_at_a_time_and_stop(self):
-        c = self.client
-        year = self.years[0]["year"]
-        from mtc import wrapped_run
+    def test_one_job_at_a_time_and_stop_leaves_a_consistent_folder(self):
+        import threading
         from unittest import mock
-        gate = __import__("threading").Event()
+
+        from mtc import wrapped_run
+        c = self.client
+        year = self.years[1]["year"]
+        gate, started = threading.Event(), threading.Event()
         real = wrapped_run.generate
 
-        def slow(*a, **kw):
+        def slow(conn, y, out, **kw):  # waits until the test has asked for a stop, then runs for real
+            started.set()
             gate.wait(5)
-            return real(*a, **kw)
+            return real(conn, y, out, **kw)
         with mock.patch.object(wrapped_run, "generate", slow):
-            self.assertEqual(c.post("/api/wrapped/job", json={"year": year, "art": False, "png": False}).status_code, 202)
+            self.assertEqual(c.post("/api/wrapped/job", json={"year": year, "art": True, "png": False}).status_code, 202)
+            self.assertTrue(started.wait(5))
             self.assertEqual(c.post("/api/wrapped/job", json={"year": year}).status_code, 409)
             self.assertEqual(c.post("/api/wrapped/job/stop").json()["state"], "stopping")
             gate.set()
-            wait(c)
+            job = wait(c)
+        self.assertEqual(job["state"], "stopped", job)
+        report = c.get(f"/api/wrapped/{year}/file/index.html")
+        self.assertEqual(report.status_code, 200)  # the report is rewritten, never left stale
+        self.assertNotIn("cards/", report.text.split('"pngs": ')[1][:6])  # and does not expect picture cards
+
+    def test_card_files_are_served_by_their_exact_names(self):
+        c = self.client
+        year = self.years[0]["year"]
+        folder = Path(self.tmp.name) / "wrapped" / str(year) / "cards"
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / "01-intro-story.png").write_bytes(png())
+        self.assertEqual(c.get(f"/api/wrapped/{year}/file/cards/01-intro-story.png").status_code, 200)
+        self.assertEqual(c.get(f"/api/wrapped/{year}/file/index.html%0A").status_code, 404)  # no trailing-newline slip
+        self.assertEqual(c.get(f"/api/wrapped/{year}/file/cards/01-intro-story.png.bak").status_code, 404)
 
     def test_year_without_plays_fails_in_the_job_not_the_server(self):
         c = self.client

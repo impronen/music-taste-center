@@ -33,24 +33,28 @@ def generate(conn: sqlite3.Connection, year: int, out_dir: Path, *, art: bool = 
     files = wrapped.write(data, out_dir)
     say("data", 1, 1)
     covers = None
-    if art:
-        def art_step(i, n):
-            say("covers", i, n)
-            check()
-        check()
-        covers = wrapped_art.fetch(conn, data, out_dir, **({"transport": transport} if transport else {}), progress=art_step)
-    check()
     png_error = None
     made_png = False
-    if png:
-        def card_step(i, n):
-            say("cards", i, n)
+    try:
+        if art:
+            def art_step(i, n):
+                say("covers", i, n)
+                check()
             check()
-        try:
-            wrapped_render.cards(data, out_dir, progress=card_step)
-            made_png = True
-        except (RuntimeError, OSError, subprocess.SubprocessError) as exc:
-            png_error = str(exc)
+            covers = wrapped_art.fetch(conn, data, out_dir, **({"transport": transport} if transport else {}), progress=art_step)
+        check()
+        if png:
+            def card_step(i, n):
+                say("cards", i, n)
+                check()
+            try:
+                wrapped_render.cards(data, out_dir, progress=card_step)
+                made_png = True
+            except (RuntimeError, OSError, subprocess.SubprocessError) as exc:
+                png_error = str(exc)
+    except (Stopped, KeyboardInterrupt):
+        wrapped_render.page(data, out_dir)  # never leave a report that expects cards that are gone
+        raise
     if not made_png:
         wrapped_render.page(data, out_dir)
     return {"totals": data["totals"], "files": [p.name for p in files], "covers": covers, "png": made_png,

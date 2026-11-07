@@ -56,8 +56,9 @@ class WrappedJob:
 
     def _run(self, year: int, art: bool, png: bool, birth_year: int | None) -> None:
         final, error, summary = "done", None, None
-        conn = db.connect(self.db_path)
+        conn = None
         try:
+            conn = db.connect(self.db_path)
             summary = wrapped_run.generate(conn, year, self.out_dir(year), art=art, png=png, birth_year=birth_year,
                                            transport=self._transport, progress=self._progress, stop=self._stop.is_set)
         except wrapped_run.Stopped:
@@ -65,7 +66,8 @@ class WrappedJob:
         except Exception as exc:  # tell the UI instead of dying silently
             final, error = "failed", f"{type(exc).__name__}: {exc}"
         finally:
-            conn.close()
+            if conn is not None:
+                conn.close()
         with self._lock:
             self._state.update(state=final, error=error, summary=summary, finished_at=int(time.time()), phase=None)
 

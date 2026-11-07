@@ -2038,8 +2038,9 @@
     const seq = rendering;
     const o = await api("/api/wrapped", { fresh: true });
     const job = o.job, busy = job.state === "running" || job.state === "stopping";
-    const year = Number(params.get("year")) || (o.years.find((y) => y.made) || o.years[0] || {}).year || null;
-    const row = o.years.find((y) => y.year === year);
+    const asked = o.years.find((y) => y.year === Number(params.get("year"))); // a stale or hand-edited year falls back
+    const row = asked || o.years.find((y) => y.made) || o.years[0];
+    const year = row ? row.year : null;
     const detail = row && row.made ? await api(`/api/wrapped/${year}`, { fresh: true }).catch(() => null) : null;
     const t = detail && detail.totals;
     const pct = job.total ? Math.round((job.done / job.total) * 100) : 0;
@@ -2079,11 +2080,20 @@
     view.querySelector("#wrapped-art")?.addEventListener("change", (e) => { wrappedOpts.art = e.target.checked; });
     view.querySelector("#wrapped-png")?.addEventListener("change", (e) => { wrappedOpts.png = e.target.checked; });
     view.querySelector("#wrapped-make")?.addEventListener("click", async (e) => {
-      e.currentTarget.disabled = true;
-      try { await postJson("/api/wrapped/job", { year, art: wrappedOpts.art, png: png }); } catch (err) { const box = view.querySelector("#wrapped-error"); box.textContent = err.message; box.hidden = false; return; }
+      const button = e.currentTarget;
+      button.disabled = true;
+      try { await postJson("/api/wrapped/job", { year, art: wrappedOpts.art, png: png }); } catch (err) {
+        const box = view.querySelector("#wrapped-error");
+        box.textContent = err.message; box.hidden = false;
+        button.disabled = false; // e.g. 409: a job is already running; let the user retry
+        return;
+      }
       route();
     });
-    view.querySelector("#wrapped-stop")?.addEventListener("click", async () => { await postJson("/api/wrapped/job/stop"); route(); });
+    view.querySelector("#wrapped-stop")?.addEventListener("click", async () => {
+      try { await postJson("/api/wrapped/job/stop"); } catch (err) { console.error(err); }
+      route();
+    });
     if (busy) wrappedTimer = setTimeout(() => { if (location.hash.startsWith("#/wrapped")) route(); }, 1200);
   }
 
